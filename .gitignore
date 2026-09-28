@@ -1,0 +1,8 @@
+# Build outputs. Never commit these: the IDE's copy once tracked 815 files of
+# vectrex-bus/target/, and electron-builder shipped them.
+target/
+build/
+build_uvm2/
+*.o
+__pycache__/
+.DS_Store

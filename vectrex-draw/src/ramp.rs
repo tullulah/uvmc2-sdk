@@ -247,6 +247,17 @@ pub static CEILING_RULES: AtomicU32 = AtomicU32::new(1);
 #[no_mangle]
 pub static DEBT_ON: AtomicU32 = AtomicU32::new(1);
 
+/// 1 = the ceiling only rules WHILE IT PAYS FOR ITSELF (default). 0 = it always rules, which
+/// is how it was until 2026-09-23.
+///
+/// IT IS A KNOB AND NOT A FIXED `if` BECAUSE BOTH VARIANTS HAVE TO FIT IN ONE FLASH. The day it
+/// went in, the cartridge lost its controller and there was no way to tell whether it was this
+/// or the flash itself: the emulator produced identical BIOSes for both — it reproduces the
+/// geometry, not the timing — and telling them apart meant reflashing twice. With the knob,
+/// `probe-rs write` switches it with the game running. (It turned out to be the flash.)
+#[no_mangle]
+pub static CEILING_PAYS: AtomicU32 = AtomicU32::new(1);
+
 /* `VCAP_SLOW` / `VCAP_DV` / `VCAP_SLOW_HITS` WITHDRAWN along with VCAP (2026-09-09).
  *
  * They lowered the cap for slowed vectors, and their condition was `m <= VCAP_DV` — i.e. they
@@ -517,7 +528,39 @@ fn ramp_params_q_v(dx: i32, dy: i32, vcap_in: u32, q: u32, want_v: bool) -> (i8,
      * delta is left standing still" is asserted in `t1_ceiling_is_per_vector`, and releasing
      * the ceiling was tried once and broke the drawing on BOTH cartridges. It is compared on
      * the console before deciding, not here. */
-    let t1 = if CEILING_RULES.load(Ordering::Relaxed) != 0 {
+    /* THE CEILING CANNOT COST MORE THAN IT SAVES.
+     *
+     * The above assumes the ceiling always pays for itself, and on a diagonal it does: it
+     * costs speed and saves the slope. On a stroke ALMOST aligned with an axis, it does not.
+     * Measured on the console on 2026-09-23 with a cube seen almost face on, freezing the
+     * frame, reading it over RTT and running it through here:
+     *
+     *     dx_q4=815 dy_q4=1  ->  ceiling = 1*s/f = 10,  t1 = 24,  vx PINNED at 127
+     *                            travels 305 of 815 subunits: 37%
+     *
+     * The minor axis is ONE subunit — 1/16 of a device unit, invisible — and to save it the
+     * ceiling eats 63% of the major axis, i.e. the whole stroke. On screen it is a cube edge
+     * drawn at half length, jumping from edge to edge as it turns. Not a rare case: a cube
+     * seen face on has four.
+     *
+     * So the ceiling rules WHILE IT PAYS: what it saves is at most `d_minor` subunits, and what
+     * it costs is what the major axis cannot cover with the DAC-capped rate in `ceiling`
+     * counts. When it costs more than it saves, the cap wins — and the minor axis is NOT lost:
+     * the debt records it and the next stroke pays it.
+     *
+     * THIS IS NOT `CEILING_RULES = 0`, which releases it ALWAYS: +41% commands and a broken
+     * drawing on both cartridges the one time it was tried. This only releases it where the
+     * ceiling itself breaks the stroke. On a real diagonal `reach` is far larger than
+     * `d_major`, `cost` is 0, and nothing changes.
+     *
+     * Measured over the scene: mean absolute error per stroke 5.6 -> 2.3 points, WORST CASE
+     * 77.7 -> 7.5, +0.1% cycles on a 193-stroke scene; t1 max over all deltas 112 -> 168
+     * (tests/t1_fits_the_command_gap.rs), well inside the command's 12-bit gap. */
+    let d_major = dx.abs().max(dy.abs());
+    let reach = vc * ceiling * f / s.max(1);   /* what the major axis covers in `ceiling` */
+    let cost = (d_major - reach).max(0);
+    let pays = cost <= d_minor || CEILING_PAYS.load(Ordering::Relaxed) == 0;
+    let t1 = if CEILING_RULES.load(Ordering::Relaxed) != 0 && pays {
         t1_floor.max(t1_vcap).min(ceiling)
     } else {
         t1_floor.max(t1_vcap).min(ceiling.max(t1_vcap))
@@ -1677,21 +1720,25 @@ fn ramp_params_q_old(dx: i32, dy: i32, vcap_in: u32, q: u32) -> (i8, i8, u16) {
     let t1_floor = (s * m / (127 * f)).clamp(min_t1, s); // dwell floor (∝ length)
     let vc = vcap.max(1);
     let t1_vcap = ((m * s + vc * f - 1) / (vc * f)).max(1);
-    let d_menor = match (dx.abs(), dy.abs()) {
+    let d_minor = match (dx.abs(), dy.abs()) {
         (0, b) => b,                  // no X axis to lose
         (a, 0) => a,
         (a, b) => a.min(b),
     };
-    let ceiling = (d_menor * s / f)
+    let ceiling = (d_minor * s / f)
         .min(T1_TRANSPORT.load(Ordering::Relaxed) as i32)
         .max(min_t1);                 // in case the transport cap sits below the floor
-    let t1 = if CEILING_RULES.load(Ordering::Relaxed) != 0 {
+    let d_major = dx.abs().max(dy.abs()) as i64;
+    let reach = vc as i64 * ceiling as i64 * f as i64 / s.max(1) as i64;
+    let cost = (d_major - reach).max(0);
+    let pays = cost <= d_minor as i64 || CEILING_PAYS.load(Ordering::Relaxed) == 0;
+    let t1 = if CEILING_RULES.load(Ordering::Relaxed) != 0 && pays {
         t1_floor.max(t1_vcap).min(ceiling)
     } else {
         t1_floor.max(t1_vcap).min(ceiling.max(t1_vcap))
     };
 
-    let error_de = |t: i32| -> i64 {
+    let error_of = |t: i32| -> i64 {
         if t <= 0 { return i64::MAX; }
         let v = {
             let den = (t as i64) * 256 + T1_EXTRA_Q8.load(Ordering::Relaxed) as i64;
@@ -1701,7 +1748,7 @@ fn ramp_params_q_old(dx: i32, dy: i32, vcap_in: u32, q: u32) -> (i8, i8, u16) {
         };
         ((v * t as i64) - (m as i64) * (s as i64) / (f as i64)).abs()
     };
-    let t1 = if t1 < ceiling && error_de(t1 + 1) < error_de(t1) { t1 + 1 } else { t1 };
+    let t1 = if t1 < ceiling && error_of(t1 + 1) < error_of(t1) { t1 + 1 } else { t1 };
     let den = (t1 as i64) * 256 + T1_EXTRA_Q8.load(Ordering::Relaxed) as i64;
     let round_div = |num: i32| -> i32 {
         let n = num as i64 * 256;

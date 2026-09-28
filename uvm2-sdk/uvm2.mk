@@ -26,13 +26,14 @@
 # A game that needs libvpy just lists $(VPY_C_SDK)/vpy.c in UVM2_SRCS.
 
 # Everything is found from THIS makefile, never from $(HOME). uvm2.mk lives in
-# <kit>/sdk/uvm2-sdk/, so the kit root is two levels up and every other piece of
-# the SDK is a sibling of this directory.
+# <uvmc2-sdk>/uvm2-sdk/, and every other piece of the SDK is a sibling of this
+# directory. The SDK is its own repository, mounted as a submodule by each
+# project that uses it (the starter kit at sdk/, the others wherever they like).
 ifndef UVM2_SDK
 UVM2_SDK := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 endif
-UVMC2_KIT  ?= $(abspath $(UVM2_SDK)/../..)
-RP2350_SDK ?= $(UVMC2_KIT)/sdk/rp2350-sdk
+UVMC2_SDK_ROOT := $(abspath $(UVM2_SDK)/..)
+RP2350_SDK ?= $(UVMC2_SDK_ROOT)/rp2350-sdk
 
 # A project that builds rp2350 with a specific toolchain should pass the same
 # one here (UVM2_CC = $(ARM_CC)); the default only fits a plain freestanding
@@ -157,7 +158,9 @@ endif
 # Margin: rounded up to the KB plus 1 KB. If the zip changes size, just rebuild.
 UVM2_ROMSET_NAME ?= $(shell grep -hoE 'game_romset_name[[:space:]]*\[\][[:space:]]*=[[:space:]]*"[^"]+"' \
                         $(wildcard src/*.h src/*.c) 2>/dev/null | head -1 | sed -E 's/.*"(.*)"/\1/')
-UVM2_ROMSET_DIR  ?= $(firstword $(wildcard roms ../roms))
+# roms/ next to the game, the parent's, or an arcade/roms/ two levels up (the layout of a
+# repository that keeps its romsets in one place, next to its games).
+UVM2_ROMSET_DIR  ?= $(firstword $(wildcard roms ../roms ../../arcade/roms))
 UVM2_ROMSET_ZIP  := $(if $(UVM2_ROMSET_NAME),$(wildcard $(UVM2_ROMSET_DIR)/$(UVM2_ROMSET_NAME)))
 
 ifneq ($(UVM2_ROMSET_NAME),)
@@ -248,10 +251,12 @@ space := $(empty) $(empty)
 semi  := ;
 list   = $(subst $(space),$(semi),$(strip $1))
 
-# The pico-sdk is NOT vendored in the kit (it is 670 MB with its submodules).
+# The pico-sdk is NOT vendored (it is 670 MB with its submodules). The starter kit's
 # `./setup.sh` clones the exact version this SDK is built against into
-# third_party/pico-sdk; point PICO_SDK_PATH here if you already have one.
-UVM2_PICO_SDK ?= $(if $(PICO_SDK_PATH),$(PICO_SDK_PATH),$(UVMC2_KIT)/third_party/pico-sdk)
+# <kit>/third_party/pico-sdk, i.e. next to the directory this SDK is mounted in; any other
+# project sets PICO_SDK_PATH (or UVM2_PICO_SDK). A missing one stops `make uvm2` with the
+# path it tried — it used to fall back to one developer's home directory.
+UVM2_PICO_SDK ?= $(if $(PICO_SDK_PATH),$(PICO_SDK_PATH),$(abspath $(UVMC2_SDK_ROOT)/../third_party/pico-sdk))
 # Homebrew's arm-none-eabi-gcc has no nosys.specs — the Arm GNU Toolchain does,
 # and the pico-sdk link needs it. Override if yours lives somewhere else.
 UVM2_ARM_TOOLCHAIN ?= $(firstword $(wildcard /Applications/ArmGNUToolchain/*/arm-none-eabi) \
@@ -314,6 +319,8 @@ endif
 
 # UVM2_DEPS lets a project name generated headers the build needs first.
 uvm2: $(UVM2_DEPS) | $(UVM2_BUILD)
+	@test -f '$(UVM2_PICO_SDK)/pico_sdk_init.cmake' || { \
+	    echo "uvm2: no pico-sdk at $(UVM2_PICO_SDK) — set PICO_SDK_PATH (2.2.0; see the starter kit's setup.sh)"; exit 1; }
 	cmake -S $(UVM2_SDK)/pico -B $(UVM2_CMAKE_BUILD) \
 	    -DCMAKE_BUILD_TYPE=Release \
 	    -DCMAKE_TOOLCHAIN_FILE=$(UVM2_PICO_SDK)/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake \

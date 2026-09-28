@@ -68,7 +68,7 @@ pico_sdk_init()
 
 # FatFs: the file system under uvm2_sd.c (FAT12/16/32 + exFAT). Its configuration is the
 # ffconf.h next to it; third_party/fatfs/README.md lists what differs from upstream.
-set(UVM2_FATFS_DIR ${UVM2_SDK_DIR}/../../third_party/fatfs)
+set(UVM2_FATFS_DIR ${UVM2_SDK_DIR}/../third_party/fatfs)
 
 add_executable(${UVM2_NAME}
     ${UVM2_GAME_SRCS}
@@ -88,6 +88,7 @@ add_executable(${UVM2_NAME}
     ${UVM2_SDK_DIR}/uvm2_svc.c
     ${UVM2_SDK_DIR}/uvm2_core1.c
     ${UVM2_SDK_DIR}/uvm2_psram.c
+    ${UVM2_SDK_DIR}/uvm2_jack.c
     ${UVM2_SDK_DIR}/uvm2_svc_entry.s
     ${UVM2_SDK_DIR}/uvm2_pico_main.c
     ${UVM2_SDK_DIR}/uvm2_pico_svc.S

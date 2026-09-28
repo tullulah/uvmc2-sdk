@@ -5,12 +5,12 @@
 # written through uvm2_sd.c (tools/uvm2_sd_test.c), and finally checked twice — `fsck -n` must
 # come out clean, and the Mac must read back exactly what the harness wrote.
 #
-#     sdk/uvm2-sdk/tools/uvm2_sd_test.sh
+#     uvm2-sdk/tools/uvm2_sd_test.sh
 #
 # Exit status 0 = every case passed. Nothing here touches a real card.
 set -eu
 cd "$(dirname "$0")/.."
-FATFS=../../third_party/fatfs
+FATFS=../third_party/fatfs
 W=$(mktemp -d)
 MNT="$W/mnt"
 DEV=""
@@ -62,6 +62,8 @@ for spec in "FAT16 64m MBRSPUD MS-DOS+FAT16 fsck_msdos 2" \
     dd if="$W/rom.zip" of="$W/ref" bs=1 skip=20000 count=1000 2>/dev/null
     same  "chunk contents"      "$W/ref" "$W/out"
     check "chunk past the end"  "ok=1 err=0 n=0" "$($T readfrom roms/tacscan.zip 40000 10 "$W/out")"
+    check "stream in slices"    "ok=1 err=0 n=30000" "$($T stream roms/tacscan.zip 4096 "roms/a long romset name.zip" "$W/out")"
+    same  "stream contents"     "$W/rom.zip" "$W/out"
     check "write, nested dirs"  "ok=1 err=0"   "$($T write traces/run1/big.bin "$W/big.bin")"
     check "write replaces"      "ok=1 err=0"   "$($T write traces/run1/big.bin "$W/rom.zip")"
     check "create"              "ok=1 err=0"   "$($T create newcfg/game.cfg "a=1")"

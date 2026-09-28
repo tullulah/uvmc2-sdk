@@ -7,14 +7,18 @@ repo, in the cartridge firmware).  Rather than hand-copy it a third time, this
 derives the C table from that file so the two can never silently drift: if a
 glyph changes, re-run this and commit the result.
 
-    ./gen_font.py            # writes ../uvm2_font.h
+    ./gen_font.py <vectorFont.ts>     # writes ../uvm2_font.h
+
+The source lives in the Vectrex Studio repository, not here; pass its path.
 """
 import re
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SOURCE = HERE / "../../../../../ide/frontend/src/emulator/systems/vectorFont.ts"
+if len(sys.argv) != 2:
+    sys.exit("usage: gen_font.py <path to ide/frontend/src/emulator/systems/vectorFont.ts>")
+SOURCE = Path(sys.argv[1])
 OUTPUT = HERE / ".." / "uvm2_font.h"
 
 FIRST, LAST = 32, 90          # the range the font covers

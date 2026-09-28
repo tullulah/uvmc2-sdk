@@ -60,8 +60,10 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(neg_rate_x, 0), FIELD(neg_rate_y, 0),
     FIELD(drift_x, 0), FIELD(drift_y, 0),
     FIELD(hz, UVM2_SETTING_HZ), FIELD(start_menu, UVM2_SETTING_MENU), FIELD(rotate, UVM2_SETTING_ROTATE),
+    FIELD(audio, UVM2_SETTING_AUDIO),
 };
 volatile int32_t uvm2_setting_hz = 50, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
+volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
 
 /* Which game this is and which of its own settings it uses. Declaring nothing behaves as
  * before: a single file, and no game settings in the wizard. */
@@ -119,6 +121,7 @@ void uvm2_config_current(struct uvm2_config *c)
     c->hz       = uvm2_setting_hz;
     c->start_menu = uvm2_setting_menu;
     c->rotate     = uvm2_setting_rotate;
+    c->audio      = uvm2_setting_audio;
 }
 
 void uvm2_config_apply(const struct uvm2_config *c)
@@ -142,6 +145,9 @@ void uvm2_config_apply(const struct uvm2_config *c)
     uvm2_setting_menu = c->start_menu ? 1 : 0;
     uvm2_setting_rotate = c->rotate ? 1 : 0;
     uvm2_draw_rotate((int)uvm2_setting_rotate);
+    /* And this one is NOT applied to anything: the SDK does not route a game's sound. It is
+     * stored so the game finds it where it left it. See uvm2_config.h. */
+    uvm2_setting_audio = c->audio ? 1 : 0;
 }
 
 /* ── THE TEXT FILE ON THE SD ────────────────────────────────────────────────────────

@@ -73,8 +73,28 @@ struct uvm2_config {
     int32_t start_menu; /* 1 = menu on power-up; 0 = straight into the game (button 4 forces
                          * the menu) */
     int32_t rotate;     /* 1 = drawing rotated 90 degrees, for horizontal arcade games. */
+    /* WHERE THE SOUND COMES OUT: 0 = the 16-bit jack, 1 = the console's own chip.
+     *
+     * IT GOES AT THE END, not where it would read best. The order of this struct is the
+     * contract with the BIOS: `sdk_rp2350.c` hands it over as an `int32_t *` to
+     * `UVM2_API->config_current`, so a field inserted in the middle changes the meaning of
+     * every field after it. Appending is the only safe change, and a BIOS that does not know
+     * about it simply never touches it.
+     *
+     * NOBODY APPLIES IT HERE, and that is deliberate: the SDK does not route a game's sound.
+     * It is a STORED value, and what it means is decided by the game that declares it — for
+     * KUROISHI, whether the music and the effects go out of the cartridge's DAC or out of the
+     * PSG. All the SDK knows is how to read it, write it and not lose it.
+     *
+     * ZERO IS THE JACK because zero is what a file written before this existed brings, and on
+     * the UVMC2 the jack is what it was already doing. */
+    int32_t audio;
 };
 extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu;
+/* The audio one is declared separately: `sdk_rp2350.c` does not define it, because the debug
+ * board has no jack and the choice does not exist there. Whoever reads it fences itself off
+ * with its own UVM2-only guard. */
+extern volatile int32_t uvm2_setting_audio;
 
 /* WHICH OF ITS OWN SETTINGS THIS GAME USES. Beam calibration belongs to the CONSOLE and is
  * shared; this is what belongs to the game, and each one declares only what it has — so
@@ -84,6 +104,7 @@ enum {
     UVM2_SETTING_HZ     = 1u,  /* refresh 50/60/free */
     UVM2_SETTING_MENU   = 2u,  /* menu on power-up */
     UVM2_SETTING_ROTATE = 4u,  /* drawing rotated 90 degrees */
+    UVM2_SETTING_AUDIO  = 8u,  /* where the sound comes out: jack or console */
 };
 
 /** Declares the game's name (8.3, no extension: "MHAVOC") and which of its own settings it

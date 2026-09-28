@@ -298,11 +298,13 @@ static int fail(FRESULT fr)
     return 0;
 }
 
-/* Mounts afresh on every call, like the old reader, so the card may change between calls. */
+/* Mounts afresh on every call, like the old reader, so the card may change between calls —
+ * EXCEPT while a file is open through uvm2_sd_open: remounting would invalidate it. */
 static int begin(void)
 {
     uvm2_sd_error = UVM2_SD_OK;
     uvm2_sd_diag.magic = 0x47444453u;                          /* 'SDDG' */
+    if (uvm2_sd_diag.streams && s_fs.fs_type) { uvm2_sd_diag.step = 2; return 1; }
     uvm2_sd_diag.step = 1;
     uvm2_sd_diag.fs_type = 0;
     if (!fail(f_mount(&s_fs, "", 1))) return 0;
@@ -437,4 +439,48 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     if (!begin() || !make_parents(path)) return 0;
     if (!open_file(&f, path, FA_WRITE | FA_CREATE_ALWAYS, &len)) return 0;
     return write_all(&f, data, n);
+}
+
+/* ── AN OPEN FILE ──────────────────────────────────────────────────────────────────────── */
+#define UVM2_SD_OPEN_MAGIC 0x4E45504Fu   /* 'OPEN' */
+#define FIL_OF(f) ((FIL *)(void *)(f)->fil)
+_Static_assert(sizeof(((uvm2_sd_file *)0)->fil) >= sizeof(FIL), "uvm2_sd_file.fil is smaller than FatFs's FIL");
+
+void uvm2_sd_close(uvm2_sd_file *f)
+{
+    if (f->magic != UVM2_SD_OPEN_MAGIC) return;
+    f_close(FIL_OF(f));
+    f->magic = 0;
+    f->ok = 0;
+    if (uvm2_sd_diag.streams) uvm2_sd_diag.streams--;
+}
+
+int uvm2_sd_open(const char *path, uvm2_sd_file *f)
+{
+    uint32_t len;
+    uvm2_sd_close(f);                         /* reopening the same struct: drop the old one */
+    f->cluster = f->sec = f->pos = f->len = 0;
+    f->ok = 0;
+    f->magic = 0;
+    if (!begin() || !open_file(FIL_OF(f), path, FA_READ, &len)) return 0;
+    f->cluster = (uint32_t)FIL_OF(f)->obj.sclust;
+    f->len = len;
+    f->ok = 1;
+    f->magic = UVM2_SD_OPEN_MAGIC;
+    uvm2_sd_diag.streams++;
+    return 1;
+}
+
+uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max)
+{
+    if (!f->ok || f->magic != UVM2_SD_OPEN_MAGIC) return 0;
+    uint32_t want = f->len - f->pos;
+    if (want > max) want = max;
+    if (want == 0) return 0;                  /* the end: not an error */
+    UINT got = 0;
+    FRESULT fr = f_read(FIL_OF(f), dst, want, &got);
+    if (fr == FR_OK && got != want) fr = FR_DISK_ERR;
+    f->pos += got;
+    if (!fail(fr)) f->ok = 0;                 /* loud: uvm2_sd_error and diag.fresult */
+    return got;
 }

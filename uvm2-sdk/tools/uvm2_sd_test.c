@@ -6,13 +6,15 @@
  *     uvm2_sd_test IMG write     PATH IN           IN -> PATH (any size)
  *     uvm2_sd_test IMG create    PATH TEXT         512-byte text file
  *     uvm2_sd_test IMG overwrite PATH TEXT         first sector of an existing file
+ *     uvm2_sd_test IMG stream    PATH CHUNK OTHER OUT  open + next in CHUNK slices -> OUT,
+ *                                                   reading OTHER whole half way through
  *
  * It prints `ok=<0|1> err=<uvm2_sd_error> n=<bytes> fs=<fs_type>` and exits 0 whatever the
  * outcome; tools/uvm2_sd_test.sh decides what was expected. Build:
  *
- *     cc -O2 -DUVM2_SD_HOST -I. -I../../third_party/fatfs -o /tmp/uvm2_sd_test \
+ *     cc -O2 -DUVM2_SD_HOST -I. -I../third_party/fatfs -o /tmp/uvm2_sd_test \
  *        tools/uvm2_sd_test.c uvm2_sd.c \
- *        ../../third_party/fatfs/ff.c ../../third_party/fatfs/ffunicode.c
+ *        ../third_party/fatfs/ff.c ../third_party/fatfs/ffunicode.c
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +72,23 @@ int main(int argc, char **argv)
     } else if (!strcmp(op, "overwrite") && argc == 5) {
         n = (uint32_t)strlen(argv[4]);
         ok = uvm2_sd_overwrite(path, (const unsigned char *)argv[4], n);
+    } else if (!strcmp(op, "stream") && argc == 7) {
+        /* THE OTHER CALLS MUST NOT KILL AN OPEN FILE: they remount on every call, and a
+         * remount invalidates it. So another file is read in the middle of the stream. */
+        static uvm2_sd_file f;
+        static unsigned char other[1u << 20];
+        const uint32_t chunk = (uint32_t)strtoul(argv[4], 0, 0);
+        int slices = 0;
+        ok = uvm2_sd_open(path, &f);
+        while (ok) {
+            uint32_t got = uvm2_sd_next(&f, buf + n, chunk);
+            if (got == 0) break;
+            n += got;
+            if (++slices == 3 && !uvm2_sd_read(argv[5], other, sizeof other)) { ok = 0; break; }
+        }
+        ok = ok && f.ok && n == f.len;
+        uvm2_sd_close(&f);
+        if (ok) save(argv[6], n);
     } else {
         fprintf(stderr, "bad arguments; see the top of uvm2_sd_test.c\n");
         return 2;

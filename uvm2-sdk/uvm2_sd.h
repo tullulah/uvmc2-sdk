@@ -39,11 +39,45 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n);
  * exists so long captures can be replayed without loading them whole into RAM. */
 uint32_t uvm2_sd_read_from(const char *path, unsigned char *dst, uint32_t max, uint32_t from);
 
+/* ── AN OPEN FILE, TO READ IT IN SLICES WITHOUT PAYING FOR IT N TIMES ─────────────────────
+ *
+ * uvm2_sd_read_from is O(n^2) as soon as the file is large: every call mounts the volume
+ * again, walks the directory, and seeks from the start of the file to the offset. Measured on
+ * the console loading 1.8 MB of audio: minutes.
+ *
+ * This opens once and keeps reading: the next slice starts exactly where the previous one
+ * ended. While ANY file is open the volume is not remounted by the other calls — a remount
+ * would invalidate the open file — so a game that streams also skips the per-call card
+ * re-initialisation; uvm2_sd_diag.streams says how many are open.
+ *
+ * Closing is optional: it only lets the other calls go back to remounting on every call. The
+ * first five fields are read and written by the IDE's emulator and by games (`ok`), so they
+ * keep their place. */
+typedef struct {
+    uint32_t cluster;    /* the file's first cluster                        */
+    uint32_t sec;        /* unused since FatFs; kept for the layout          */
+    uint32_t pos;        /* bytes delivered so far                           */
+    uint32_t len;        /* file size                                        */
+    int      ok;         /* 0 = not open, exhausted, or failed               */
+    uint32_t magic;      /* set while open, so a reopen closes the old one   */
+    /* FatFs's FIL, opaque so this header does not drag ff.h into every game. uvm2_sd.c
+     * asserts at compile time that it fits. */
+    uint64_t fil[16];
+} uvm2_sd_file;
+
+/* 1 if found. Paths as everywhere else: any depth, long names, case-insensitive. */
+int      uvm2_sd_open(const char *path, uvm2_sd_file *f);
+/* The next bytes, up to `max`. Returns what was copied; 0 is the end of the file (or an
+ * error: then `ok` is 0 and uvm2_sd_error says which). */
+uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max);
+/* Optional; see above. */
+void     uvm2_sd_close(uvm2_sd_file *f);
+
 /* What the mount understood about the disk, so it can be inspected over SWD without guessing.
  * A MISSING can be an absent file or a misread volume, and from outside they look identical;
  * this separates them. It is read in one go:
  *
- *     tools/probe.sh <&uvm2_sd_diag> 12
+ *     tools/probe.sh <&uvm2_sd_diag> 13
  */
 struct uvm2_sd_diag {
     uint32_t magic;          /* 'SDDG' = 0x47444453; 0 if nothing was ever tried */
@@ -55,6 +89,7 @@ struct uvm2_sd_diag {
     uint32_t n_fatent;       /* clusters + 2                                    */
     uint32_t fatbase, dirbase, database;   /* sectors (dirbase: root cluster on FAT32/exFAT) */
     uint32_t reads, writes;  /* blocks moved since boot: proof the card was touched */
+    uint32_t streams;        /* files open through uvm2_sd_open: no remount while > 0 */
 };
 extern struct uvm2_sd_diag uvm2_sd_diag;
 
