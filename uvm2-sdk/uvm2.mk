@@ -114,8 +114,8 @@ endif
 # through the 64-word batches and LIST_BUF is NEVER written: 98 KB of dead SRAM in every
 # dual-core game's image.
 #
-# So a tight dual-core game lowers it to the minimum (64) and spends those 98 KB on
-# something that actually draws. A SINGLE-core game cannot: there the list IS the transport,
+# So since 2026-09-28 a dual-core game gets the minimum (64) by default (uvm2_pico.cmake), and
+# those 98 KB go to something that actually draws. Setting UVM2_LIST_MAX still wins. A SINGLE-core game cannot: there the list IS the transport,
 # and if it overflows `list_fire` releases it half built and leaves the beam parked wherever
 # it happens to be. Measure before lowering it: one word per command, and TWO if the command
 # carries a delay (see uvm2_exec in uvm2_bus.c).

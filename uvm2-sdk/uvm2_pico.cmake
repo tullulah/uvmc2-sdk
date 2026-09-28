@@ -203,6 +203,23 @@ if(UVM2_GAME_PREINC)
 endif()
 
 target_include_directories(${UVM2_NAME} PRIVATE ${UVM2_SDK_DIR} ${UVM2_FATFS_DIR})
+
+# COLD CODE IS COMPILED FOR SIZE. The image lives in SRAM and every byte of code is a byte a
+# game cannot have. These files only run at start-up or in the calibration screen — the file
+# system, the SD card, the calibration, the PSRAM bring-up — so -Os costs nothing anyone can
+# measure, and it gives back what FatFs cost. MEASURED 2026-09-28: FatFs alone is 19.9 KB at
+# -O3 and 12.0 KB at -Os, and without it aae_mhavoc and aae_starwars no longer fit (RAM
+# overflowed by ~13 KB). The drawing path stays at the build's -O3: that one is hot.
+set_source_files_properties(
+    ${UVM2_FATFS_DIR}/ff.c
+    ${UVM2_FATFS_DIR}/ffunicode.c
+    ${UVM2_SDK_DIR}/uvm2_sd.c
+    ${UVM2_SDK_DIR}/uvm2_config.c
+    ${UVM2_SDK_DIR}/uvm2_wizard.c
+    ${UVM2_SDK_DIR}/uvm2_psram.c
+    ${UVM2_SDK_DIR}/uvm2_romzip.c
+    ${UVM2_SDK_DIR}/uvm2_jack.c
+    PROPERTIES COMPILE_OPTIONS "-Os")
 # hardware_flash: it is NOT for writing to flash — nothing there is touched. It is for
 # flash_devinfo_set_cs_size() and flash_do_cmd(), which are the only way to ask the BOOTROM for
 # the exit-XIP sequence towards CS1, i.e. towards the PSRAM. See the uvm2_psram_probe_bootrom()
@@ -237,8 +254,18 @@ if(NOT DEFINED ENV{UVM2_PIO_STREAM} OR NOT "$ENV{UVM2_PIO_STREAM}" STREQUAL "0")
     target_compile_definitions(${UVM2_NAME} PRIVATE UVM2_PIO_STREAM=1)
 endif()
 
+# EACH GAME BUILDS THE CRATES INTO ITS OWN BUILD DIRECTORY, not into the SDK's.
+#
+# The .a used to live in <sdk>/vectrex-draw/cabi/target and be SHARED by every game. But what
+# it contains depends on the game (UVM2_LIST_MAX, below, is baked in at compile time), so two
+# games built at the same time raced for it: one could link the .a the other had just
+# rebuilt, and the image came out with the other game's LIST_BUF — silently. Seen on
+# 2026-09-28 building the private ports three at a time: aae_esb linked once and overflowed RAM
+# by 86 KB the next, with nothing changed. Per-game, the crate is built once per build
+# directory and never shared. (And the SDK, now a git submodule, stays free of build output.)
+set(VECTREX_CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo-target")
 set(VECTREX_DRAW_LIB
-    "${VECTREX_DRAW_DIR}/cabi/target/${VECTREX_DRAW_TARGET}/release/libvectrex_draw_cabi.a")
+    "${VECTREX_CARGO_TARGET_DIR}/${VECTREX_DRAW_TARGET}/release/libvectrex_draw_cabi.a")
 
 find_program(CARGO_EXE cargo)
 if(NOT CARGO_EXE)
@@ -257,16 +284,28 @@ endif()
 #
 # It goes through an environment variable because what reads it is `option_env!` inside the
 # Rust crate. Cargo records that read in the build's fingerprint, so changing it REBUILDS the
-# .a; the .a is shared between games, so alternating between two values costs a rebuild of the
-# crate, not a wrong image.
+# .a — which is per game, see VECTREX_CARGO_TARGET_DIR above.
+#
+# AND IN DUAL CORE THE DEFAULT IS THE MINIMUM, 64. That list is only ever opened on the
+# single-core path (vbus_list_begin() sits in the #else of UVM2_DUAL_CORE in uvm2_draw.c), and
+# every game is dual core — uvm2_bus.h refuses to build one that is not. So the crate's 12288
+# words were 98 KB of SRAM never written, in every image: uvm2.mk said so and left it to each
+# game, and one (aae_esb) had found it on its own. Made the default on 2026-09-28, when
+# FatFs cost aae_mhavoc and aae_starwars the ~13 KB they had left. A game that asks for a size
+# still gets it; a bench without core 1 keeps the crate's default, because there the list IS
+# the transport.
 if(DEFINED ENV{UVM2_LIST_MAX} AND NOT "$ENV{UVM2_LIST_MAX}" STREQUAL "")
     message(STATUS "UVM2_LIST_MAX: stream list of $ENV{UVM2_LIST_MAX} words (vectrex-bus uses 12288)")
     set(VECTREX_CARGO_ENV ${CMAKE_COMMAND} -E env VECTREX_LIST_MAX=$ENV{UVM2_LIST_MAX})
+elseif("UVM2_DUAL_CORE" IN_LIST UVM2_GAME_DEFS)
+    message(STATUS "UVM2_LIST_MAX: 64 words — dual core never uses the stream list")
+    set(VECTREX_CARGO_ENV ${CMAKE_COMMAND} -E env VECTREX_LIST_MAX=64)
 endif()
 
 add_custom_target(vectrex_draw_lib ALL
     COMMAND ${VECTREX_CARGO_ENV} ${CARGO_EXE} build --release --target ${VECTREX_DRAW_TARGET}
             --manifest-path "${VECTREX_DRAW_DIR}/cabi/Cargo.toml"
+            --target-dir "${VECTREX_CARGO_TARGET_DIR}"
             ${VECTREX_CABI_FEATURES}
     BYPRODUCTS ${VECTREX_DRAW_LIB}
     COMMENT "shared drawing layer (vectrex-draw)")
@@ -324,11 +363,25 @@ endif()
 # Wrap the flat image in the .um2 header the multicart reads.
 # A PSRAM payload is not a module: the multicart does not load it, our loader does. Packaging it
 # as a .um2 would only be confusing on the card.
+#
+# TWO PACKAGERS, ONE HEADER. Vectrex Studio passes VPY_CLI_DIR and packages with its own
+# `vpy_cli package-um2`, because a user of the IDE need not have Python installed. Everyone
+# else uses tools/package_um2.py, and then Python is required. Both write the same 20 bytes;
+# if they ever disagree, compare them on a .bin before trusting either.
 set(UVM2_PACKAGER "${UVM2_SDK_DIR}/../tools/package_um2.py")
 if(NOT (DEFINED ENV{UVM2_LOAD_PSRAM} AND NOT "$ENV{UVM2_LOAD_PSRAM}" STREQUAL "0"))
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    if(VPY_CLI_DIR)
+        find_program(VPY_CLI vpy_cli PATHS ${VPY_CLI_DIR} NO_DEFAULT_PATH)
+    endif()
+    if(VPY_CLI)
+        set(UVM2_PACKAGE_CMD ${VPY_CLI} package-um2)
+    else()
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(UVM2_PACKAGE_CMD ${Python3_EXECUTABLE} ${UVM2_PACKAGER})
+    endif()
+    message(STATUS "uvm2: packaging .um2 with ${UVM2_PACKAGE_CMD}")
     add_custom_command(TARGET ${UVM2_NAME} POST_BUILD
-        COMMAND ${Python3_EXECUTABLE} ${UVM2_PACKAGER}
+        COMMAND ${UVM2_PACKAGE_CMD}
                 $<TARGET_FILE_DIR:${UVM2_NAME}>/${UVM2_NAME}.bin
                 --out $<TARGET_FILE_DIR:${UVM2_NAME}>/${UVM2_NAME}.um2
         COMMENT "packaging ${UVM2_NAME}.um2")

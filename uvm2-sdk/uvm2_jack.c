@@ -229,11 +229,14 @@ int uvm2_jack_space(void) { s_owed = UVM2_JACK_RATE / 50; return s_owed; }
 void uvm2_jack_write(const int16_t *s, int n) { if (s_log) fwrite(s, 2, (size_t)n, s_log); }
 int uvm2_jack_ok(void) { return s_ok; }
 
-int      uvm2_jack_sm(void)      { return s_sm; }
-int      uvm2_jack_dma(void)     { return s_dma; }
-uint32_t uvm2_jack_clk(void)     { return s_clk; }
-uint32_t uvm2_jack_div_q8(void)  { return s_div_q8; }
-uint32_t uvm2_jack_pinctrl(void) { return s_sm < 0 ? 0 : pio2->sm[s_sm].pinctrl; }
-uint32_t uvm2_jack_base(void)    { return pio_get_gpio_base(pio2); }
+/* No PIO and no DMA off the cartridge, so nothing was negotiated: "none" for all of them.
+ * (These used to be the cartridge branch's bodies pasted here, which referred to its statics
+ * and did not compile — any game built without VPY_RP2350 failed on this file.) */
+int      uvm2_jack_sm(void)      { return -1; }
+int      uvm2_jack_dma(void)     { return -1; }
+uint32_t uvm2_jack_clk(void)     { return 0; }
+uint32_t uvm2_jack_div_q8(void)  { return 0; }
+uint32_t uvm2_jack_pinctrl(void) { return 0; }
+uint32_t uvm2_jack_base(void)    { return 0; }
 int uvm2_jack_set(int on) { if (on && !s_ok) uvm2_jack_init(); s_ok = on; return s_ok; }
 #endif
