@@ -2,8 +2,8 @@
  *
  * See uvm2_config.h for the reasoning behind the four parameters. This is only the interface.
  *
- * THE PATTERN MEASURES, IT DOES NOT DECORATE. TWO squares of the SAME size are drawn side by
- * side: the left one with 4 long strokes, the right one with 40 short ones. Since they measure
+ * THE PATTERN MEASURES, IT DOES NOT DECORATE. TWO squares of the SAME size are drawn one above
+ * the other: the top one with 4 long strokes, the bottom one with 40 short ones. Since they measure
  * the same, any difference between them comes from the NUMBER of strokes and not from their
  * length, and that separates the error's two terms:
  *
@@ -49,38 +49,39 @@ extern volatile uint32_t uvm2_cached_axes;
 #define STEP      19     /* distance between lines */
 #define VISIBLE   5      /* how many fit at once in the screen's +-127 */
 
-/* A CALIBRATION FIGURE taken from an open-source Vectrex game (`displaySwarmCalibration` in
- * Vectorblade's objectEnemySwarm.asm). Eight long, crooked segments at scale 6 — not a square:
- * what makes it useful is that it mixes strokes of very different lengths and slopes, which is
- * where the zero reference's offset shows.
+/* THE WHEEL: an octagon and its eight spokes. It replaced, on 2026-09-28, a figure copied
+ * from another game's calibration screen — eight crooked segments that on the console read as
+ * a broken drawing whether or not anything was wrong, which is useless for judging by eye.
  *
- * Its macros carry the deltas as (dy, dx) packed into a word; here they are written out,
- * already unpacked and with the sums it writes inline (`$00-40`, `-$1B-10`, ...). This is
- * placeholder geometry — replace it with your own .vec. */
-static const signed char VB_SWARM[][2] = {   /* {dx, dy} */
-    {  -40,  127 }, {  -50,  -37 }, {    6,   40 }, {  -52,    0 },
-    {   36,  -40 }, {  -50,   47 }, {   40, -127 }, {   60,   25 },
+ * A wheel has one right answer that anybody can see:
+ *
+ *     the octagon closes                        -> long strokes arrive where they were aimed
+ *     the spokes meet in ONE point              -> every jump back to the centre lands there
+ *     each spoke ends on its corner             -> jumps and strokes agree about distance
+ *     the diagonals are at 45 degrees and the
+ *     opposite spokes form straight lines       -> X and Y move alike, positive and negative
+ *
+ * The corners are (34, 0) and (24, 24) and their mirrors: 24 * sqrt(2) = 33.9, so the eight
+ * corners sit on one circle to within 0.1 unit and the octagon is regular on the integer grid. */
+#define WHEEL_R   34      /* the corners on the axes */
+#define WHEEL_D   24      /* the diagonal corners: WHEEL_R / sqrt(2), rounded */
+static const signed char WHEEL[8][2] = {
+    {  WHEEL_R,        0 }, {  WHEEL_D,  WHEEL_D }, {        0,  WHEEL_R }, { -WHEEL_D,  WHEEL_D },
+    { -WHEEL_R,        0 }, { -WHEEL_D, -WHEEL_D }, {        0, -WHEEL_R }, {  WHEEL_D, -WHEEL_D },
 };
 
-static void calibration_figure(int cx, int cy)
+static void wheel(int cx, int cy)
 {
-    /* Its INIT_DRAW_6_MOVE_END moves (dx, dy) = (60, -18) from the centre before drawing. */
-    uvm2_draw_move_abs(cx + 60 / 3, cy - 18 / 3);
-    for (unsigned i = 0; i < sizeof VB_SWARM / sizeof VB_SWARM[0]; i++) {
-        /* /3 because its scale of 6 runs off a +-127 screen; the SHAPE is what matters, and
-         * dividing everything equally preserves it. */
-        uvm2_draw_delta(VB_SWARM[i][0] / 3, VB_SWARM[i][1] / 3);
+    /* The rim: one chained polygon, so its closing is the test of the long strokes. */
+    uvm2_draw_move_abs(cx + WHEEL[0][0], cy + WHEEL[0][1]);
+    for (int k = 1; k <= 8; k++)
+        uvm2_draw_delta(WHEEL[k & 7][0] - WHEEL[(k - 1) & 7][0], WHEEL[k & 7][1] - WHEEL[(k - 1) & 7][1]);
+    /* The spokes: each one a JUMP back to the centre and a stroke out, so where they meet is the
+     * test of the jumps. */
+    for (int k = 0; k < 8; k++) {
+        uvm2_draw_move_abs(cx, cy);
+        uvm2_draw_delta(WHEEL[k][0], WHEEL[k][1]);
     }
-}
-
-/* THE REFERENCE LINE, also theirs: each of that game's calibration screens draws a line of
- * FIXED length next to whatever is being calibrated (`ldd #$0080  jsr DrawLined`, i.e. 128 on
- * one axis) and you adjust until they MATCH. Comparing against a reference is measuring;
- * looking at one figure and deciding whether it "looks right" is not. */
-static void reference_line(int cx, int cy)
-{
-    uvm2_draw_move_abs(cx, cy);
-    uvm2_draw_delta(0, 128 / 3);
 }
 
 /* THE ZERO PATTERN: SEVERAL LINES OF TEXT, DRAWN THE WAY A GAME DRAWS THEM.
@@ -213,10 +214,9 @@ int uvm2_config_wizard_with(void (*figure)(void))
         } else if (figure) {
             figure();                     /* the game's, see above */
         } else {
-            /* The reference figure with its reference line beside it, and below the two
-             * squares — 4 strokes against 40 — which still show the fixed term. */
-            reference_line(-100, 20);
-            calibration_figure(-40, 38);
+            /* The wheel, and beside it the two squares — 4 strokes against 40 — which
+             * separate the fixed per-stroke term from the scale. */
+            wheel(-50, 38);
             square( 70, 60,  1);
             square( 70, 10, 10);
         }
