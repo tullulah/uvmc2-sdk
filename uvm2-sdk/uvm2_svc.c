@@ -12,6 +12,7 @@
  * replays it, polls input and paces the frame.
  */
 
+#include "uvm2_config.h"
 #include "uvm2_bus.h"
 #include "uvm2_draw.h"
 #include "uvm2_input.h"
@@ -211,6 +212,9 @@ void uvm2_runtime_init(void)
     /* Last, never before: core 1 owns the bus from here on, and must not start
      * until the VIA has been programmed and the 6809 is halted. */
     uvm2_core1_start();
+    /* And the calibration wizard if buttons 2+3 are held, as main() does on the C path. It
+     * was missing here for a day, so VPy games could not open it at all. */
+    uvm2_config_boot_combo();
 #  endif
 #endif
 }
