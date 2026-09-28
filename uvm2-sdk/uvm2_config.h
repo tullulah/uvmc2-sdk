@@ -7,7 +7,7 @@
  * THE FLOW: the runtime calls `uvm2_config_load()` before the game's main (uvm2_draw_init).
  * If a calibration exists it is applied; if not, the compiled defaults stay — which were
  * measured on ONE console. No game opens the wizard by itself: the user does, by holding
- * buttons 1 and 4 while the game starts (uvm2_config_boot_combo), and it saves on the way out.
+ * buttons 2 and 3 while launching the game (uvm2_config_boot_combo), and it saves on the way out.
  *
  * WHERE IT COMES FROM AND WHERE IT IS SAVED:
  *
@@ -145,7 +145,7 @@ int  uvm2_config_wizard(void);
  *  `uvm2_config_wizard()`. */
 int  uvm2_config_wizard_with(void (*figure)(void));
 
-/** Opens the wizard before the game if buttons 1 and 4 are held while it starts. Called by the
+/** Opens the wizard before the game if buttons 2 and 3 are held while it starts. Called by the
  *  runtime right after core 1 comes up; a game does not call it. The outcome is left in
  *  `uvm2_boot_combo` (-1 never checked, 0 not held, 1 wizard ran, 2 could not check). */
 void uvm2_config_boot_combo(void);

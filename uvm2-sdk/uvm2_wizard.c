@@ -17,7 +17,7 @@
  * WITH ZERO SELECTED THE PATTERN IS TEXT INSTEAD: see zero_pattern.
  *
  * CONTROLLER: up/down picks a parameter, left/right moves it, button 4 saves and exits.
- * HOW TO GET HERE: hold buttons 1 and 4 while the game starts (uvm2_config_boot_combo).
+ * HOW TO GET HERE: hold buttons 2 and 3 while launching the game with 4 (uvm2_config_boot_combo).
  */
 #include "uvm2_config.h"
 #include "uvm2_draw.h"
@@ -317,7 +317,12 @@ int uvm2_config_wizard_with(void (*figure)(void))
 
 int uvm2_config_wizard(void) { return uvm2_config_wizard_with(0); }
 
-/* HOLD BUTTONS 1 AND 4 WHILE THE GAME STARTS, AND THE WIZARD OPENS FIRST.
+/* HOLD BUTTONS 2 AND 3 WHILE LAUNCHING THE GAME, AND THE WIZARD OPENS FIRST.
+ *
+ * WHY 2+3 AND NOT 1+4, WHICH IT WAS FOR A DAY: in the cartridge's own menu button 4 launches
+ * the game and button 1 goes back, so holding 1 while pressing 4 never started anything. The
+ * menu uses neither 2 nor 3, so they can be held through the launch with a thumb while the
+ * other presses 4 as usual.
  *
  * Until this existed no game opened the wizard, so a console whose zero differs from the
  * default had no way to fix it short of editing config/uvm2.cfg on a PC.
@@ -341,7 +346,7 @@ void uvm2_config_boot_combo(void)
         if (spin > 50000000u) { uvm2_boot_combo = 2; return; }
     }
     const uint8_t held = (uint8_t)~uvm2_cached_buttons;       /* active low: 1 = pressed */
-    if ((held & 0x09u) != 0x09u) { uvm2_boot_combo = 0; return; }   /* buttons 1 (bit 0) and 4 (bit 3) */
+    if ((held & 0x06u) != 0x06u) { uvm2_boot_combo = 0; return; }   /* buttons 2 (bit 1) and 3 (bit 2) */
     uvm2_boot_combo = 1;
     uvm2_config_wizard();
 }

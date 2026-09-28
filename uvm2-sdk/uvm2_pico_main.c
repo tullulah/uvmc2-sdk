@@ -131,7 +131,7 @@ int main(void)
      * and it must not start until the VIA has been programmed and the 6809 is
      * halted. */
     uvm2_core1_start();
-    /* Buttons 1+4 held at start: the calibration wizard, before the game. It needs core 1
+    /* Buttons 2+3 held at start: the calibration wizard, before the game. It needs core 1
      * running — the wizard draws frames and the buttons come from core 1's cache. */
     uvm2_config_boot_combo();
 #  endif
