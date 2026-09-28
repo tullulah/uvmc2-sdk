@@ -183,7 +183,11 @@ int uvm2_config_wizard_with(void (*figure)(void))
     fields[n++] = (struct field){ "ZERO",   &c.zero,       0, 255, 1 };
     fields[n++] = (struct field){ "BRIGHT", &c.bright,     0, 127, 1 };
     fields[n++] = (struct field){ "SCALE",  &c.scale,   80, 400, 1 };
-    fields[n++] = (struct field){ "TAIL",   &c.t1_tail_q8, -512, 512, 8 };
+    /* TAIL's ceiling is TWICE THE MEASURED VALUE, not 512. The default is 640 (2.5 E cycles,
+     * T1_EXTRA_Q8 in ramp.rs, measured 2026-09-15), and with a ceiling of 512 the first touch
+     * of the stick clamped it to 512 — the calibration moved without anyone asking, and it
+     * could never be put back. Reported on the console 2026-09-28: "tail no sube de 512". */
+    fields[n++] = (struct field){ "TAIL",   &c.t1_tail_q8, -512, 1280, 8 };
     {
         const unsigned mine = uvm2_config_game_settings();
         /* ROTATE: the screen is vertical and quite a few arcade machines are horizontal. It
