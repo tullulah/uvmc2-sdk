@@ -16,7 +16,8 @@
  *
  * WITH ZERO SELECTED THE PATTERN IS TEXT INSTEAD: see zero_pattern.
  *
- * CONTROLLER: up/down picks a parameter, left/right moves it, button 4 saves and exits.
+ * CONTROLLER: up/down picks a parameter, left/right moves it, BUTTON 1 cycles the figure
+ * (auto / text / wheel / rings) and button 4 saves and exits.
  * HOW TO GET HERE: hold buttons 2 and 3 while launching the game with 4 (uvm2_config_boot_combo).
  */
 #include "uvm2_config.h"
@@ -251,7 +252,11 @@ static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE" };
 /* WHICH FIGURE. Not stored: it points at a local below, so it behaves like every other
  * field and saves nothing. What you calibrate against is a choice made at the screen, not a
  * property of the console. */
-static const char *const LBL_FIGURE[] = { "WHEEL", "RINGS" };
+static const char *const LBL_FIGURE[] = { "AUTO", "TEXT", "WHEEL", "RINGS" };
+#define FIG_AUTO 0
+#define FIG_TEXT 1
+#define FIG_WHEEL 2
+#define FIG_RINGS 3
 
 /* THE GAME CAN SUPPLY THE FIGURE.
  *
@@ -305,8 +310,8 @@ int uvm2_config_wizard_with(void (*figure)(void))
     fields[n++] = (struct field){ "TAIL",   &c.t1_tail_q8, -512, 1280, 8 };
     /* A LOCAL, ON PURPOSE. uvm2_config_apply and uvm2_config_save only ever see `c`, so a
      * field pointing here moves like the others and is gone when the screen closes. */
-    int32_t figsel = 0;
-    fields[n++] = (struct field){ "FIGURE", &figsel,       0, 1, 1, LBL_FIGURE };
+    int32_t figsel = FIG_AUTO;
+    fields[n++] = (struct field){ "FIGURE", &figsel,       0, 3, 1, LBL_FIGURE };
     {
         const unsigned mine = uvm2_config_game_settings();
         /* ROTATE: the screen is vertical and quite a few arcade machines are horizontal. It
@@ -354,13 +359,28 @@ int uvm2_config_wizard_with(void (*figure)(void))
         uvm2_frame_begin();
         uvm2_draw_intensity(c.bright);
 
-        /* FIGURE IS CHECKED FIRST, and it was not. The zero field swaps in its own text
-         * pattern, which is right when nobody asked for anything else -- but it was
-         * overriding RINGS, so selecting ZERO replaced the rings with rows of text and the
-         * one knob you would most want to move while watching them was the one knob that
-         * hid them. Picked by name wins, the same rule the game's own figure follows. */
-        if (figsel) {
-            rings_pattern();              /* the explosion; asked for by name, so it wins */
+        /* WHAT IS DRAWN, and FIGURE decides it before anything else does.
+         *
+         * AUTO is what this always did: the zero field brings up its own rows of text and
+         * everything else gets the wheel, or the game's own figure. The other three force
+         * one, which is the point -- Daniel, calibrating on the console: "zero solo alinea
+         * texto. tendriamos que tener un boton que cambia de texto a los circulos, asi
+         * podemos ver que hace la calibracion en ambos."
+         *
+         * That is not a convenience. ONE ZERO CANNOT SERVE TWO SCALES: the reference
+         * cartridge keeps six values of it, one per drawing scale, and the text and the
+         * rings are two scales far apart -- the rings alone run from 180 to 1668. A setting
+         * judged on one of them is a setting judged on a third of the picture, which is
+         * exactly what "se centra el del test, luego en el juego la cosa cambia" is. Button
+         * 1 cycles this, so the same value can be seen on both without leaving the field. */
+        if (figsel == FIG_RINGS) {
+            rings_pattern();
+        } else if (figsel == FIG_TEXT) {
+            zero_pattern(c.bright);
+        } else if (figsel == FIG_WHEEL) {
+            wheel(-50, 38);
+            square( 70, 60,  1);
+            square( 70, 10, 10);
         } else if (fields[sel].value == &c.zero) {
             zero_pattern(c.bright);       /* the zero's own pattern, whatever the game passed */
         } else if (figure) {
@@ -383,7 +403,7 @@ int uvm2_config_wizard_with(void (*figure)(void))
          * `FIT`/`OVER` whether the last frame was replayed whole. Deformed geometry and a
          * list drawn a piece at a time look alike on a television and have nothing else in
          * common, so the answer is on the screen rather than in an argument. */
-        if (figsel) {
+        if (figsel == FIG_RINGS) {
             char line[28];
             int p = 0;
             for (const char *t = fields[sel].name; *t; t++) line[p++] = *t;
@@ -515,6 +535,10 @@ input:
         }
 
 after_input:
+        /* BUTTON 1 CYCLES THE FIGURE. On an edge like everything else here: the loop runs at
+         * 50 Hz and a finger does not. */
+        if (pressed & 0x01) figsel = (figsel + 1) & 3;
+
         if (pressed & 0x08) {           /* button 4: save and exit */
             /* CORE 1 IS NOT STOPPED HERE, AND THIS COMMENT USED TO LIE.
              *
