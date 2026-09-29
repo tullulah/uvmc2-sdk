@@ -140,7 +140,23 @@ static void square(int cx, int cy, int n)
     }
 }
 
-struct field { const char *name; int32_t *value; int32_t min, max, step; };
+/* `labels`, WHEN A NUMBER IS NOT AN ANSWER.
+ *
+ * A switch shown as a digit is a switch nobody can use: "AUDIO 0" does not say whether zero
+ * is the jack or the console, and the player has no manual on the sofa. With `labels` set, the
+ * value indexes it and the word is drawn instead — the field still behaves like a number
+ * underneath, so nothing else in here changes.
+ *
+ * Left NULL by every field that really is a number (a compound literal with fewer
+ * initialisers zero-fills the rest, so the four console fields below say nothing about it).
+ * It must hold max-min+1 entries. */
+struct field { const char *name; int32_t *value; int32_t min, max, step;
+               const char *const *labels; };
+
+static const char *const LBL_ONOFF[] = { "OFF", "ON" };
+/* JACK first because 0 is the jack: a config file written before this setting existed brings
+ * a zero, and on the UVMC2 the jack is what it was already doing. See uvm2_config.h. */
+static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE" };
 
 /* THE GAME CAN SUPPLY THE FIGURE.
  *
@@ -179,7 +195,10 @@ int uvm2_config_wizard_with(void (*figure)(void))
      * (uvm2_config_game). A switch that means nothing in this game is not shown: Donkey Kong is
      * vertical and has no business seeing a ROTATE, and the menu is hidden per game and not for
      * everyone. */
-    struct field fields[8];
+    /* Four of the console's plus every one the game declares. It was 8, which is EXACTLY
+     * full now that AUDIO exists — and a fifth game setting would have written past the end
+     * with nothing to say so. */
+    struct field fields[12];
     int n = 0;
     fields[n++] = (struct field){ "ZERO",   &c.zero,       0, 255, 1 };
     fields[n++] = (struct field){ "BRIGHT", &c.bright,     0, 127, 1 };
@@ -194,9 +213,15 @@ int uvm2_config_wizard_with(void (*figure)(void))
         /* ROTATE: the screen is vertical and quite a few arcade machines are horizontal. It
          * shows instantly on the figure itself, which is exactly what a setting like this
          * needs. */
-        if (mine & UVM2_SETTING_ROTATE) fields[n++] = (struct field){ "ROTATE", &c.rotate,     0, 1, 1 };
-        if (mine & UVM2_SETTING_MENU)   fields[n++] = (struct field){ "MENU",   &c.start_menu, 0, 1, 1 };
+        if (mine & UVM2_SETTING_ROTATE) fields[n++] = (struct field){ "ROTATE", &c.rotate,     0, 1, 1, LBL_ONOFF };
+        if (mine & UVM2_SETTING_MENU)   fields[n++] = (struct field){ "MENU",   &c.start_menu, 0, 1, 1, LBL_ONOFF };
         if (mine & UVM2_SETTING_HZ)     fields[n++] = (struct field){ "HZ",     &c.hz,         0, 60, 10 };
+        /* WHERE THE SOUND COMES OUT. The setting has been stored and loaded since the jack
+         * existed, and the field table is what was missing — so a game could declare it and
+         * the player still had no way to change it. The SDK does not route anything here: it
+         * moves the value, and the game that declared it reads uvm2_setting_audio and decides
+         * what that means. */
+        if (mine & UVM2_SETTING_AUDIO)  fields[n++] = (struct field){ "AUDIO",  &c.audio,      0, 1, 1, LBL_AUDIO };
     }
     int sel = 0, saved = 0;
     /* THE BUTTONS ARE ACTIVE LOW (PSG reg 14 raw: 0 = pressed), so they are inverted here ONCE
@@ -236,12 +261,18 @@ int uvm2_config_wizard_with(void (*figure)(void))
             for (const char *s = fields[i].name; *s; s++) line[p++] = *s;
             line[p++] = ' ';
             /* The value, by hand: the SDK has no printf and pulling it in for this would cost
-             * 20 KB of flash for four numbers. */
+             * 20 KB of flash for four numbers. A field with `labels` draws the word instead;
+             * the range check is the labels' bound, so a value out of range falls back to the
+             * digits rather than reading past the table. */
             int32_t v = *fields[i].value;
-            if (v < 0) { line[p++] = '-'; v = -v; }
-            char d[8]; int k = 0;
-            do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 7);
-            while (k) line[p++] = d[--k];
+            if (fields[i].labels && v >= fields[i].min && v <= fields[i].max) {
+                for (const char *s = fields[i].labels[v - fields[i].min]; *s; s++) line[p++] = *s;
+            } else {
+                if (v < 0) { line[p++] = '-'; v = -v; }
+                char d[8]; int k = 0;
+                do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 7);
+                while (k) line[p++] = d[--k];
+            }
             line[p] = 0;
             uvm2_print_text(-112, -22 - w * STEP, line, TEXT, c.bright);
         }
