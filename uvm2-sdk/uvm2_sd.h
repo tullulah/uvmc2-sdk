@@ -77,7 +77,7 @@ void     uvm2_sd_close(uvm2_sd_file *f);
  * A MISSING can be an absent file or a misread volume, and from outside they look identical;
  * this separates them. It is read in one go:
  *
- *     tools/probe.sh <&uvm2_sd_diag> 13
+ *     tools/probe.sh <&uvm2_sd_diag> 14
  */
 struct uvm2_sd_diag {
     uint32_t magic;          /* 'SDDG' = 0x47444453; 0 if nothing was ever tried */
@@ -90,6 +90,7 @@ struct uvm2_sd_diag {
     uint32_t fatbase, dirbase, database;   /* sectors (dirbase: root cluster on FAT32/exFAT) */
     uint32_t reads, writes;  /* blocks moved since boot: proof the card was touched */
     uint32_t streams;        /* files open through uvm2_sd_open: no remount while > 0 */
+    uint32_t baud;           /* SPI clock in Hz, as the divider ACTUALLY landed          */
 };
 extern struct uvm2_sd_diag uvm2_sd_diag;
 

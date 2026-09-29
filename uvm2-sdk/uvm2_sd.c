@@ -1,4 +1,4 @@
-/* uvm2_sd.c — bit-banged SPI to the SD card, with FatFs on top of it.
+/* uvm2_sd.c — SPI to the SD card (the SPI0 peripheral), with FatFs on top of it.
  *
  * THE FILE SYSTEM IS FatFs (third_party/fatfs), NOT OURS. Until 2026-09-28 this file carried a
  * hand-written FAT16/FAT32 reader and writer. It worked on the cards it was tested on and knew
@@ -122,7 +122,14 @@ _Static_assert(SIO_HI_OE_CLR  == SIO_GPIO_HI_OE_CLR_OFFSET,  "SIO_HI_OE_CLR");
 
 static inline uint32_t hi(int pin) { return 1u << (pin - 32); }
 
-static void cfg_pin(int pin, int is_output)
+/* ONE PLACE WRITES THE PADS, whichever function ends up driving the pin. The two RP2350
+ * traps below are the reason: they are properties of the PAD, so they apply just the same
+ * when the SPI peripheral owns the pin as when SIO does, and a second copy of this would be
+ * a second chance to forget one of them.
+ *
+ * `funcsel` 5 is SIO (and only then does `is_output` mean anything — the OE registers are
+ * SIO's); 1 is SPI0 on these three pins. */
+static void cfg_pad(int pin, unsigned funcsel, int is_output, int pull_up)
 {
     /* The pad comes up ISOLATED on the RP2350: without clearing ISO the pin is mute and
      * says nothing about it. */
@@ -130,12 +137,16 @@ static void cfg_pin(int pin, int is_output)
     /* PDE is SET in the reset value (0x0116). Leaving it is the sister trap of ISO: on
      * MISO that internal pull-down fights the board's pull-up — the one you can see as a
      * high read on GPIO36 in the firmware menu — and can pull the line down. */
-    *pad = (*pad & ~((1u<<8) | (1u<<7) | (1u<<2))) | (1u<<6) | (is_output ? 0u : (1u<<3));
-                                       /* ISO=0, OD=0, PDE=0, IE=1, PUE on inputs */
-    R(IO_BANK0 + 8*pin + 4) = 5u;                        /* FUNCSEL 5 = SIO   */
-    if (is_output) R(SIO + SIO_HI_OE_SET) = hi(pin);
-    else           R(SIO + SIO_HI_OE_CLR) = hi(pin);
+    *pad = (*pad & ~((1u<<8) | (1u<<7) | (1u<<2))) | (1u<<6) | (pull_up ? (1u<<3) : 0u);
+                                       /* ISO=0, OD=0, PDE=0, IE=1, PUE where asked */
+    R(IO_BANK0 + 8*pin + 4) = funcsel;
+    if (funcsel == 5u) {
+        if (is_output) R(SIO + SIO_HI_OE_SET) = hi(pin);
+        else           R(SIO + SIO_HI_OE_CLR) = hi(pin);
+    }
 }
+/* A plain GPIO, as this file used to configure all four: inputs get the pull-up. */
+static void cfg_pin(int pin, int is_output) { cfg_pad(pin, 5u, is_output, !is_output); }
 static inline void set_pin(int pin, int v)
 {
     if (v) R(SIO + SIO_HI_OUT_SET) = hi(pin);
@@ -143,10 +154,97 @@ static inline void set_pin(int pin, int v)
 }
 static inline int get_pin(int pin) { return (R(SIO + SIO_HI_IN) >> (pin - 32)) & 1u; }
 
+static void cs(int on) { set_pin(PIN_CS, !on); }   /* CS is active LOW */
+
+/* ── THE TRANSPORT: SPI0, WITH THE OLD BIT-BANG STILL HERE TO BISECT AGAINST ─────────
+ *
+ * Both halves below export the same four calls, so everything above and below this section
+ * reads the same either way:
+ *
+ *     sd_pins_init()          put SCK / MOSI / MISO under whoever is driving them
+ *     sd_speed(slow)          the card demands <= 400 kHz until it leaves idle
+ *     xfer(byte)              one byte out, one byte in
+ *     xfer_in(buf, n)         n bytes in, 0xFF out (the read direction)
+ *     xfer_out(buf, n)        n bytes out, reply discarded (the write direction)
+ *
+ * WHY THE PERIPHERAL. The bit-bang costs ~63 cycles per bit, which the debug cartridge's own
+ * driver had already written down as "~1.7 ms per 512-byte block" — 301 KB/s, and that number
+ * sat in the repo through a whole session of proposing to go and measure it. 8 MB of PSRAM
+ * through it is 27 seconds. SPI0 is on GPIO34/35/36 ON BOTH CARTRIDGES, which is not luck: it
+ * is why the stock firmware's own menu has them at FUNCSEL 1, the measurement this file's pin
+ * comment is built on.
+ *
+ * WHY 12 MHz AND NOT 25. 25 MHz is the SD spec's ceiling for SPI mode and every card must do
+ * it, so the divider is not the limit — the limit is that NOTHING HERE CHECKS THE CRC. At
+ * 2.4 MHz that was never a question; a corrupt byte at 25 MHz on a socket at the end of a
+ * cartridge would arrive silently and look like a corrupt file system. 12 MHz is a 5x win
+ * with the edge rates still nowhere near the cable. Raising it is one constant, and the
+ * honest order is: check the CRC16 on reads FIRST, then raise it.
+ *
+ * UVM2_SD_BITBANG brings the old path back verbatim. Both talk to the same card over the same
+ * pins, so a card that reads one way and not the other says the speed is the fault and not
+ * the code — which is the only reason to keep dead code around. */
+#ifndef UVM2_SD_BITBANG
+
+#include "hardware/spi.h"
+
+#ifndef UVM2_SD_BAUD_SLOW
+#define UVM2_SD_BAUD_SLOW    400000u    /* CMD0..CMD41: the card's own start-up limit */
+#endif
+/* 12.5 MHz AND NOT 12: clk_peri is 150 MHz here and the divider is an integer, so 12.5 is
+ * 150/12 exactly while a rounder-looking 12 000 000 lands on 150/14 = 10.7 — spi_set_baudrate
+ * only ever rounds DOWN, and asking for the decimal that looks tidier throws away 17%.
+ * uvm2_sd_diag.baud reports where it actually landed, whatever is asked for here. */
+#ifndef UVM2_SD_BAUD_FAST
+#define UVM2_SD_BAUD_FAST  12500000u    /* see above before raising this */
+#endif
+
+static void sd_pins_init(void)
+{
+    /* spi_init sets 8 bits, CPOL 0, CPHA 0, MSB first — SD's mode 0 — and takes the block
+     * out of reset. It has to run BEFORE the pads hand the pins over, or SCK idles wherever
+     * an unconfigured peripheral leaves it while the card is watching. */
+    spi_init(spi0, UVM2_SD_BAUD_SLOW);
+    cfg_pad(PIN_SCK,  1u, 1, 0);
+    cfg_pad(PIN_MOSI, 1u, 1, 0);
+    cfg_pad(PIN_MISO, 1u, 0, 1);         /* pull-up: the board has one and PDE fights it */
+}
+static void sd_speed(int slow)
+{
+    /* What the divider actually gave, not what was asked for: clk_peri / (prescale*postdiv)
+     * rarely lands on the number. It is in the diag so a rate measured upstairs can be
+     * divided by something true. */
+    uvm2_sd_diag.baud = spi_set_baudrate(spi0, slow ? UVM2_SD_BAUD_SLOW : UVM2_SD_BAUD_FAST);
+}
+static uint8_t xfer(uint8_t out)
+{
+    uint8_t in = 0xFF;
+    spi_write_read_blocking(spi0, &out, &in, 1);
+    return in;
+}
+static void xfer_in(unsigned char *buf, int n)
+{
+    spi_read_blocking(spi0, 0xFF, buf, (size_t)n);
+}
+static void xfer_out(const unsigned char *buf, int n)
+{
+    spi_write_blocking(spi0, buf, (size_t)n);
+}
+
+#else   /* UVM2_SD_BITBANG */
+
 /* Half a clock cycle. Slow while starting up (the card demands it until it leaves idle)
  * and fast afterwards; without the two speeds it either never starts or takes forever. */
 static volatile int s_slow = 1;
 static void tick(void) { volatile int n = s_slow ? 24 : 1; while (n--) { } }
+
+static void sd_pins_init(void)
+{
+    cfg_pin(PIN_SCK, 1); cfg_pin(PIN_MOSI, 1);
+    cfg_pin(PIN_MISO, 0);
+    set_pin(PIN_SCK, 0); set_pin(PIN_MOSI, 1);
+}
+static void sd_speed(int slow) { s_slow = slow; uvm2_sd_diag.baud = slow ? 100000u : 2400000u; }
 
 static uint8_t xfer(uint8_t out)
 {
@@ -161,15 +259,28 @@ static uint8_t xfer(uint8_t out)
     }
     return in;
 }
-static void cs(int on) { set_pin(PIN_CS, !on); }   /* CS is active LOW */
+static void xfer_in(unsigned char *buf, int n)
+{
+    for (int i = 0; i < n; i++) buf[i] = xfer(0xFF);
+}
+static void xfer_out(const unsigned char *buf, int n)
+{
+    for (int i = 0; i < n; i++) xfer(buf[i]);
+}
+
+#endif  /* UVM2_SD_BITBANG */
 
 static uint8_t command(uint8_t idx, uint32_t arg, uint8_t crc)
 {
-    xfer(0xFF);
-    xfer((uint8_t)(0x40 | idx));
-    xfer((uint8_t)(arg >> 24)); xfer((uint8_t)(arg >> 16));
-    xfer((uint8_t)(arg >> 8));  xfer((uint8_t)arg);
-    xfer(crc);
+    /* One guard byte and the six-byte frame, sent together: over the peripheral that is one
+     * FIFO burst instead of seven round trips, and the bytes on the wire are identical. */
+    const unsigned char frame[7] = {
+        0xFF, (unsigned char)(0x40 | idx),
+        (unsigned char)(arg >> 24), (unsigned char)(arg >> 16),
+        (unsigned char)(arg >> 8),  (unsigned char)arg,
+        crc
+    };
+    xfer_out(frame, 7);
     for (int i = 0; i < 10; i++) {           /* R1: first byte without bit 7 */
         uint8_t r = xfer(0xFF);
         if (!(r & 0x80)) return r;
@@ -182,10 +293,13 @@ static int s_sdhc = 0;
 int uvm2_sd_init(void)
 {
     uvm2_sd_error = UVM2_SD_OK;
-    cfg_pin(PIN_SCK, 1); cfg_pin(PIN_MOSI, 1); cfg_pin(PIN_CS, 1);
-    cfg_pin(PIN_MISO, 0);
-    set_pin(PIN_SCK, 0); set_pin(PIN_MOSI, 1); cs(0);
-    s_slow = 1;
+    /* CS stays a plain GPIO whichever transport is in use: it has to be held down across a
+     * whole multi-byte transaction, which is not something a peripheral's own CS does, and
+     * it is the ONE pin that differs between the two cartridges. */
+    cfg_pin(PIN_CS, 1);
+    cs(0);
+    sd_pins_init();
+    sd_speed(1);
 
     /* 80 pulses with CS high: the card asks for them before it enters SPI mode. */
     for (int i = 0; i < 10; i++) xfer(0xFF);
@@ -209,7 +323,7 @@ int uvm2_sd_init(void)
         }
     }
     cs(0);
-    s_slow = 0;
+    sd_speed(0);
     return 1;
 }
 
@@ -230,7 +344,7 @@ static int read_block(uint32_t lba, unsigned char *buf)
     uint8_t t = 0xFF;
     for (int i = 0; i < 200000 && t == 0xFF; i++) t = xfer(0xFF);
     if (t != 0xFE) { cs(0); return 0; }
-    for (int i = 0; i < 512; i++) buf[i] = xfer(0xFF);
+    xfer_in(buf, 512);
     xfer(0xFF); xfer(0xFF);                   /* CRC, which we do not check */
     cs(0);
     return 1;
@@ -244,7 +358,7 @@ static int write_block(uint32_t lba, const unsigned char *buf)
     if (command(24, s_sdhc ? lba : lba * 512u, 0xFF) != 0x00) { cs(0); return 0; }
     xfer(0xFF);                                /* one guard byte before the token */
     xfer(0xFE);                                /* start-of-block token */
-    for (int i = 0; i < 512; i++) xfer(buf[i]);
+    xfer_out(buf, 512);
     xfer(0xFF); xfer(0xFF);                    /* CRC, which the card ignores over SPI */
     /* The data response: xxx00101 = accepted. Anything else is a failure, and it has to be
      * caught here rather than discovered on the next read. */
