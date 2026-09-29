@@ -79,6 +79,12 @@ UVM2_CFLAGS += -DUVM2_SUBUNITS
 
 # The command list's cap, per game. See the comment in uvm2_draw.c: with no pacer a game
 # draws more per frame and the multicart's 8192 falls short. Watch stats.dropped.
+# The jack's ring, as log2 of its size in 32-bit words (11 = 2048 words = 8 KB = 64 ms).
+# One number, because the DMA needs the buffer and its wrap to agree; see uvm2_jack.c.
+ifneq ($(UVM2_JACK_RING_LOG2),)
+UVM2_CFLAGS += -DUVM2_JACK_RING_LOG2=$(UVM2_JACK_RING_LOG2)u
+endif
+
 ifneq ($(UVM2_CMD_CAPACITY),)
 UVM2_CFLAGS += -DUVM2_CMD_CAPACITY=$(UVM2_CMD_CAPACITY)u
 endif

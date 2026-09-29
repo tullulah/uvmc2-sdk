@@ -2846,8 +2846,8 @@ static void measure_period(void)
  * else measures: the time the game spends emulating between frames. See the us_frame_*
  * comment in uvm2_bus.h.
  *
- * TIMER0's TIMELR raw (0x400B000C): 32 bits of microseconds, more than enough for a
- * difference between frames, and without dragging pico/time.h into a file that lives in SRAM.
+ * The microseconds come from uvm2_now_us() (uvm2_bus.h), which is now the one place that
+ * knows where they live; this file used to read TIMER0's address itself.
  *
  * The first 60 frames DO NOT count: at startup there is the ROM load, attract screens and the
  * loader itself, and that rubbish stays in the minimum and the maximum for ever. It already
@@ -2855,11 +2855,7 @@ static void measure_period(void)
 {
     static uint32_t s_us_prev;
     static uint32_t s_warmup = 60;
-#ifdef UVM2_HOST
-    const uint32_t now = 0;   /* no TIMER0 in a host harness — see tools/ */
-#else
-    const uint32_t now = *(volatile uint32_t *)0x400B000Cu;
-#endif
+    const uint32_t now = uvm2_now_us();
 
     if (s_warmup) {
         s_warmup--;

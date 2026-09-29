@@ -212,6 +212,23 @@ UVM2_RAMFUNC uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count);
 /* CPU cycles per E period, in Q8 (100.0 cycles = 25600). Filled in by uvm2_measure_e(),
  * which must be called with the bus already taken. It is the ratio that decides whether the
  * PIO stream's phase calibration carries across boards — see uvm2_bus.c. */
+/* MICROSECONDS, AND ONE COPY OF HOW TO GET THEM.
+ *
+ * TIMER0's TIMELR raw (0x400B000C) is 32 bits of microseconds and needs no pico/time.h —
+ * which matters twice: this SDK lives in SRAM, and including that header in a translation
+ * unit AAE has pre-loaded with aae_compat.h does not compile at all.
+ *
+ * It was already being read inline in uvm2_draw.c, and tacscan keeps a third copy of the
+ * same address behind its own macro. An address like this wants exactly one home — three
+ * copies is three chances for one of them to end up with the RP2040's offset, which is a
+ * mistake this project has already made with the SIO bank.
+ *
+ * ALWAYS DEFINED, whatever the bus layer is compiled with. On a host harness there is no
+ * TIMER0 and this returns 0: a caller that paces on a
+ * difference then sees no time passing, which is the honest answer for a machine with no
+ * clock rather than a plausible-looking wrong one. */
+uint32_t uvm2_now_us(void);
+
 extern uint32_t uvm2_cycles_per_e_q8;
 void uvm2_measure_e(void);
 

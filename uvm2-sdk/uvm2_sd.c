@@ -199,6 +199,28 @@ static void cs(int on) { set_pin(PIN_CS, !on); }   /* CS is active LOW */
 #define UVM2_SD_BAUD_FAST  12500000u    /* see above before raising this */
 #endif
 
+/* EVERY FIFO WAIT IS BOUNDED, and this is not defensive decoration — it is the difference
+ * between a driver that reports and a machine that stops.
+ *
+ * The bit-bang could not hang: its loops ran a fixed number of times whatever the card
+ * did. The peripheral's do. `while (!writable) {}` waits for hardware that, where SPI0 is
+ * not present, never answers — and the IDE's emulator is exactly such an environment. The
+ * symptom was the worst kind: not an error, not a black screen, but core 0 spinning at
+ * 99.9% inside spi_is_writable with the game never starting. Every .um2 that so much as
+ * reads its own configuration stopped booting there, and that is every one of them.
+ *
+ * The bound is generous on purpose: at the slow clock a byte is ~20 us, so 100000 spins is
+ * orders of magnitude past any real transfer and cannot trip on a slow card. What it
+ * catches is a peripheral that was never going to answer.
+ *
+ * On a timeout the transfer is abandoned and uvm2_sd_error says so, which turns a hang into
+ * "no card" — the game then paints its own missing-romset notice instead of freezing. An
+ * unbounded spin has cost this project a hung cartridge before, and the lesson written down
+ * then was exactly this one. */
+#define SPI_SPIN_LIMIT  100000u
+
+static int spi_timed_out;   /* sticky for the rest of the transfer; cleared at init */
+
 static void sd_pins_init(void)
 {
     /* spi_init sets 8 bits, CPOL 0, CPHA 0, MSB first — SD's mode 0 — and takes the block
@@ -216,19 +238,34 @@ static void sd_speed(int slow)
      * divided by something true. */
     uvm2_sd_diag.baud = spi_set_baudrate(spi0, slow ? UVM2_SD_BAUD_SLOW : UVM2_SD_BAUD_FAST);
 }
+/* The SDK's spi_*_blocking helpers spin without a bound, so the FIFO is handled here
+ * instead: same protocol, same order, one counter. */
+static int spi_wait(uint32_t mask)
+{
+    uint32_t n = SPI_SPIN_LIMIT;
+    while (n--) if (spi_get_hw(spi0)->sr & mask) return 1;
+    spi_timed_out = 1;
+    uvm2_sd_error = UVM2_SD_NO_CARD;
+    return 0;
+}
+
 static uint8_t xfer(uint8_t out)
 {
-    uint8_t in = 0xFF;
-    spi_write_read_blocking(spi0, &out, &in, 1);
-    return in;
+    if (spi_timed_out) return 0xFF;
+    if (!spi_wait(SPI_SSPSR_TNF_BITS)) return 0xFF;
+    spi_get_hw(spi0)->dr = (uint32_t)out;
+    if (!spi_wait(SPI_SSPSR_RNE_BITS)) return 0xFF;
+    return (uint8_t)spi_get_hw(spi0)->dr;
 }
 static void xfer_in(unsigned char *buf, int n)
 {
-    spi_read_blocking(spi0, 0xFF, buf, (size_t)n);
+    int i;
+    for (i = 0; i < n; i++) buf[i] = xfer(0xFF);
 }
 static void xfer_out(const unsigned char *buf, int n)
 {
-    spi_write_blocking(spi0, buf, (size_t)n);
+    int i;
+    for (i = 0; i < n; i++) (void)xfer(buf[i]);
 }
 
 #else   /* UVM2_SD_BITBANG */
@@ -298,6 +335,9 @@ int uvm2_sd_init(void)
      * it is the ONE pin that differs between the two cartridges. */
     cfg_pin(PIN_CS, 1);
     cs(0);
+#ifndef UVM2_SD_BITBANG
+    spi_timed_out = 0;      /* a previous mount that timed out must not poison this one */
+#endif
     sd_pins_init();
     sd_speed(1);
 

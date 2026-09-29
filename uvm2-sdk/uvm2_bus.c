@@ -21,6 +21,23 @@
 #include "uvm2_bus_stream.h"
 #endif
 
+/* See uvm2_bus.h: the one place that knows where the microseconds live.
+ *
+ * OUTSIDE THE UVM2_PIO_STREAM GUARD, and it was inside it -- not because a build without
+ * the PIO stream is a real case -- Daniel: "nunca haremos una build sin PIO", and the
+ * measurement baseline says the same -- but because a clock has nothing to do with the bus
+ * stream, and a
+ * definition that sits under an unrelated guard is a definition whose availability nobody
+ * can reason about. uvm2_draw.c calls it unconditionally. */
+uint32_t uvm2_now_us(void)
+{
+#ifdef UVM2_HOST
+    return 0u;
+#else
+    return *(volatile uint32_t *)0x400B000Cu;
+#endif
+}
+
 uvm2_stats_t uvm2_stats;
 
 /* Linker-provided; C code needs its .bss cleared and nothing else does it. */

@@ -32,9 +32,26 @@
  * back to the Vectrex's own sound chip. */
 #include "uvm2_jack.h"
 
-#define RING_WORDS   2048u                  /* 8 KB, 64 ms at 32 kHz        */
-#define RING_BITS    13u                    /* log2(bytes), for the DMA wrap */
+/* THE RING IS ONE NUMBER, NOT TWO. The DMA's ring wrap needs a power-of-two buffer,
+ * aligned to its own size, and it is told the size in LOG2 OF BYTES. Keeping a word
+ * count and a bit count side by side means keeping two constants in agreement by hand,
+ * and the day they disagree the DMA wraps somewhere that is not the end of the buffer —
+ * which is not a compile error and not a crash, just audio that repeats a fragment.
+ * So everything below is derived from the log2, and the alignment with it.
+ *
+ * 8 KB (log2 11 -> 2048 words) is 64 ms at 32 kHz: about two and a half frames of slack,
+ * so one frame going long does not break the sound. Games that cannot spare the SRAM can
+ * lower it — ESB does, to 4 KB — but below about one frame there is nothing left to
+ * absorb a late refill and every long frame is an audible gap. */
+#ifndef UVM2_JACK_RING_LOG2
+#define UVM2_JACK_RING_LOG2  11u
+#endif
+#define RING_WORDS   (1u << UVM2_JACK_RING_LOG2)
+#define RING_BITS    (UVM2_JACK_RING_LOG2 + 2u)   /* log2(bytes): 4 bytes a word */
 #define AHEAD        1600u                  /* keep ~50 ms queued            */
+
+/* Below a frame of audio the ring cannot cover a single late refill. */
+_Static_assert(RING_WORDS >= 512u, "UVM2_JACK_RING_LOG2 under 16 ms of audio");
 
 #ifdef VPY_RP2350
 #include "hardware/pio.h"
