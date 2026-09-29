@@ -39,10 +39,41 @@ int uvm2_sd_error = UVM2_SD_OK;
  * If this ever has to be revisited, that is the recipe: leave the console in the cartridge
  * menu and dump IO_BANK0 (0x40028100, 32 words) over SWD. It is a MEASUREMENT, not a read.
  *
- * THERE IS NO CARD DETECT. The firmware configures no pin for it (32, 33, 37 and 38 are all
- * null in its menu), so SD_DETECT does not exist in this wiring. An earlier version read
- * GPIO38: an unowned pad with an internal pull-down, which always returns 0 — that is, "no
- * card" no matter what. A diagnostic that cannot fail diagnoses nothing. */
+ * ── AND THE SCHEMATIC AGREES, ONCE IT IS READ PROPERLY (2026-09-29) ───────────────────
+ *
+ * The board's net names are dual — `MISO/SDIO_DAT0`, `SDCS/SDIO_DAT3` — because the socket
+ * is wired for BOTH: 1-bit SPI, which is what this file does, and 4-bit SDIO, which nothing
+ * does yet. The full map, with the schematic's package pin numbers:
+ *
+ *     GPIO34  pin 43   SCK/SDIO_CLK      SCK   / CLK
+ *     GPIO35  pin 44   MOSI/SDIO_CMD     MOSI  / CMD
+ *     GPIO36  pin 45   MISO/SDIO_DAT0    MISO  / DAT0
+ *     GPIO37  pin 46   SDIO_DAT1               / DAT1     unused in SPI mode
+ *     GPIO38  pin 47   SDIO_DAT2               / DAT2     unused in SPI mode
+ *     GPIO39  pin 48   SDCS/SDIO_DAT3    CS    / DAT3     10K pull-up (R12)
+ *     GPIO40  pin 49   SD_DETECT                          the socket's CD pin
+ *
+ * CS AND DAT3 BEING THE SAME PIN IS THE SD SPEC, not a coincidence, and it is what anchors
+ * the map: the measurement found CS on GPIO39 and the schematic calls GPIO39 DAT3.
+ *
+ * WHY THE EARLIER READ WAS OFF BY TWO: the net labels line up with the PACKAGE PIN numbers
+ * (43, 44, 45...), and whoever read them lined them up with the GPIO numbers starting at 32.
+ * Two independent sources now tell the same story, which is the first time that has been
+ * true here.
+ *
+ * ── THERE IS A CARD DETECT AFTER ALL, AND THIS COMMENT SAID THERE WAS NOT ─────────────
+ *
+ * It said "SD_DETECT does not exist in this wiring", and that was wrong. What is true is
+ * narrower: the FIRMWARE configures no pin for it. The board has one, on GPIO40.
+ *
+ * The confusion was the same off-by-two: an earlier version polled GPIO38 and always read 0,
+ * and 0 was taken for "no card". GPIO38 is DAT2 — an unowned pad with the reset pull-down on
+ * it, which reads 0 whatever the socket is doing. A diagnostic that cannot fail diagnoses
+ * nothing, and that part of the lesson stands.
+ *
+ * NOBODY HAS TRIED GPIO40. It is not used here because the driver does not need it — every
+ * mount re-initialises the card, which is how a swap is noticed — but "untried" and
+ * "does not exist" are different claims and only one of them was ever true. */
 
 /* ── THE HOST SIDE ────────────────────────────────────────────────────────────────────
  * With -DUVM2_SD_HOST the very same code compiles against a FILE instead of the card. It
