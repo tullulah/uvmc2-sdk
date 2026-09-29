@@ -119,6 +119,97 @@ static void zero_pattern(int bright)
         uvm2_print_text_chained(ZERO_LEFT, ZERO_TOP - r * ZERO_ROW, ZERO_ROWS[r], TEXT, bright);
 }
 
+/* THE RINGS: THE DEATH STAR'S EXPLOSION, BECAUSE THAT IS WHERE THE FAULT IS.
+ *
+ * Reported on a tester's console and photographed: when the death star blows up, Star Wars
+ * throws out concentric circles from the centre. The small one comes out round; the big
+ * ones come out deformed — skewed, and not closing where they started. Jason's guess was
+ * timing. Daniel had already set ZERO to 25, which is right for his console, and the rings
+ * stayed wrong, so the zero reference is not it.
+ *
+ * A figure cannot be judged from a photograph of somebody else's television, so it is drawn
+ * here instead: this is the same burst, on the screen where the knobs are, with nothing else
+ * in the frame to argue about.
+ *
+ * WHAT IT SEPARATES. Every ring has the SAME number of vertices, so going outwards the
+ * radius grows and the chord grows with it, in step. Then:
+ *
+ *     every ring fails the same amount           -> a FIXED per-stroke term      (TAIL)
+ *     the failure grows with the radius          -> a term proportional to
+ *                                                   stroke LENGTH               (SCALE)
+ *     it appears suddenly past a radius          -> a limit, not a slope
+ *
+ * THIS PATTERN IS ALMOST ENTIRELY STROKES, and that is deliberate rather than incidental.
+ * Consecutive rings start at the same angle, so the jump between them is RING_STEP units
+ * long -- two -- and the longest chord at the outermost radius is 41. Nothing here goes near
+ * the +-127 transport limit and nothing re-zeroes (uvm2_draw_move_abs only clamps when the
+ * jump is long enough), so what comes out wrong came out of the strokes. The wheel is where
+ * the jumps are tested; these are two patterns and not two versions of one.
+ *
+ * Each ring is a CLOSED polygon whose sixteen deltas sum to exactly zero -- checked on the
+ * integers, at four radii, before this was ever flashed, along with a radius error under 0.7
+ * of a unit. So a ring that does not close on the console did not fail to close here.
+ *
+ * AND IT DELIBERATELY OVERRUNS THE FRAME. Fifty rings of sixteen strokes is 800 vectors,
+ * which is more than a frame holds — and so is the real explosion. If what the console shows
+ * is a list being drawn a piece at a time rather than geometry coming out wrong, that is a
+ * different fault with a different fix, and it must not be read off a long-exposure photo.
+ * The readout under the figure gives the list's cycles and whether it fitted, so the two can
+ * be told apart before anything is adjusted. */
+#define RING_V      16     /* vertices per ring */
+#define RING_MAX    50     /* rings in one burst: what Daniel counted on the console */
+#define RING_R0      6     /* the innermost radius */
+#define RING_RMAX  104     /* the outermost, inside the screen's +-127 */
+#define RING_STEP    2     /* units of radius per frame, i.e. how fast the burst expands */
+#define RING_CY      6     /* the centre, lifted clear of the readout at the bottom */
+
+/* cos and sin of k * 360/16 degrees, in 1/256. Sixteen because the ROM's circle looks like
+ * sixteen flats on a photograph of the original, and because an even count puts vertices on
+ * both axes, where a difference between X and Y is easiest to see. */
+static const short RING_COS[RING_V] = { 256, 237, 181,  98,   0, -98,-181,-237,
+                                       -256,-237,-181, -98,   0,  98, 181, 237 };
+static const short RING_SIN[RING_V] = {   0,  98, 181, 237, 256, 237, 181,  98,
+                                          0, -98,-181,-237,-256,-237,-181, -98 };
+
+/* Rounded both ways. Truncation towards zero would shorten every negative coordinate by up
+ * to one unit and leave the ring lopsided by construction — an artefact of this file that
+ * would be read as a fault of the hardware. */
+static inline int ring_div(int a) { return a >= 0 ? (a + 128) / 256 : -((-a + 128) / 256); }
+
+static void ring(int cx, int cy, int r)
+{
+    /* Positions computed from the radius and the DIFFERENCES emitted, rather than sixteen
+     * deltas from a table: rounding then lands on each vertex instead of accumulating
+     * sixteen times, so the polygon closes on the arithmetic and any gap left is the
+     * hardware's. */
+    int px = cx + ring_div(r * RING_COS[0]);
+    int py = cy + ring_div(r * RING_SIN[0]);
+    uvm2_draw_move_abs(px, py);
+    for (int k = 1; k <= RING_V; k++) {
+        const int j = k & (RING_V - 1);
+        const int nx = cx + ring_div(r * RING_COS[j]);
+        const int ny = cy + ring_div(r * RING_SIN[j]);
+        uvm2_draw_delta(nx - px, ny - py);
+        px = nx; py = ny;
+    }
+}
+
+/* One burst, positioned in time by the frame counter so it runs at the console's rate and
+ * not at whatever this loop happens to do. A ring is born every frame and travels outwards
+ * until it leaves the screen; the count on screen therefore climbs from one to RING_MAX and
+ * then empties, which is the shape Daniel described — it comes out from the inside, and at
+ * some point there are about fifty of them. */
+static void rings_pattern(void)
+{
+    const unsigned period = RING_MAX + (RING_RMAX - RING_R0) / RING_STEP;
+    const unsigned t = uvm2_frame_count() % period;
+    for (unsigned i = 0; i <= t && i < RING_MAX; i++) {
+        const int r = RING_R0 + (int)(t - i) * RING_STEP;
+        if (r > RING_RMAX) continue;
+        ring(0, RING_CY, r);
+    }
+}
+
 /* A square drawn with `n` strokes per side, centred on (cx, cy). With n = 1 it is the 4 long
  * strokes; with n = 10, the 40 short ones. The total travel is THE SAME. */
 static void square(int cx, int cy, int n)
@@ -157,6 +248,10 @@ static const char *const LBL_ONOFF[] = { "OFF", "ON" };
 /* JACK first because 0 is the jack: a config file written before this setting existed brings
  * a zero, and on the UVMC2 the jack is what it was already doing. See uvm2_config.h. */
 static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE" };
+/* WHICH FIGURE. Not stored: it points at a local below, so it behaves like every other
+ * field and saves nothing. What you calibrate against is a choice made at the screen, not a
+ * property of the console. */
+static const char *const LBL_FIGURE[] = { "WHEEL", "RINGS" };
 
 /* THE GAME CAN SUPPLY THE FIGURE.
  *
@@ -208,6 +303,10 @@ int uvm2_config_wizard_with(void (*figure)(void))
      * of the stick clamped it to 512 — the calibration moved without anyone asking, and it
      * could never be put back. Reported on the console 2026-09-28: "tail no sube de 512". */
     fields[n++] = (struct field){ "TAIL",   &c.t1_tail_q8, -512, 1280, 8 };
+    /* A LOCAL, ON PURPOSE. uvm2_config_apply and uvm2_config_save only ever see `c`, so a
+     * field pointing here moves like the others and is gone when the screen closes. */
+    int32_t figsel = 0;
+    fields[n++] = (struct field){ "FIGURE", &figsel,       0, 1, 1, LBL_FIGURE };
     {
         const unsigned mine = uvm2_config_game_settings();
         /* ROTATE: the screen is vertical and quite a few arcade machines are horizontal. It
@@ -257,6 +356,8 @@ int uvm2_config_wizard_with(void (*figure)(void))
 
         if (fields[sel].value == &c.zero) {
             zero_pattern(c.bright);       /* the zero's own pattern, whatever the game passed */
+        } else if (figsel) {
+            rings_pattern();              /* the explosion; asked for by name, so it wins */
         } else if (figure) {
             figure();                     /* the game's, see above */
         } else {
@@ -265,6 +366,48 @@ int uvm2_config_wizard_with(void (*figure)(void))
             wheel(-50, 38);
             square( 70, 60,  1);
             square( 70, 10, 10);
+        }
+
+        /* WITH THE RINGS, ONE LINE AND A READOUT. Five rows of text across a figure that
+         * fills the screen is five rows of text the figure has to be judged through, and the
+         * whole point of this pattern is to look at it. The selected field still moves and
+         * still shows its value; the rest is out of the way until the figure changes back.
+         *
+         * THE SECOND LINE IS THE ONE THAT MATTERS. Fifty rings is 800 vectors, more than a
+         * frame holds, and so is the real explosion. `C` is what the list costs in cycles and
+         * `FIT`/`OVER` whether the last frame was replayed whole. Deformed geometry and a
+         * list drawn a piece at a time look alike on a television and have nothing else in
+         * common, so the answer is on the screen rather than in an argument. */
+        if (figsel) {
+            char line[28];
+            int p = 0;
+            for (const char *t = fields[sel].name; *t; t++) line[p++] = *t;
+            line[p++] = ' ';
+            int32_t v = *fields[sel].value;
+            if (fields[sel].labels && v >= fields[sel].min && v <= fields[sel].max) {
+                for (const char *t = fields[sel].labels[v - fields[sel].min]; *t; t++) line[p++] = *t;
+            } else {
+                if (v < 0) { line[p++] = '-'; v = -v; }
+                char d[8]; int k = 0;
+                do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 7);
+                while (k) line[p++] = d[--k];
+            }
+            line[p] = 0;
+            uvm2_print_text(-112, -102, line, TEXT, c.bright);   /* y is the box TOP; 9 tall at TEXT 3 */
+
+            char st[28];
+            p = 0;
+            st[0] = 'C'; st[1] = ' '; p = 2;
+            uint32_t cy2 = uvm2_list_cycles();
+            char d[10]; int k = 0;
+            do { d[k++] = (char)('0' + cy2 % 10u); cy2 /= 10u; } while (cy2 && k < 9);
+            while (k) st[p++] = d[--k];
+            st[p++] = ' ';
+            for (const char *t = uvm2_refresh_fits() ? "FIT" : "OVER"; *t; t++) st[p++] = *t;
+            st[p] = 0;
+            uvm2_print_text(-112, -116, st, TEXT, c.bright);     /* bottoms at -125, inside +-127 */
+            uvm2_frame_end();
+            goto input;
         }
 
         /* A WINDOW, NOT THE WHOLE LIST, like dkong's menu: with the game settings it is up to
@@ -299,6 +442,7 @@ int uvm2_config_wizard_with(void (*figure)(void))
         }
         uvm2_frame_end();
 
+input:
         /* THE CONTROLLER, ON EDGES. Without this one tap moves the value thirty times: the
          * loop runs at 50 Hz and a finger takes longer. */
         uint8_t b = (uint8_t)~uvm2_cached_buttons;
