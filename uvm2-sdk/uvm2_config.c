@@ -65,6 +65,10 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
 volatile int32_t uvm2_setting_hz = 50, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
 volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
 
+/* The default is to have no settings of one's own, which is what 43 of the 44 ports want.
+ * See the note on uvm2_game_settings in the header for why the hook exists at all. */
+__attribute__((weak)) void uvm2_game_settings(void) { }
+
 /* Which game this is and which of its own settings it uses. Declaring nothing behaves as
  * before: a single file, and no game settings in the wizard. */
 static char     s_game_path[32];

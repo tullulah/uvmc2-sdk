@@ -224,6 +224,27 @@ int uvm2_config_wizard_with(void (*figure)(void))
         if (mine & UVM2_SETTING_AUDIO)  fields[n++] = (struct field){ "AUDIO",  &c.audio,      0, 1, 1, LBL_AUDIO };
     }
     int sel = 0, saved = 0;
+    /* THE STICK'S REST POSITION IS NOT ZERO, AND ASSUMING IT WAS BROKE THIS SCREEN.
+     *
+     * Reported on the console 2026-09-29: "push down, and pressing down again does not move
+     * until I change the value". The re-arm below needed the axis inside +-25 for three
+     * frames, and this console's Y does not rest that close to zero — so after one move it
+     * never re-armed. Pushing left or right appeared to fix it because moving X brings a
+     * diagonally-held Y back towards the middle, which let the settle finish.
+     *
+     * So the centre is MEASURED instead of assumed, over the first eight frames. The wizard
+     * is opened by a button combo and never by the stick, so at entry the stick is at rest
+     * by construction — and eight frames is 0.16 s, which nobody can push a stick inside.
+     * Clamped to +-40 so that if somebody IS holding it, a wrong centre stays small.
+     *
+     * Both axes, not just Y. An uncentred X is worse than an awkward menu: left/right is the
+     * ADJUST, so a resting offset past the threshold walks the selected calibration value on
+     * its own, with nobody touching anything. */
+    int cx = 0, cy = 0, c_acc_x = 0, c_acc_y = 0, c_n = 0;
+    /* Locals, not statics. They were `static` inside the loop, which persists across wizard
+     * sessions: the second opening in one power-up started with whatever the first left. */
+    int armed = 1, settled = 0;
+    uint32_t tick = 0;
     /* THE BUTTONS ARE ACTIVE LOW (PSG reg 14 raw: 0 = pressed), so they are inverted here ONCE
      * and the rest of the code reasons with 1 = pressed. Without inverting, the edge detects
      * the RELEASE and at rest every bit is 1. */
@@ -289,6 +310,19 @@ int uvm2_config_wizard_with(void (*figure)(void))
         uint32_t axes = uvm2_cached_axes;
         int jx = (int8_t)(axes >> 24), jy = (int8_t)(axes >> 16);
 
+        /* The first eight frames only measure; the stick does nothing yet. */
+        if (c_n < 8) {
+            c_acc_x += jx; c_acc_y += jy;
+            if (++c_n == 8) {
+                cx = c_acc_x / 8; cy = c_acc_y / 8;
+                if (cx >  40) cx =  40;  if (cx < -40) cx = -40;
+                if (cy >  40) cy =  40;  if (cy < -40) cy = -40;
+            }
+            goto after_input;
+        }
+        jx -= cx;
+        jy -= cy;
+
         /* UP/DOWN SELECTS: ONE STEP PER EXCURSION, WITH HYSTERESIS AND SETTLING.
          *
          * Reported on this screen: "push down and bring the stick back to centre, and it goes
@@ -302,9 +336,11 @@ int uvm2_config_wizard_with(void (*figure)(void))
          * spent three consecutive frames within +-25. The spring's bounce lasts less than that
          * and falls entirely inside the unarmed period. */
         {
-            static int armed = 1, settled = 0;
             int step = 0;
-            if (jy > -25 && jy < 25) {
+            /* 60 fires and 35 re-arms: 25 units of hysteresis, which the spring's bounce
+             * stays inside, and far enough from zero that a measured centre a few units out
+             * still settles. It was 25, chosen when the centre was assumed to be 0. */
+            if (jy > -35 && jy < 35) {
                 if (settled < 3) settled++;
                 if (settled >= 3) armed = 1;
             } else {
@@ -321,7 +357,6 @@ int uvm2_config_wizard_with(void (*figure)(void))
          * +-1 every two frames (`Vec_Loop_Count+1 & 1`). On edges it was useless: the zero
          * reference's useful range runs from 0 to 255, and at one step per press it takes a
          * hundred taps to reach where it starts to show. */
-        static uint32_t tick = 0;
         tick++;
         if ((jx > 40 || jx < -40) && (tick & 1u) == 0) {
             int32_t *v = fields[sel].value;
@@ -330,6 +365,7 @@ int uvm2_config_wizard_with(void (*figure)(void))
             if (*v > fields[sel].max) *v = fields[sel].max;
         }
 
+after_input:
         if (pressed & 0x08) {           /* button 4: save and exit */
             /* CORE 1 IS NOT STOPPED HERE, AND THIS COMMENT USED TO LIE.
              *
@@ -371,6 +407,12 @@ volatile int32_t uvm2_boot_combo = -1;
 
 void uvm2_config_boot_combo(void)
 {
+    /* FIRST, AND WHETHER OR NOT THE COMBO IS HELD. The game's settings have to be declared
+     * before the wizard can show them, and loaded before the first sound plays — and this is
+     * the one place that runs before the game does on both start-up paths. Empty unless the
+     * game defines it. */
+    uvm2_game_settings();
+
     /* uvm2_stats is not volatile, and core 1 is the one advancing this: read it as volatile
      * or the loop may never see it move. */
     volatile const uint32_t *idle = &uvm2_stats.idle_frames;

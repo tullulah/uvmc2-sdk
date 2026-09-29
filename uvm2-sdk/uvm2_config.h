@@ -149,6 +149,26 @@ int  uvm2_config_wizard_with(void (*figure)(void));
  *  runtime right after core 1 comes up; a game does not call it. The outcome is left in
  *  `uvm2_boot_combo` (-1 never checked, 0 not held, 1 wizard ran, 2 could not check). */
 void uvm2_config_boot_combo(void);
+
+/** WHERE A GAME DECLARES ITS OWN SETTINGS, and the only place early enough to matter.
+ *
+ * The boot wizard (buttons 2+3 held, launch with 4) opens BEFORE the game's main, so a game
+ * that called uvm2_config_game() from main got a wizard with only the console's four fields
+ * — its own AUDIO or HZ line could not be reached the one way in that exists. Reported on
+ * 2026-09-29 for exactly that reason.
+ *
+ * Define this and the runtime calls it first, on both start-up paths, whether or not the
+ * combo is held — so the settings are also loaded before the first sound plays:
+ *
+ *     void uvm2_game_settings(void)
+ *     {
+ *         uvm2_config_game("TACSCAN", UVM2_SETTING_AUDIO | UVM2_SETTING_HZ);
+ *         uvm2_config_load();
+ *     }
+ *
+ * It is WEAK and empty by default, so a game with no settings of its own is unaffected and
+ * needs no change. */
+void uvm2_game_settings(void);
 extern volatile int32_t uvm2_boot_combo;
 
 /** Saves the current calibration. 1 if it could.
