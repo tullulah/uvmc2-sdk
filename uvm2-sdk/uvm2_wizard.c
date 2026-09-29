@@ -354,10 +354,15 @@ int uvm2_config_wizard_with(void (*figure)(void))
         uvm2_frame_begin();
         uvm2_draw_intensity(c.bright);
 
-        if (fields[sel].value == &c.zero) {
-            zero_pattern(c.bright);       /* the zero's own pattern, whatever the game passed */
-        } else if (figsel) {
+        /* FIGURE IS CHECKED FIRST, and it was not. The zero field swaps in its own text
+         * pattern, which is right when nobody asked for anything else -- but it was
+         * overriding RINGS, so selecting ZERO replaced the rings with rows of text and the
+         * one knob you would most want to move while watching them was the one knob that
+         * hid them. Picked by name wins, the same rule the game's own figure follows. */
+        if (figsel) {
             rings_pattern();              /* the explosion; asked for by name, so it wins */
+        } else if (fields[sel].value == &c.zero) {
+            zero_pattern(c.bright);       /* the zero's own pattern, whatever the game passed */
         } else if (figure) {
             figure();                     /* the game's, see above */
         } else {
