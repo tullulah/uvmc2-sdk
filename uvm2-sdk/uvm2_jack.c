@@ -192,6 +192,15 @@ void uvm2_jack_write(const int16_t *s, int n)
     }
 }
 
+void uvm2_jack_write_lr(const int16_t *l, const int16_t *r, int n)
+{
+    if (!s_ok) return;
+    for (int i = 0; i < n; i++) {
+        s_ring[s_w] = ((uint32_t)(uint16_t)l[i] << 16) | (uint32_t)(uint16_t)r[i];
+        s_w = (s_w + 1u) & (RING_WORDS - 1u);
+    }
+}
+
 int uvm2_jack_ok(void) { return s_ok; }
 
 int      uvm2_jack_sm(void)      { return s_sm; }
@@ -244,6 +253,12 @@ int uvm2_jack_init(void)
 }
 int uvm2_jack_space(void) { s_owed = UVM2_JACK_RATE / 50; return s_owed; }
 void uvm2_jack_write(const int16_t *s, int n) { if (s_log) fwrite(s, 2, (size_t)n, s_log); }
+/* Interleaved off the cartridge, which is what a .wav of it wants anyway. */
+void uvm2_jack_write_lr(const int16_t *l, const int16_t *r, int n)
+{
+    if (!s_log) return;
+    for (int i = 0; i < n; i++) { fwrite(&l[i], 2, 1, s_log); fwrite(&r[i], 2, 1, s_log); }
+}
 int uvm2_jack_ok(void) { return s_ok; }
 
 /* No PIO and no DMA off the cartridge, so nothing was negotiated: "none" for all of them.

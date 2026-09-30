@@ -30,6 +30,12 @@ extern "C" {
 int  uvm2_jack_init(void);                      /* 1 = running, 0 = no jack here */
 int  uvm2_jack_space(void);                     /* samples to write now to stay ahead */
 void uvm2_jack_write(const int16_t *s, int n);  /* mono, UVM2_JACK_RATE */
+/* THE SAME RING, TWO CHANNELS. The DAC has been stereo since the first line of this
+ * driver -- one 32-bit word is a stereo frame, left in the high half -- and every game
+ * so far has written the same sample to both halves, which throws a channel away. A game
+ * with two sources to separate (Star Wars has the POKEYs and a voice) calls this instead.
+ * Nothing else changes: same ring, same DMA, same uvm2_jack_space(). */
+void uvm2_jack_write_lr(const int16_t *l, const int16_t *r, int n);
 int  uvm2_jack_ok(void);
 int  uvm2_jack_set(int on);                     /* start/stop PIO2 + DMA entirely */
 
