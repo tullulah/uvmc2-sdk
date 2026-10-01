@@ -608,6 +608,20 @@ void vpy3d_mesh_dent(vpy_mesh *m, int32_t px, int32_t py, int32_t pz,
     if (moved) mesh_geometry(m);
 }
 
+int vpy3d_mesh_blend(vpy_mesh *dst, const vpy_mesh *a, const vpy_mesh *b, int32_t t_q14)
+{
+    if (!dst || !a || !b || a->nv != b->nv || a->nf != b->nf || dst->nv != a->nv || dst->v0 == a->v0) return 0;
+    if (t_q14 < 0) t_q14 = 0;
+    if (t_q14 > VPY3D_ONE) t_q14 = VPY3D_ONE;
+    for (int i = 0; i < a->nv; i++)
+        for (int k = 0; k < 3; k++) {
+            const int32_t pa = PV[a->v0 + i][k], pb = PV[b->v0 + i][k];
+            PV[dst->v0 + i][k] = (int16_t)(pa + (((int64_t)(pb - pa) * t_q14) >> 14));
+        }
+    mesh_geometry(dst);
+    return 1;
+}
+
 void vpy3d_world_to_model(const vpy_xf *place, int32_t wx, int32_t wy, int32_t wz,
                           int32_t *mx, int32_t *my, int32_t *mz)
 {

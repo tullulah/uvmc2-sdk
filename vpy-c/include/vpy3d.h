@@ -204,6 +204,11 @@ void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br);
 int  vpy3d_mesh_copy(vpy_mesh *dst, const vpy_mesh *src);
 void vpy3d_mesh_dent(vpy_mesh *m, int32_t px, int32_t py, int32_t pz,
                      int32_t dx, int32_t dy, int32_t dz, int32_t depth, int32_t radius);
+/* MORPHING: dst's vertices become a + (b - a) × t (Q14), and its creases are
+ * worked out again. a and b must have the same vertices in the same order and
+ * the same faces — two poses of one model — and dst must be a vpy3d_mesh_copy of
+ * a. 0 if they do not match. A logo becoming a ship: blend every frame. */
+int  vpy3d_mesh_blend(vpy_mesh *dst, const vpy_mesh *a, const vpy_mesh *b, int32_t t_q14);
 void vpy3d_world_to_model(const vpy_xf *place, int32_t wx, int32_t wy, int32_t wz,
                           int32_t *mx, int32_t *my, int32_t *mz);
 int  vpy3d_mesh_edge_count(const vpy_mesh *m);
