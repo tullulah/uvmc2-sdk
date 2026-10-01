@@ -46,7 +46,14 @@ static vpy_xf  s_cam;
 static int     s_cam_set;
 static int32_t s_focal = 28000;   /* deflection units per unit of x/z (~58 deg) */
 static int32_t s_near  = 600;     /* world units */
-static int32_t s_clip  = 15500;   /* half the visible square, deflection units */
+/* Half the visible window, per axis, in deflection units. The default is still
+ * the 15500 square every vpy3d game has been composed against. The glass is
+ * bigger and portrait — about +-18000 x +-20500 on the one console photographed
+ * (2026-10-01, examples/geometry_card) — but one console does not set a default:
+ * a game that wants the tall window says so with vpy3d_set_clip_xy, and a second
+ * console's photograph is what moves these two numbers. */
+static int32_t s_clip_x = 15500;
+static int32_t s_clip_y = 15500;
 
 /* ── small integer maths ─────────────────────────────────────────────────── */
 static int64_t isqrt64(int64_t n)
@@ -160,7 +167,12 @@ void vpy3d_eye(int32_t *out)
 
 void vpy3d_set_focal(int32_t f) { if (f > 0) s_focal = f; }
 void vpy3d_set_near(int32_t n)  { if (n > 0) s_near  = n; }
-void vpy3d_set_clip(int32_t h)  { if (h > 0) s_clip  = h; }
+void vpy3d_set_clip(int32_t h)  { if (h > 0) s_clip_x = s_clip_y = h; }
+void vpy3d_set_clip_xy(int32_t hx, int32_t hy)
+{
+    if (hx > 0) s_clip_x = hx;
+    if (hy > 0) s_clip_y = hy;
+}
 
 int vpy3d_look_at(int32_t ex, int32_t ey, int32_t ez,
                   int32_t tx, int32_t ty, int32_t tz,
@@ -216,17 +228,80 @@ static int64_t lim(int64_t v)
     return v > L ? L : (v < -L ? -L : v);
 }
 
+/* ONE UNIT IS ONE UNIT ON BOTH AXES. The glass is portrait; the UNITS are not.
+ *
+ * MEASURED 2026-10-01, one console, by photograph (examples/geometry_card in the
+ * starter kit: device units straight to v_directDraw32, no vpy3d in between). A
+ * 16000 x 16000 square came out 0.92 as wide as it was tall, and the circle
+ * inscribed in it round to the eye. So a y unit covers about the same glass as
+ * an x unit — the residual ~10% is that console's size pots or the camera, and
+ * one console is not evidence for a default.
+ *
+ * WHAT THAT REPLACED. From 2026-09-30 to 2026-10-01 this file multiplied x by
+ * 4/3, on the argument that R401/R408 (horizontal and vertical SIZE) stretch
+ * each axis to its own edge of a 4:3 tube, so a y unit would be 1.33 x units.
+ * It was derived from the service manual and never measured, and it disagreed
+ * with the PiTrex contract (vectrexInterface.h: the same units on both axes, a
+ * portrait WINDOW), with the BIOS (one scale factor for x and y, round circles)
+ * and with every emulator. The photograph settled it: the portrait shape of the
+ * tube lives in the WINDOW — see the per-axis clip below — not in the scale.
+ *
+ * The ratio stays a knob, because a console whose size pots are off is real and
+ * a game may want to undo it. Not because the default is in doubt. */
+/* Overridable at build time ONLY so a host harness can compare pictures:
+ * `cc -DVPY3D_ASPECT_NUM=4 -DVPY3D_ASPECT_DEN=3 ...` reruns the 4:3 picture. */
+#ifndef VPY3D_ASPECT_NUM
+#define VPY3D_ASPECT_NUM 1
+#endif
+#ifndef VPY3D_ASPECT_DEN
+#define VPY3D_ASPECT_DEN 1
+#endif
+static int32_t s_asp_num = VPY3D_ASPECT_NUM, s_asp_den = VPY3D_ASPECT_DEN;
+
+void vpy3d_set_aspect(int32_t num, int32_t den)
+{
+    if (num > 0 && den > 0) { s_asp_num = num; s_asp_den = den; }
+}
+void vpy3d_aspect(int32_t *num, int32_t *den) { *num = s_asp_num; *den = s_asp_den; }
+
+static inline int64_t proj_x(int64_t x, int64_t z)
+{
+    return lim(x * s_focal * s_asp_num / (z * s_asp_den));
+}
+static inline int64_t proj_y(int64_t y, int64_t z) { return lim(y * s_focal / z); }
+
 int vpy3d_project(const int32_t *p, int32_t *sx, int32_t *sy)
 {
     if (p[2] < s_near) return 0;
-    *sx = (int32_t)lim((int64_t)p[0] * s_focal / p[2]);
-    *sy = (int32_t)lim((int64_t)p[1] * s_focal / p[2]);
+    *sx = (int32_t)proj_x(p[0], p[2]);
+    *sy = (int32_t)proj_y(p[1], p[2]);
     return 1;
 }
 
+/* How wide the picture actually is, in the Q14 trig's units — so a game that
+ * needs to know what is on screen (a light cone, a ray fan, a cull) reads it
+ * instead of writing 58 degrees down a second time and drifting from it.
+ *
+ * tan(half) = clip / (focal * num/den), with each axis's own clip. Found by bisection over the same sine
+ * table the renderer uses, once, so the answer cannot disagree with the picture. */
+static int half_angle(int32_t clip, int32_t num, int32_t den)
+{
+    int lo = 0, hi = VPY_Q14_TURN / 4;       /* a quarter turn is the limit */
+    for (int i = 0; i < 14; i++) {
+        const int mid = (lo + hi) / 2;
+        /* sin/cos >= clip*den / (focal*num)  ->  the angle is at least mid */
+        const int64_t l = (int64_t)vpy_sin_q14(mid) * (int64_t)s_focal * num;
+        const int64_t r = (int64_t)vpy_cos_q14(mid) * (int64_t)clip * den;
+        if (l < r) lo = mid; else hi = mid;
+    }
+    return lo;
+}
+int vpy3d_h_half_angle(void) { return half_angle(s_clip_x, s_asp_num, s_asp_den); }
+int vpy3d_v_half_angle(void) { return half_angle(s_clip_y, 1, 1); }
+
 static int outcode(int64_t x, int64_t y)
 {
-    return (x < -s_clip) | ((x > s_clip) << 1) | ((y < -s_clip) << 2) | ((y > s_clip) << 3);
+    return (x < -s_clip_x) | ((x > s_clip_x) << 1) | ((y < -s_clip_y) << 2) | ((y > s_clip_y) << 3);
 }
 
 /* Cohen-Sutherland against the visible square, then into libvpy's buffer. */
@@ -242,10 +317,10 @@ static void line_screen(int64_t x0, int64_t y0, int64_t x1, int64_t y1, int br)
         if (c0 & c1) return;                 /* wholly outside the same edge */
         int c = c0 ? c0 : c1;
         int64_t x, y, dx = x1 - x0, dy = y1 - y0;
-        if      (c & 8) { y =  s_clip; x = x0 + (dy ? dx * (y - y0) / dy : 0); }
-        else if (c & 4) { y = -s_clip; x = x0 + (dy ? dx * (y - y0) / dy : 0); }
-        else if (c & 2) { x =  s_clip; y = y0 + (dx ? dy * (x - x0) / dx : 0); }
-        else            { x = -s_clip; y = y0 + (dx ? dy * (x - x0) / dx : 0); }
+        if      (c & 8) { y =  s_clip_y; x = x0 + (dy ? dx * (y - y0) / dy : 0); }
+        else if (c & 4) { y = -s_clip_y; x = x0 + (dy ? dx * (y - y0) / dy : 0); }
+        else if (c & 2) { x =  s_clip_x; y = y0 + (dx ? dy * (x - x0) / dx : 0); }
+        else            { x = -s_clip_x; y = y0 + (dx ? dy * (x - x0) / dx : 0); }
         if (c == c0) { x0 = x; y0 = y; c0 = outcode(x0, y0); }
         else         { x1 = x; y1 = y; c1 = outcode(x1, y1); }
     }
@@ -268,8 +343,8 @@ void vpy3d_line_cam(const int32_t *a, const int32_t *b, int br)
         y1 += ((y0 - y1) * k) >> 16;
         z1 = s_near;
     }
-    line_screen(lim(x0 * s_focal / z0), lim(y0 * s_focal / z0),
-                lim(x1 * s_focal / z1), lim(y1 * s_focal / z1), br);
+    line_screen(proj_x(x0, z0), proj_y(y0, z0),
+                proj_x(x1, z1), proj_y(y1, z1), br);
 }
 
 void vpy3d_line_world(int32_t ax, int32_t ay, int32_t az,
@@ -618,4 +693,261 @@ int  vpy3d_get_chaining(void)    { return s_chain; }
 
 /* ── counters ────────────────────────────────────────────────────────────── */
 const vpy3d_stats_t *vpy3d_stats(void) { return &s_stats; }
-void vpy3d_reset_counts(void) { s_stats.strokes = 0; s_stats.culled = 0; s_stats.merged = 0; }
+void vpy3d_reset_counts(void)
+{
+    s_stats.strokes = 0; s_stats.culled = 0; s_stats.merged = 0;
+    s_stats.occl_cut = 0; s_stats.occl_refused = 0; s_stats.occl_full = 0;
+}
+
+/* ── one solid hiding another ─────────────────────────────────────────────────
+ *
+ * Everything above removes hidden lines WITHIN a mesh: it knows which of a
+ * cube's own faces are turned away and drops their edges. It knows nothing
+ * about a second cube in front of the first, and on a display with no depth
+ * buffer that means the second cube is not there at all — you see straight
+ * through it. Every game with more than one solid on screen has this, and none
+ * of them will find it by reading the code: it looks like "the picture is
+ * dirty".
+ *
+ * So: a screen-space occluder. A convex solid's silhouette is the convex hull
+ * of its projected corners, and a line behind it is that line minus the part
+ * inside the hull. Both cheap, both exact for convex occluders, and neither
+ * needs anything this module does not already have.
+ *
+ * WITH NO OCCLUDERS ADDED vpy3d_occl_line IS vpy3d_line_world and costs one
+ * compare, which is why every stroke in a game can go through it.
+ *
+ * It came from kuroishi (2026-09-24), where the symptom was "the waves look
+ * transparent while they move", and it lived in that game until hakaba needed
+ * exactly the same thing. A second copy is how two versions of one algorithm
+ * start to disagree; this is the third place it would have been written out.
+ */
+
+/* THE TABLE, and it is a budget rather than a count: past it nothing more hides
+ * anything, which is the picture we had before this code existed and never a
+ * wrong one. Add the nearest solids first — they hide the most. */
+#define OCC_MAX 64
+/* The silhouette of a box is a hexagon. The hull drops collinear points (the
+ * `<= 0` in occ_hull_of), so eight corners give at most eight vertices; ten is
+ * slack, and occ_hull_of refuses rather than overrun it. */
+#define OCC_MAXV 10
+
+typedef struct {
+    int32_t x[OCC_MAXV], y[OCC_MAXV];
+    int     n;
+    int32_t bx0, by0, bx1, by1;     /* screen bounds: the cheap reject */
+    int32_t znear;                  /* camera z of its nearest corner */
+} occ_hull;
+
+static occ_hull s_occ[OCC_MAX];
+static int      s_nocc;
+
+void vpy3d_occl_reset(void) { s_nocc = 0; }
+int  vpy3d_occl_count(void) { return s_nocc; }
+
+static int64_t occ_cross(int32_t ox, int32_t oy, int32_t ax, int32_t ay,
+                         int32_t bx, int32_t by)
+{
+    return (int64_t)(ax - ox) * (by - oy) - (int64_t)(ay - oy) * (bx - ox);
+}
+
+/* Andrew's monotone chain, on at most eight points. Anticlockwise, which is
+ * what the clipper below assumes when it takes an edge's outward normal. */
+static int occ_hull_of(occ_hull *h, int32_t *px, int32_t *py, int n)
+{
+    /* sort by x then y — insertion, because n is eight */
+    for (int i = 1; i < n; i++) {
+        const int32_t x = px[i], y = py[i];
+        int j = i - 1;
+        while (j >= 0 && (px[j] > x || (px[j] == x && py[j] > y))) {
+            px[j + 1] = px[j]; py[j + 1] = py[j]; j--;
+        }
+        px[j + 1] = x; py[j + 1] = y;
+    }
+    int32_t hx[OCC_MAXV * 2], hy[OCC_MAXV * 2];
+    int k = 0;
+    for (int i = 0; i < n; i++) {                       /* lower */
+        while (k >= 2 && occ_cross(hx[k-2], hy[k-2], hx[k-1], hy[k-1], px[i], py[i]) <= 0) k--;
+        if (k >= OCC_MAXV * 2) return 0;
+        hx[k] = px[i]; hy[k] = py[i]; k++;
+    }
+    for (int i = n - 2, t = k + 1; i >= 0; i--) {       /* upper */
+        while (k >= t && occ_cross(hx[k-2], hy[k-2], hx[k-1], hy[k-1], px[i], py[i]) <= 0) k--;
+        if (k >= OCC_MAXV * 2) return 0;
+        hx[k] = px[i]; hy[k] = py[i]; k++;
+    }
+    k--;                                                 /* the first point twice */
+    if (k < 3 || k > OCC_MAXV) return 0;                 /* degenerate, or too many */
+    h->n = k;
+    h->bx0 = h->bx1 = hx[0]; h->by0 = h->by1 = hy[0];
+    for (int i = 0; i < k; i++) {
+        h->x[i] = hx[i]; h->y[i] = hy[i];
+        if (hx[i] < h->bx0) h->bx0 = hx[i];
+        if (hx[i] > h->bx1) h->bx1 = hx[i];
+        if (hy[i] < h->by0) h->by0 = hy[i];
+        if (hy[i] > h->by1) h->by1 = hy[i];
+    }
+    return 1;
+}
+
+int vpy3d_occl_add(const int32_t (*corners)[3], int n)
+{
+    if (s_nocc >= OCC_MAX) { s_stats.occl_full++; return 0; }
+    if (n < 3 || n > 8) { s_stats.occl_refused++; return 0; }
+    int32_t px[8], py[8];
+    int32_t znear = 0x7fffffff;
+    for (int i = 0; i < n; i++) {
+        int32_t cam[3];
+        vpy3d_to_camera(corners[i][0], corners[i][1], corners[i][2], cam);
+        if (cam[2] < znear) znear = cam[2];
+        /* A corner behind the near plane makes the hull meaningless — the
+         * silhouette of a solid the camera is inside of is not a polygon. Take
+         * the whole occluder out rather than clip it: it is one frame of the
+         * picture we already had, never a wrong one. */
+        if (!vpy3d_project(cam, &px[i], &py[i])) { s_stats.occl_refused++; return 0; }
+    }
+    if (!occ_hull_of(&s_occ[s_nocc], px, py, n)) { s_stats.occl_refused++; return 0; }
+    s_occ[s_nocc].znear = znear;
+    s_nocc++;
+    return 1;
+}
+
+int vpy3d_occl_add_mesh(const vpy_mesh *m, const vpy_xf *place)
+{
+    /* The mesh's own vertices, placed, as the corner set. Only the HULL of them
+     * matters, so a mesh of more than eight vertices cannot go through here —
+     * and that is the honest limit rather than a silent approximation: give it
+     * the eight corners of the box you mean. */
+    if (!m || m->nv < 3 || m->nv > 8) { s_stats.occl_refused++; return 0; }
+    int32_t c[8][3];
+    for (int i = 0; i < m->nv; i++) {
+        const int16_t *p = MV(m, i);                     /* model space */
+        for (int r = 0; r < 3; r++)
+            c[i][r] = ((place->m[r*3+0] * p[0] + place->m[r*3+1] * p[1] +
+                        place->m[r*3+2] * p[2]) >> 14) + place->t[r];
+    }
+    return vpy3d_occl_add(c, m->nv);
+}
+
+/* Q16 along the segment. */
+#define OCC_ONE_T 65536
+/* A piece shorter than this is not a line, it is a dot: the beam pays a blanked
+ * jump to reach it and then barely moves. Slivers left along an occluder's own
+ * edge are exactly that, and they are the least trustworthy part of the answer
+ * anyway — the hull is the silhouette to within a pixel, not to within nothing. */
+#define OCC_MIN_T (OCC_ONE_T / 48)
+
+/* Where the segment is INSIDE the hull, as [ta, tb] in Q16. Cyrus-Beck: clip
+ * the parameter against each edge's half plane and what survives is the inside.
+ * 0 if it never enters. */
+static int occ_inside_span(const occ_hull *h, int64_t px, int64_t py,
+                           int64_t dx, int64_t dy, int32_t *ta, int32_t *tb)
+{
+    int64_t t0 = 0, t1 = OCC_ONE_T;
+    for (int i = 0; i < h->n; i++) {
+        const int j = (i + 1 == h->n) ? 0 : i + 1;
+        /* anticlockwise, so the outward normal of A->B is (dy, -dx) */
+        const int64_t nx = h->y[j] - h->y[i], ny = -(int64_t)(h->x[j] - h->x[i]);
+        const int64_t den = nx * dx + ny * dy;
+        const int64_t num = nx * (px - h->x[i]) + ny * (py - h->y[i]);
+        if (den == 0) { if (num > 0) return 0; continue; }   /* parallel, outside */
+        const int64_t t = (-num * OCC_ONE_T) / den;
+        if (den < 0) { if (t > t0) t0 = t; }                 /* coming in */
+        else         { if (t < t1) t1 = t; }                 /* going out */
+        if (t0 >= t1) return 0;
+    }
+    *ta = (int32_t)t0; *tb = (int32_t)t1;
+    return 1;
+}
+
+/* The camera-space point at SCREEN fraction t.
+ *
+ * NOT the camera-space point at fraction t: a projection is not linear, and
+ * lerping the camera points by the screen t would put the cut in the wrong
+ * place — most wrongly on the longest strokes, which are the ones that most
+ * need cutting. The perspective-correct inverse is
+ *   u = t * z0 / (z1 + t * (z0 - z1))
+ * and handing camera points back to vpy3d_line_cam is what keeps the near
+ * plane, the screen clip and the stroke count in ONE place. */
+static void occ_at_t(const int32_t *a, const int32_t *b, int32_t t, int32_t *out)
+{
+    const int64_t z0 = a[2], z1 = b[2];
+    const int64_t den = z1 * OCC_ONE_T + (int64_t)t * (z0 - z1);
+    const int64_t u = den ? ((int64_t)t * z0 * OCC_ONE_T) / den : t;
+    for (int i = 0; i < 3; i++)
+        out[i] = (int32_t)(a[i] + (((int64_t)(b[i] - a[i]) * u) >> 16));
+}
+
+void vpy3d_occl_line(int32_t ax, int32_t ay, int32_t az,
+                     int32_t bx, int32_t by, int32_t bz, int br)
+{
+    int32_t a[3], b[3];
+    vpy3d_to_camera(ax, ay, az, a);
+    vpy3d_to_camera(bx, by, bz, b);
+    if (s_nocc == 0) { vpy3d_line_cam(a, b, br); return; }   /* nothing to hide behind */
+
+    /* CUT AT THE NEAR PLANE FIRST, with vpy3d_line_cam's own arithmetic, so the
+     * pieces handed back to it are the ones it would have drawn anyway. Without
+     * this a line with an end behind the camera could not be projected, and it
+     * was drawn whole straight through every occluder — a ground line starting
+     * under the camera is the common case, and the commonest thing to hide. */
+    if (a[2] < s_near && b[2] < s_near) return;      /* all of it is behind us */
+    if (a[2] < s_near) {
+        const int64_t k = ((int64_t)(s_near - a[2]) << 16) / ((int64_t)b[2] - a[2]);
+        a[0] += (int32_t)((((int64_t)b[0] - a[0]) * k) >> 16);
+        a[1] += (int32_t)((((int64_t)b[1] - a[1]) * k) >> 16);
+        a[2] = s_near;
+    }
+    if (b[2] < s_near) {
+        const int64_t k = ((int64_t)(s_near - b[2]) << 16) / ((int64_t)a[2] - b[2]);
+        b[0] += (int32_t)((((int64_t)a[0] - b[0]) * k) >> 16);
+        b[1] += (int32_t)((((int64_t)a[1] - b[1]) * k) >> 16);
+        b[2] = s_near;
+    }
+    int32_t s0x, s0y, s1x, s1y;
+    vpy3d_project(a, &s0x, &s0y);                    /* both at or past near now */
+    vpy3d_project(b, &s1x, &s1y);
+    const int64_t dx = (int64_t)s1x - s0x, dy = (int64_t)s1y - s0y;
+
+    /* Every span the line spends inside an occluder, then the gaps between
+     * them. Collected first and sorted, because two occluders can overlap and
+     * cutting them one at a time would re-draw what the other already hid. */
+    int32_t sa[OCC_MAX], sb[OCC_MAX];
+    int ns = 0;
+    for (int i = 0; i < s_nocc; i++) {
+        const occ_hull *h = &s_occ[i];
+        /* IN FRONT OF THE WHOLE SOLID: it cannot be behind it. Not a depth
+         * test — there is none here, and there is no need for one while the
+         * caller draws near to far — but the one case a silhouette gets
+         * catastrophically wrong is a thing standing in front of it, so the
+         * cheapest guard against being used out of order lives here. */
+        if (a[2] < h->znear && b[2] < h->znear) continue;
+        if ((s0x < h->bx0 && s1x < h->bx0) || (s0x > h->bx1 && s1x > h->bx1) ||
+            (s0y < h->by0 && s1y < h->by0) || (s0y > h->by1 && s1y > h->by1)) continue;
+        int32_t t0, t1;
+        if (!occ_inside_span(h, s0x, s0y, dx, dy, &t0, &t1)) continue;
+        if (t0 < 0) t0 = 0;
+        if (t1 > OCC_ONE_T) t1 = OCC_ONE_T;
+        if (t1 <= t0) continue;
+        int k = ns++;
+        while (k > 0 && sa[k - 1] > t0) { sa[k] = sa[k-1]; sb[k] = sb[k-1]; k--; }
+        sa[k] = t0; sb[k] = t1;
+    }
+    if (ns == 0) { vpy3d_line_cam(a, b, br); return; }
+    s_stats.occl_cut++;
+
+    int32_t cur = 0;
+    for (int i = 0; i < ns && cur < OCC_ONE_T; i++) {
+        if (sa[i] - cur > OCC_MIN_T) {
+            int32_t p[3], q[3];
+            occ_at_t(a, b, cur, p); occ_at_t(a, b, sa[i], q);
+            vpy3d_line_cam(p, q, br);
+        }
+        if (sb[i] > cur) cur = sb[i];
+    }
+    if (OCC_ONE_T - cur > OCC_MIN_T) {
+        int32_t p[3];
+        occ_at_t(a, b, cur, p);
+        vpy3d_line_cam(p, b, br);
+    }
+}

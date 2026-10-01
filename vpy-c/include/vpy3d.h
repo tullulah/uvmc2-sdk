@@ -98,13 +98,45 @@ const vpy_xf *vpy3d_camera(void);
 void vpy3d_eye(int32_t *out);
 
 /* Field of view, as deflection units per unit of x over z. Bigger = narrower.
- * The default (28000) is about 58 degrees across. */
+ * The default (28000) is about 58 degrees across the default 15500 clip. */
 void vpy3d_set_focal(int32_t focal);
+
+/* ---- one unit is one unit on both axes --------------------------------------
+ * x is multiplied by num/den on its way to the screen. The default is 1/1.
+ *
+ * MEASURED 2026-10-01 by photograph, one console (examples/geometry_card in the
+ * starter kit): a 16000-unit square is square on the glass, to within ~10%. The
+ * tube is portrait, but that is the shape of the WINDOW (vpy3d_set_clip_xy),
+ * not of the unit — as the PiTrex contract and the BIOS have always assumed.
+ *
+ * For one day (2026-09-30) the default was 4/3, derived from the service manual
+ * and never measured; the photograph refuted it. A game composed during that day
+ * comes out three quarters as wide as it did then, and that is the correction.
+ * The knob is for a console whose size pots are off, not for a default in doubt. */
+void vpy3d_set_aspect(int32_t num, int32_t den);
+void vpy3d_aspect(int32_t *num, int32_t *den);
+
+/* Half of what is actually on screen, in the Q14 trig's units (VPY_Q14_TURN per
+ * turn), each from its own axis's clip, and horizontally with the aspect.
+ *
+ * READ IT, do not restate it. A light cone, a ray fan or a cull that hardcodes
+ * "58 degrees" is a second copy of the lens, and the two drift the first time
+ * anyone touches set_focal, set_clip or set_aspect: strokes get generated that
+ * the clipper then throws away, or geometry goes missing at the edges and looks
+ * like an occlusion bug. Derived by bisection over the renderer's own sine
+ * table, so the answer cannot disagree with the picture. */
+int vpy3d_h_half_angle(void);
+int vpy3d_v_half_angle(void);
 /* Nothing closer to the camera than this is drawn; lines crossing it are cut.
  * In world units. Default 600. */
 void vpy3d_set_near(int32_t near_z);
-/* Half-width of the visible square in deflection units. Default 15500. */
+/* Half the visible window in deflection units: set_clip sets both axes,
+ * set_clip_xy each one. Default 15500 square, which every vpy3d game was composed
+ * in. The glass is bigger and portrait — about +-18000 x +-20500 on the one
+ * console photographed (2026-10-01) — so a game may open it up; a default moves
+ * only with a second console's photograph. The half angles above follow it. */
 void vpy3d_set_clip(int32_t half);
+void vpy3d_set_clip_xy(int32_t half_x, int32_t half_y);
 
 /* ---- drawing without a mesh ---- */
 void vpy3d_line_cam(const int32_t *a, const int32_t *b, int br);   /* camera space */
@@ -196,6 +228,72 @@ typedef enum {
 } vpy3d_error_t;
 vpy3d_error_t vpy3d_error(void);
 
+/* ---- ONE SOLID HIDING ANOTHER -----------------------------------------------
+ * Everything above removes hidden lines WITHIN a mesh. It knows nothing about a
+ * second mesh in front of the first, and with no depth buffer that means the
+ * second mesh is not there at all — you see straight through it. It shows up as
+ * "the picture is dirty" and it is invisible in the code, so it is worth saying
+ * plainly: ANY game with two solids on screen has this until it uses what is
+ * below.
+ *
+ * A convex solid's silhouette is the convex hull of its projected corners, and
+ * a line behind it is that line minus the part inside the hull. Exact for
+ * convex occluders, and with none added vpy3d_occl_line IS vpy3d_line_world
+ * plus one compare — so every stroke in a game can go through it.
+ *
+ * HOW TO USE IT, and the order is half of it:
+ *
+ *     vpy3d_occl_reset();                  // once a frame
+ *     ... draw the nearest solid ...
+ *     vpy3d_occl_add_mesh(&m, &at);        // AFTER drawing it. Never itself.
+ *     ... draw the next one, and so on, NEAR TO FAR ...
+ *     vpy3d_occl_line(...)                 // for everything that can be hidden
+ *
+ * There is no depth test. The caller's order is what makes a silhouette mean
+ * "what is behind it", and kuroishi found that out the hard way: with the
+ * occluder in and the floor still drawn first, the mass went on being
+ * transparent and the occluder looked broken. The one case that goes
+ * catastrophically wrong — a line wholly in front of the whole solid — is
+ * guarded here; nothing else is.
+ *
+ * Add the nearest solids first: the table holds 64 and past that nothing more
+ * hides anything, which is the picture we had before, never a wrong one.
+ *
+ * WHAT IT DOES NOT CUT, each of which reads as "the occluder is broken":
+ *   - vpy3d_draw_mesh. Only strokes sent through vpy3d_occl_line are cut. A
+ *     mesh drawn after an occluder was added goes straight through it; draw
+ *     meshes before the silhouettes that should hide them, or not at all
+ *     behind one.
+ *   - A visible piece shorter than 1/48 of the line's own length on screen. It
+ *     is dropped as a sliver. Relative, not absolute: on a stroke the width of
+ *     the screen that is about 2% of the screen.
+ * (A line with an end behind the near plane IS cut: it is clipped to the near
+ * plane first, exactly as vpy3d_line_cam would, and what is left is tested.)
+ *
+ * vpy3d_occl_add and _add_mesh return 0 when they refuse, and every refusal is
+ * counted in vpy3d_stats(): occl_full is the budget, occl_refused is the rest,
+ * and occl_cut is the proof that anything was hidden at all. */
+void vpy3d_occl_reset(void);
+/* A convex solid by 3 to 8 corners IN WORLD SPACE. 0 if it could not be taken
+ * (a corner behind the near plane, or the table full) and then it simply hides
+ * nothing.
+ *
+ * KEEP IT ROUGHLY ON SCREEN. The projection saturates at 2^30 and the clipper
+ * multiplies projected coordinates together, so an occluder tens of screens
+ * wide — a ground span the length of a level is the obvious way to write one —
+ * overflows int64 and yields a hull that is not a hull. Clamp the box to the
+ * visible window before adding it; nothing off screen was hiding anything. */
+int  vpy3d_occl_add(const int32_t (*corners)[3], int n);
+/* The same, from a mesh and the transform it was drawn with — for the common
+ * case where the occluder IS the box you just drew. Meshes of more than eight
+ * vertices are refused rather than approximated: pass the eight corners of the
+ * box you mean. */
+int  vpy3d_occl_add_mesh(const vpy_mesh *m, const vpy_xf *place);
+/* A line in world space, minus every occluder added so far. */
+void vpy3d_occl_line(int32_t ax, int32_t ay, int32_t az,
+                     int32_t bx, int32_t by, int32_t bz, int br);
+int  vpy3d_occl_count(void);
+
 /* ---- what did it cost, and did anything not fit ---- */
 typedef struct {
     uint16_t verts, faces, face_idx, edges;   /* pool high-water marks */
@@ -204,6 +302,13 @@ typedef struct {
     uint32_t merged;       /* edges folded into a longer run */
     uint32_t chained;      /* strokes that started where the last one ended */
     uint32_t overflow;     /* builds that did not fit a pool. NOT ZERO = broken */
+    /* The occluder, per frame. occl_cut is the proof it RAN: with occluders
+     * added and a solid on screen behind them, zero means the order is wrong
+     * (everything drawn before the silhouettes), not that nothing was hidden. */
+    uint32_t occl_cut;     /* lines that lost some part to an occluder */
+    uint32_t occl_refused; /* occluders not taken: corner behind near, degenerate,
+                              n out of 3..8, a mesh of more than 8 vertices */
+    uint32_t occl_full;    /* occluders not taken because the table was full */
 } vpy3d_stats_t;
 const vpy3d_stats_t *vpy3d_stats(void);
 void vpy3d_reset_counts(void);   /* zero the per-frame counters, keep the marks */

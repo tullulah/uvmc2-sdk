@@ -134,6 +134,15 @@ int vpy_cos(int a);
  * meaning on every target, so no call changes what it returns depending on
  * where it was compiled. Use these wherever 128 steps would show as a
  * staircase — a rotating camera, a slow orbit, any 3D transform. */
+/* The unit, named. Callers were writing 4096 and 16384 out by hand, which is how
+ * an angle unit and the code that consumes it drift apart. #ifndef because
+ * vpy_trig_q14.h defines the same two for the table generator. */
+#ifndef VPY_Q14_TURN
+#define VPY_Q14_TURN 4096    /* steps per full turn */
+#endif
+#ifndef VPY_Q14_ONE
+#define VPY_Q14_ONE  16384   /* Q14 scale: this is 1.0 */
+#endif
 int vpy_sin_q14(int a);
 int vpy_cos_q14(int a);
 int vpy_sqrt(int v);
