@@ -85,7 +85,8 @@ static uint8_t  s_closed[VPYAI_MAX_CELLS];
  * and on 2 random grids of 196 the path came out 1-2 dearer than Dijkstra's. A
  * snapshot of (f, h) per entry keeps the order true; the stale entry is skipped
  * when it surfaces, the cell being closed by then. */
-typedef struct { uint32_t f; int32_t h; int16_t c; } entry_t;
+/* 8 bytes: h fits 16 bits (14 x 1024 at most), and 12 with padding was 24 KB */
+typedef struct { uint32_t f; int16_t h; int16_t c; } entry_t;
 static entry_t  s_heap[HEAP_MAX];
 static int      s_heap_full;
 static int      s_nheap;
@@ -101,7 +102,7 @@ static void heap_push(int c, uint32_t f, int32_t h)
 {
     if (s_nheap >= HEAP_MAX) { s_heap_full = 1; return; }
     int i = s_nheap++;
-    s_heap[i].f = f; s_heap[i].h = h; s_heap[i].c = (int16_t)c;
+    s_heap[i].f = f; s_heap[i].h = (int16_t)h; s_heap[i].c = (int16_t)c;
     while (i > 0) {
         const int p = (i - 1) / 2;
         if (!less(&s_heap[i], &s_heap[p])) break;
