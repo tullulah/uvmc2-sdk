@@ -10,12 +10,15 @@
 #include <stdint.h>
 #include "uvm2_bus.h"
 #include "uvm2_draw.h"
-const uint8_t *uvm2_frame_buffer(uint32_t);
+/* The list as the executor is handed it. uvm2_frame_buffer() only exists in the
+ * dual-core build, which does not compile on a host (it carries ARM assembly), so
+ * the list is caught where it is replayed instead, as uvm2_anatomy.c does. */
+static const uint8_t *g_list;
 
 uvm2_stats_t uvm2_stats;
 static uint32_t g_cyc, g_cmd, g_delay;
 
-uint32_t uvm2_exec(const uint8_t *c, uint32_t n) { (void)c; g_cmd += n; g_cyc += n; return n; }
+uint32_t uvm2_exec(const uint8_t *c, uint32_t n) { g_list = c; g_cmd += n; g_cyc += n; return n; }
 void     uvm2_bus_delay(uint32_t c)              { g_cyc += c; g_delay += c; }
 void     uvm2_via_write(uint32_t r, uint32_t d)  { (void)r; (void)d; g_cmd++; g_cyc++; }
 uint8_t  uvm2_via_read(uint32_t r)               { (void)r; return 0; }
@@ -51,9 +54,9 @@ static const char *REG[16] = {"ORB","ORA","DDRB","DDRA","T1CL","T1CH","T1LL","T1
 static void dump(const char *q, void (*f)(void))
 {
     zero(); uvm2_frame_begin();
-    const uint8_t *b = uvm2_frame_buffer(0);
     uint32_t before = uvm2_stats.commands;
     f(); uvm2_frame_end();
+    const uint8_t *b = g_list;
     uint32_t n = uvm2_stats.commands;
     printf("\n== %s : %u commands ==\n", q, n);
     for (uint32_t i = 0; i < n && i < 60; i++){

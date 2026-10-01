@@ -10,10 +10,14 @@ uvm2_stats_t uvm2_stats;
 static uint32_t g_cycles;
 static uint32_t g_commands;
 
-uint32_t uvm2_exec(const uint32_t *cmds, uint32_t count)
+/* The list is 3 bytes a command (uvm2_bus.h: data, reg | delay << 4, delay >> 4);
+ * this read 4-byte words from before that, and stopped compiling when the
+ * header said so. The executor spends 1 + delay cycles a command. */
+uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count)
 {
     uint32_t cycles = 0;
-    for (uint32_t i = 0; i < count; i++) cycles += 1 + (cmds[i] >> 20);
+    for (uint32_t i = 0; i < count; i++)
+        cycles += 1 + ((uint32_t)(cmds[i * 3 + 1] >> 4) | ((uint32_t)cmds[i * 3 + 2] << 4));
     g_cycles   += cycles;
     g_commands += count;
     return cycles;
