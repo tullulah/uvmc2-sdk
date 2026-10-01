@@ -185,6 +185,10 @@ int  vpy3d_mesh_end(int hard_cos_q14);        /* 0 on overflow; see vpy3d_error(
 void vpy3d_mesh_open(vpy_mesh *m, int open);  /* mark a plate after building it */
 
 void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br);
+/* A built mesh's edges in model space, all of them (visible or not). For
+ * effects that take a mesh apart — vpyfx_shatter. 0 if `e` is out of range. */
+int  vpy3d_mesh_edge_count(const vpy_mesh *m);
+int  vpy3d_mesh_edge(const vpy_mesh *m, int e, int32_t a[3], int32_t b[3]);
 
 /* CAGE MODE: draw every edge of the next meshes, the hidden ones too.
  *

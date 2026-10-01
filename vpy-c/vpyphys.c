@@ -325,12 +325,23 @@ int vpyp_add_box(int32_t x, int32_t y, int32_t z,
 {
     return add(SHAPE_BOX, x, y, z, hx, hy, hz, mass);
 }
+static void wake(body_t *b);
 void vpyp_remove(int id)
 {
     body_t *b = get(id); if (!b) return;
     b->alive = 0;
-    /* its warm impulses must not be handed to whatever takes the slot next */
-    for (int i = 0; i < s_nw; i++) if (s_w[i].a == id || s_w[i].b == id) s_w[i].a = s_w[i].b = VPYP_NONE;
+    /* EVERYTHING THAT TOUCHED IT WAKES, and the solver decides what still
+     * stands. Measured: shoot the middle crate out of the bottom row of a
+     * sleeping pyramid and the two crates resting half on it stayed where they
+     * were, asleep over a gap — each still had SOME support, which is all the
+     * "held up" rule asks. Then its warm impulses must not be handed to
+     * whatever takes the slot next. */
+    for (int i = 0; i < s_nw; i++) {
+        if (s_w[i].a != id && s_w[i].b != id) continue;
+        const int other = s_w[i].a == id ? s_w[i].b : s_w[i].a;
+        if (other >= 0 && s_b[other].alive) wake(&s_b[other]);
+        s_w[i].a = s_w[i].b = VPYP_NONE;
+    }
 }
 int vpyp_alive(int id) { return get(id) != 0; }
 

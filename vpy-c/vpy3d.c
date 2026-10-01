@@ -397,6 +397,18 @@ void vpy3d_mesh_open(vpy_mesh *m, int open) { m->open = (uint8_t)(open ? 1 : 0);
 
 static const int16_t *MV(const vpy_mesh *m, int i) { return PV[m->v0 + i]; }
 
+/* Read-only access to a built mesh's edges, in MODEL space: what breaking it
+ * into pieces (vpyfx_shatter) needs. Every edge, not only the visible ones. */
+int vpy3d_mesh_edge_count(const vpy_mesh *m) { return m ? m->ne : 0; }
+int vpy3d_mesh_edge(const vpy_mesh *m, int e, int32_t a[3], int32_t b[3])
+{
+    if (!m || e < 0 || e >= m->ne) return 0;
+    const vpy3d_edge *E = &PE[m->e0 + e];
+    const int16_t *pa = MV(m, E->a), *pb = MV(m, E->b);
+    for (int k = 0; k < 3; k++) { a[k] = pa[k]; b[k] = pb[k]; }
+    return 1;
+}
+
 /* Find the edge (a,b) inside the mesh, or add it. */
 static int edge_of(vpy_mesh *m, int a, int b, int face)
 {

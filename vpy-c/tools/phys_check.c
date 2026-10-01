@@ -169,6 +169,17 @@ int main(void){
   vpyp_position(b,&x,&y,&z);
   CHECK(y < 80, "a tall box pushed at the top tips over: centre now at y=%d (was 300)", y);
 
+  /* 13b. take out one of two supports from under a sleeping box: it tips */
+  vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,0,300);
+  int l1=vpyp_add_box(-101,100,0,100,100,100,1), l2=vpyp_add_box(101,100,0,100,100,100,1);
+  int topb=vpyp_add_box(0,300,0,100,100,100,1); (void)l1;
+  for (int i=0;i<200;i++) vpyp_step();
+  int slept_top = vpyp_sleeping(topb);
+  vpyp_remove(l2);
+  for (int i=0;i<200;i++) vpyp_step();
+  vpyp_position(topb,&x,&y,&z); vpyp_rotation(topb,m);
+  CHECK(slept_top && (y < 250 || m[4] < 15000), "a sleeping box on two supports, one removed: it comes down (y=%d, m11=%d)", y, m[4]);
+
   /* 13. tunnelling: 600 u/s per step through a 20-unit wall, then with 8 substeps */
   for (int sub=1; sub<=8; sub*=8) {
     vpyp_reset(); vpyp_set_substeps(sub);
