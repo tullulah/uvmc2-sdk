@@ -383,9 +383,36 @@ static void set_y(int y, uint32_t delay)
 #define UVM2_SR_A_PCR  12u
 static void beam_off_and_wait_h(uint32_t gap);
 
+/* ── THE BRIGHTNESS LIVES IN A CAPACITOR, AND A CACHE DOES NOT KNOW THAT ──────────────
+ *
+ * Z is not a register on the VIA. It is C306, 10 nF, sampled through the CD4052 and held
+ * for an LF347 input (IC303C) — read from the schematic, not remembered: LogicBoard 3GE,
+ * mux channel 2. A JFET input leaks, so the charge walks away on its own; nothing about
+ * that is visible from here, and `s_z` is a variable that never droops.
+ *
+ * WHAT THAT COST, reported from the console 2026-09-30: leave the calibration wizard up and
+ * the picture FADES, over minutes, until it is invisible. In a game it never happens — and
+ * that is the whole shape of the bug rather than a detail. A game asks for a different
+ * intensity many times a frame, so the cache misses constantly and C306 is recharged
+ * constantly. A screen drawn ENTIRELY AT ONE INTENSITY asks for the same z for ever: the
+ * first frame charges the capacitor and no frame after it ever writes Z again.
+ *
+ * It needed both halves to appear. via_setup's SR prologue stopped priming Z (it is the
+ * reference cartridge's prologue, and theirs does not prime it either), and frame_begin's
+ * restoring set_z went with it — for a good reason, it was charging C306 three times a frame
+ * for one value. What neither noticed is that the count went from three to ZERO for anything
+ * that does not change its brightness.
+ *
+ * So the cache stays — it is worth a lot in a real scene — and once a frame it is declared
+ * stale, which costs the frame's first intensity command and nothing else: when the value
+ * has not changed, `hold_between` returns its minimum window, because all it has to make up
+ * is one frame of leakage. */
+static int s_z_stale = 1;
+
 static void set_z(int z, uint32_t delay)
 {
-    if (s_z == z) return;
+    if (s_z == z && !s_z_stale) return;
+    s_z_stale = 0;
     delay = hold_between(s_z, z, uvm2_hold_z_min, uvm2_hold_z_max);
     s_z = z;
     if (BEAM_VIA_SR) {
@@ -2806,6 +2833,15 @@ void uvm2_frame_begin(void)
      * SET_INTENSITY; now the clamp is released by the zero block, which comes AFTER that Z,
      * so the gap it covered no longer exists. Their frame has none: writing it charged C306
      * twice per frame — ours and the game's — for the same value. */
+    /* ONCE A FRAME THE Z CACHE GOES STALE, so C306 is recharged by the frame's first
+     * intensity command even when nobody has changed the intensity. See the note over
+     * set_z(): without this, a screen drawn at a single brightness charges the capacitor on
+     * its first frame and never again, and fades away over minutes.
+     *
+     * BEFORE the restore below and not after it, so that on the PCR dialect — where that
+     * restore already writes Z every frame — this costs nothing at all. */
+    s_z_stale = 1;
+
     if (!BEAM_VIA_SR) set_z(s_z_last, UVM2_HOLD_DELAY);
 
     /* Only now release the clamp that has held the beam at centre since the
