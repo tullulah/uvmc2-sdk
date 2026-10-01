@@ -39,6 +39,9 @@
 #include "uvm2_smp.h"
 
 uvm2_stats_t uvm2_stats;
+/* uvm2_draw.c times the frame with uvm2_now_us(), which lives in uvm2_bus.c; on a host
+ * there is no TIMER0, and 0 is the honest answer (see its note in uvm2_bus.h). */
+uint32_t uvm2_now_us(void) { return 0; }
 volatile int uvm2_have_calibration = 0;
 int  uvm2_config_load(void) { return 0; }
 void rust_eh_personality(void) { }

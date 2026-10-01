@@ -40,6 +40,9 @@
 #include "uvm2_draw.h"
 
 uvm2_stats_t uvm2_stats;
+/* uvm2_draw.c times the frame with uvm2_now_us(), which lives in uvm2_bus.c; on a host
+ * there is no TIMER0, and 0 is the honest answer (see its note in uvm2_bus.h). */
+uint32_t uvm2_now_us(void) { return 0; }
 
 static uint32_t g_cmds, g_cycles, g_words;
 static uint32_t g_reg_cmds[16], g_reg_cycles[16];
