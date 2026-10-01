@@ -175,6 +175,15 @@ int vpyp_raycast(int32_t ox, int32_t oy, int32_t oz,
                  int32_t dx, int32_t dy, int32_t dz,
                  int32_t max_dist, uint8_t mask, vpyp_hit *out);
 
+/* ---- a blast ---------------------------------------------------------------
+ * Every moving body within `radius` of (cx,cy,cz) whose mask meets `mask` is
+ * thrown away from it at up to `speed` (units/s) — full at the centre, nothing
+ * at the rim — pushed on the side facing the blast so it spins as well. The
+ * same SPEED whatever the mass: a crate and a ball beside it fly alike, which
+ * is what a game wants from an explosion. Returns how many it moved. Pair it
+ * with vpyfx_ring for something to see. */
+int vpyp_blast(int32_t cx, int32_t cy, int32_t cz, int32_t radius, int32_t speed, uint8_t mask);
+
 /* ---- what did it cost, and was anything refused --------------------------- */
 typedef struct {
     uint32_t bodies;            /* alive */

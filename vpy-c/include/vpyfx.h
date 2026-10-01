@@ -76,6 +76,16 @@ int vpyfx_shatter(const vpy_mesh *m, const vpy_xf *place,
                   int32_t cx, int32_t cy, int32_t cz,
                   int32_t speed, int32_t spin, int life, int br);
 
+/* A RING in the plane with normal (nx,ny,nz) round (cx,cy,cz), starting at
+ * radius r0 and growing at `speed` units/s: a shockwave to see (vpyp_blast is
+ * the one that pushes). `segments` strokes, 3..32, all counted in the budget —
+ * a ring the budget cannot fit whole is left out and counted as shed. */
+int vpyfx_ring(int32_t cx, int32_t cy, int32_t cz, int32_t nx, int32_t ny, int32_t nz,
+               int32_t r0, int32_t speed, int segments, int life, int br);
+/* A LINE that stays where it is and fades: no gravity, no spin. One a frame
+ * from where an object was to where it is makes a TRAIL behind it. */
+int vpyfx_line(int32_t ax, int32_t ay, int32_t az, int32_t bx, int32_t by, int32_t bz, int life, int br);
+
 /* ---- every frame ---------------------------------------------------------- */
 void vpyfx_step(void);
 void vpyfx_draw(int occlude);

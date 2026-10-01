@@ -123,6 +123,25 @@ int main(void)
     CHECK(lying, "after 8 s every piece is down on the floor, none below it");
     CHECK(!moved, "and they have stopped moving");
 
+    /* 9. a ring grows at its speed, in its plane, as N strokes */
+    vpyfx_reset();
+    vpyfx_ring(0, 0, 0, 0, 0, 1, 100, 1000, 16, 100, 120);   /* in the x-y plane */
+    for (int i = 0; i < 10; i++) vpyfx_step();
+    frame();
+    double rmin = 1e9, rmax = 0;
+    for (int i = 0; i < NS; i++) { const double r = hypot(S[i].x0, S[i].y0); if (r < rmin) rmin = r; if (r > rmax) rmax = r; }
+    CHECK(NS == 16 && fabs(rmin - 300) <= 3 && fabs(rmax - 300) <= 3,
+          "ring: 16 strokes, radius %.0f..%.0f after 10 steps (100 + 1000 u/s x 0.2 s = 300)", rmin, rmax);
+    vpyfx_set_budget(10); frame();
+    CHECK(NS == 0 && vpyfx_stats()->shed == 1, "a ring the budget cannot fit whole is left out and counted");
+
+    /* 10. a line stays put and fades; under gravity, too */
+    vpyfx_reset(); vpyfx_set_gravity(0, -9800, 0);
+    vpyfx_line(0, 500, 0, 300, 500, 0, 50, 120);
+    for (int i = 0; i < 20; i++) vpyfx_step();
+    frame();
+    CHECK(NS == 1 && S[0].y0 == 500 && S[0].y1 == 500 && S[0].br < 120, "a line does not fall, and fades (br %d)", NS ? S[0].br : -1);
+
     printf("%s (%d failed)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails;
 }

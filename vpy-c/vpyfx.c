@@ -19,8 +19,13 @@
 #define SCRAPE_NUM   3            /* what a bounce leaves of the sliding and the spin */
 #define SCRAPE_DEN   4
 
+enum { K_SPARK = 0, K_STICK = 1, K_RING = 2, K_LINE = 3 };
+
+/* A ring keeps its centre in p, its plane's normal (Q14) in h, its radius (Q8)
+ * in hl, its growth per step (Q8) in v[0] and its number of segments in w[0].
+ * A line keeps a stick's ends and never moves. */
 typedef struct {
-    uint8_t  alive, stick;
+    uint8_t  alive, kind;
     int16_t  br0;
     int32_t  life, life0;
     int32_t  p[3];                /* Q8: a spark's point, a stick's centre */
@@ -135,7 +140,7 @@ static piece_t *new_piece(int life, int br)
 {
     if (life <= 0 || br <= 0) return 0;
     piece_t *p = slot();
-    p->alive = 1; p->stick = 0;
+    p->alive = 1; p->kind = K_SPARK;
     p->life = p->life0 = life;
     p->br0 = (int16_t)(br > 127 ? 127 : br);
     p->h[0] = p->h[1] = p->h[2] = 0; p->hl = 0;
@@ -168,11 +173,11 @@ int vpyfx_burst(int32_t x, int32_t y, int32_t z, int32_t vx, int32_t vy, int32_t
     return n;
 }
 
-static int stick_q8(const int64_t a[3], const int64_t b[3], const int32_t v[3], int32_t spin, int life, int br)
+static piece_t *stick_q8(const int64_t a[3], const int64_t b[3], const int32_t v[3], int32_t spin, int life, int br)
 {
     piece_t *p = new_piece(life, br);
     if (!p) return 0;
-    p->stick = 1;
+    p->kind = K_STICK;
     int64_t l2 = 0;
     for (int k = 0; k < 3; k++) {
         p->p[k] = (int32_t)((a[k] + b[k]) / 2);
@@ -186,7 +191,7 @@ static int stick_q8(const int64_t a[3], const int64_t b[3], const int32_t v[3], 
         const int32_t w = spin_in(rnd_range(spin / 3, spin));
         for (int k = 0; k < 3; k++) p->w[k] = (int32_t)((int64_t)d[k] * w / N1);
     }
-    return 1;
+    return p;
 }
 
 int vpyfx_stick(int32_t ax, int32_t ay, int32_t az, int32_t bx, int32_t by, int32_t bz,
@@ -195,7 +200,7 @@ int vpyfx_stick(int32_t ax, int32_t ay, int32_t az, int32_t bx, int32_t by, int3
     const int64_t a[3] = { (int64_t)ax * ONE, (int64_t)ay * ONE, (int64_t)az * ONE };
     const int64_t b[3] = { (int64_t)bx * ONE, (int64_t)by * ONE, (int64_t)bz * ONE };
     const int32_t v[3] = { speed_in(vx), speed_in(vy), speed_in(vz) };
-    return stick_q8(a, b, v, spin, life, br);
+    return stick_q8(a, b, v, spin, life, br) != 0;
 }
 
 int vpyfx_shatter(const vpy_mesh *m, const vpy_xf *place,
@@ -230,9 +235,36 @@ int vpyfx_shatter(const vpy_mesh *m, const vpy_xf *place,
             const int64_t out = l ? d[k] * s / l : 0;
             v[k] = speed_in(base[k] + (int32_t)out + (int32_t)((int64_t)jit[k] * (s / 4) / N1));
         }
-        n += stick_q8(wa, wb, v, spin, rnd_range(life * 3 / 4, life * 5 / 4), br);
+        n += stick_q8(wa, wb, v, spin, rnd_range(life * 3 / 4, life * 5 / 4), br) != 0;
     }
     return n;
+}
+
+int vpyfx_line(int32_t ax, int32_t ay, int32_t az, int32_t bx, int32_t by, int32_t bz, int life, int br)
+{
+    const int64_t a[3] = { (int64_t)ax * ONE, (int64_t)ay * ONE, (int64_t)az * ONE };
+    const int64_t b[3] = { (int64_t)bx * ONE, (int64_t)by * ONE, (int64_t)bz * ONE };
+    const int32_t v[3] = { 0, 0, 0 };
+    piece_t *p = stick_q8(a, b, v, 0, life, br);
+    if (!p) return 0;
+    p->kind = K_LINE;
+    return 1;
+}
+
+int vpyfx_ring(int32_t cx, int32_t cy, int32_t cz, int32_t nx, int32_t ny, int32_t nz,
+               int32_t r0, int32_t speed, int segments, int life, int br)
+{
+    const int64_t l = isqrt64((int64_t)nx * nx + (int64_t)ny * ny + (int64_t)nz * nz);
+    if (l == 0 || segments < 3) return 0;
+    piece_t *p = new_piece(life, br);
+    if (!p) return 0;
+    p->kind = K_RING;
+    p->p[0] = cx * ONE; p->p[1] = cy * ONE; p->p[2] = cz * ONE;
+    p->h[0] = (int32_t)(nx * (int64_t)N1 / l); p->h[1] = (int32_t)(ny * (int64_t)N1 / l); p->h[2] = (int32_t)(nz * (int64_t)N1 / l);
+    p->hl = r0 * ONE;
+    p->v[0] = speed_in(speed); p->v[1] = p->v[2] = 0;
+    p->w[0] = segments > 32 ? 32 : segments;
+    return 1;
 }
 
 /* ── every frame ──────────────────────────────────────────────────────────── */
@@ -244,8 +276,10 @@ void vpyfx_step(void)
         if (!p->alive) continue;
         if (--p->life <= 0) { p->alive = 0; continue; }
         alive++;
+        if (p->kind == K_RING) { p->hl += p->v[0]; continue; }
+        if (p->kind == K_LINE) continue;
         for (int k = 0; k < 3; k++) { p->v[k] += s_g[k]; p->p[k] += p->v[k]; }
-        if (p->stick && (p->w[0] | p->w[1] | p->w[2])) {
+        if (p->kind == K_STICK && (p->w[0] | p->w[1] | p->w[2])) {
             /* turn the half-vector by w × h, and keep its length */
             const int64_t w[3] = { p->w[0], p->w[1], p->w[2] }, h[3] = { p->h[0], p->h[1], p->h[2] };
             int64_t nh[3], l2 = 0;
@@ -283,7 +317,7 @@ static int brightness(const piece_t *p)
 /* the two ends of a piece, Q8 */
 static void ends(const piece_t *p, int64_t a[3], int64_t b[3])
 {
-    if (p->stick) {
+    if (p->kind == K_STICK || p->kind == K_LINE) {
         for (int k = 0; k < 3; k++) { a[k] = (int64_t)p->p[k] - p->h[k]; b[k] = (int64_t)p->p[k] + p->h[k]; }
         return;
     }
@@ -307,6 +341,38 @@ static void draw_all(int mode)          /* 0 = 3D, 1 = 3D occluded, 2 = 2D */
         if (!p->alive) continue;
         const int br = brightness(p);
         if (br < MIN_BR) continue;
+        if (p->kind == K_RING) {
+            const int segs = p->w[0];
+            if ((int)drawn + segs > s_budget) { shed++; continue; }
+            /* two directions across the plane: from whichever axis is least
+             * along the normal, then the normal crossed with that */
+            const int64_t n[3] = { p->h[0], p->h[1], p->h[2] };
+            const int ax = (n[0] < 0 ? -n[0] : n[0]) < (n[1] < 0 ? -n[1] : n[1])
+                         ? ((n[0] < 0 ? -n[0] : n[0]) < (n[2] < 0 ? -n[2] : n[2]) ? 0 : 2)
+                         : ((n[1] < 0 ? -n[1] : n[1]) < (n[2] < 0 ? -n[2] : n[2]) ? 1 : 2);
+            int64_t e[3] = { 0, 0, 0 }; e[ax] = N1;
+            int64_t u[3] = { n[1] * e[2] - n[2] * e[1], n[2] * e[0] - n[0] * e[2], n[0] * e[1] - n[1] * e[0] };
+            const int64_t ul = isqrt64(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            for (int k = 0; k < 3; k++) u[k] = ul ? u[k] * N1 / ul : 0;
+            const int64_t w[3] = { (n[1] * u[2] - n[2] * u[1]) >> 14, (n[2] * u[0] - n[0] * u[2]) >> 14,
+                                   (n[0] * u[1] - n[1] * u[0]) >> 14 };
+            int32_t px = 0, py = 0, pz = 0;
+            for (int sgi = 0; sgi <= segs; sgi++) {
+                const int ang = sgi * VPY_Q14_TURN / segs;
+                const int64_t c = vpy_cos_q14(ang), sn = vpy_sin_q14(ang);
+                int32_t q[3];
+                for (int k = 0; k < 3; k++)
+                    q[k] = (int32_t)((p->p[k] + ((((u[k] * c + w[k] * sn) >> 14) * p->hl) >> 14)) >> Q);
+                if (sgi) {
+                    if (mode == 2) vpy_draw_line_dev(px, py, q[0], q[1], br);
+                    else if (mode == 1) vpy3d_occl_line(px, py, pz, q[0], q[1], q[2], br);
+                    else vpy3d_line_world(px, py, pz, q[0], q[1], q[2], br);
+                    drawn++;
+                }
+                px = q[0]; py = q[1]; pz = q[2];
+            }
+            continue;
+        }
         if ((int)drawn >= s_budget) { shed++; continue; }
         int64_t a[3], b[3];
         ends(p, a, b);

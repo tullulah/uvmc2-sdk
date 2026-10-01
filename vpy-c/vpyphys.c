@@ -1097,6 +1097,42 @@ static int ray_box(const int64_t o[3], const int32_t u[3], const body_t *b, int6
     return 1;
 }
 
+/* ── a blast ──────────────────────────────────────────────────────────────── */
+int vpyp_blast(int32_t cx, int32_t cy, int32_t cz, int32_t radius, int32_t speed, uint8_t mask)
+{
+    if (radius <= 0) return 0;
+    const int64_t c[3] = { (int64_t)cx * ONE, (int64_t)cy * ONE, (int64_t)cz * ONE };
+    const int64_t R = (int64_t)radius * ONE;
+    int n = 0;
+    for (int i = 0; i < VPYP_MAX_BODIES; i++) {
+        body_t *b = &s_b[i];
+        if (!b->alive || !b->inv_m || !(b->mask & mask)) continue;
+        int64_t d[3], d2 = 0;
+        for (int k = 0; k < 3; k++) { d[k] = b->p[k] - c[k]; d2 += d[k] * d[k]; }
+        const int64_t dist = isqrt64(d2);
+        if (dist >= R) continue;
+        if (dist == 0) { d[0] = 0; d[1] = ONE; d[2] = 0; }
+        const int64_t dl = dist ? dist : ONE;
+        /* the same change of SPEED for every body at a given distance, falling
+         * to nothing at the radius — heavy or light, a blast throws them alike */
+        const int64_t dv = (int64_t)speed_in(speed) * (R - dist) / R;          /* Q8/substep */
+        /* applied on the side facing the blast, so it turns as well as moves */
+        const int64_t size = b->shape == SHAPE_SPHERE ? b->h[0]
+                           : (b->h[0] < b->h[1] ? (b->h[0] < b->h[2] ? b->h[0] : b->h[2])
+                                                : (b->h[1] < b->h[2] ? b->h[1] : b->h[2]));
+        int64_t imp[3], r[3];
+        for (int k = 0; k < 3; k++) {
+            imp[k] = (d[k] * dv / dl) * 65536 / b->inv_m;                      /* mass × Q8 vel */
+            r[k] = -d[k] * size / dl;
+        }
+        for (int k = 0; k < 3; k++) b->v[k] += (int32_t)((imp[k] * b->inv_m) >> 16);
+        spin_kick(b, r, imp, +1);
+        wake(b);
+        n++;
+    }
+    return n;
+}
+
 int vpyp_raycast(int32_t ox, int32_t oy, int32_t oz,
                  int32_t dx, int32_t dy, int32_t dz,
                  int32_t max_dist, uint8_t mask, vpyp_hit *out)

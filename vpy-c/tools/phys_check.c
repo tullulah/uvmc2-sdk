@@ -180,6 +180,16 @@ int main(void){
   vpyp_position(topb,&x,&y,&z); vpyp_rotation(topb,m);
   CHECK(slept_top && (y < 250 || m[4] < 15000), "a sleeping box on two supports, one removed: it comes down (y=%d, m11=%d)", y, m[4]);
 
+  /* 13c. a blast throws everything near it away, light and heavy alike, and
+   * leaves what is out of reach alone */
+  vpyp_reset();
+  int near1=vpyp_add_box(300,0,0,50,50,50,1), near2=vpyp_add_box(-300,0,0,50,50,50,8), far1=vpyp_add_sphere(0,0,2000,50,1);
+  const int moved = vpyp_blast(0,0,0, 1000, 2000, 0xFF);
+  int32_t v1x,v2x,dummy,v3x;
+  vpyp_velocity(near1,&v1x,&dummy,&dummy); vpyp_velocity(near2,&v2x,&dummy,&dummy); vpyp_velocity(far1,&v3x,&dummy,&dummy);
+  CHECK(moved==2 && v1x > 1300 && v1x < 1500 && v2x < -1300 && v2x > -1500 && v3x == 0,
+        "blast r=1000 at 2000 u/s: bodies at 300 fly off at %d and %d (expected +-1400, mass 1 and 8), the one at 2000 stays", v1x, v2x);
+
   /* 13. tunnelling: 600 u/s per step through a 20-unit wall, then with 8 substeps */
   for (int sub=1; sub<=8; sub*=8) {
     vpyp_reset(); vpyp_set_substeps(sub);
