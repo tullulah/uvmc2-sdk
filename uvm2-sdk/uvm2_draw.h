@@ -127,6 +127,30 @@ uint32_t uvm2_frame_count(void);
  * which is how audio keeps its tempo when drawing runs over. */
 uint32_t uvm2_frame_bus_cycles(void);
 
+/* ── The command list, to the SD card (uvm2_dump.c) ─────────────────────────
+ * Writes the LAST CLOSED frame's list to `path` (header + 3-byte commands; the format is at
+ * the top of uvm2_dump.c), for tools/list_from_sd.py and tools/beam_sim.py. CORE 0 ONLY —
+ * refused, and counted, from core 1. The screen is dark while the card writes (milliseconds
+ * to tens of them): a debug capture, not a per-frame call. 1 if written. */
+int uvm2_dump_list(const char *path);
+/* Call it once per frame: dumps once each time every button in `mask` (bit 0 = button 1 of
+ * the first pad, as uvm2_read_buttons) becomes held together, never again until released.
+ * 1 dumped, 0 not triggered, -1 triggered and failed (uvm2_dump_diag says why). */
+int uvm2_dump_list_on_buttons(const char *path, uint8_t mask);
+
+#define UVM2_DUMP_VERSION 1
+#define UVM2_DUMP_HEADER  32
+#define UVM2_DUMP_OK      0
+#define UVM2_DUMP_CORE1   1   /* called from core 1: it owns the bus and must not wait on a card */
+#define UVM2_DUMP_EMPTY   2   /* no closed frame yet, or (single core) a frame is open over it */
+#define UVM2_DUMP_SD      3   /* the card refused: uvm2_sd_error says which way */
+typedef struct {
+    uint32_t ok, failed;      /* dumps written / refused */
+    int32_t  error;           /* UVM2_DUMP_* of the last attempt */
+    uint32_t commands;        /* in the last dump written */
+} uvm2_dump_diag_t;
+extern uvm2_dump_diag_t uvm2_dump_diag;
+
 /* ── Throughput levers (the point of the command-stream model) ──────────────
  * scale is the ramp duration in bus cycles for a full-range delta; it is the
  * dominant per-vector cost.  With scale = 128 a vector costs ~136 cycles, so a

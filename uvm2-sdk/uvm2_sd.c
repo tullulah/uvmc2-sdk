@@ -626,6 +626,28 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     return write_all(&f, data, n);
 }
 
+/* The same, from two pieces: a header and a body that live in different places (a command
+ * list dump: its header on the stack, the list in its own buffer, which may be in PSRAM). One
+ * file, one close; either piece may be empty, not both. */
+int uvm2_sd_write2(const char *path, const unsigned char *a, uint32_t na,
+                   const unsigned char *b, uint32_t nb)
+{
+    FIL f;
+    uint32_t len;
+    uvm2_sd_error = UVM2_SD_OK;
+    if (na + nb == 0) { uvm2_sd_error = UVM2_SD_TOO_BIG; return 0; }
+    if (!begin() || !make_parents(path)) return 0;
+    if (!open_file(&f, path, FA_WRITE | FA_CREATE_ALWAYS, &len)) return 0;
+    if (na) {
+        UINT put = 0;
+        FRESULT fr = f_write(&f, a, na, &put);
+        if (fr == FR_OK && put != na) fr = FR_DENIED;          /* the card filled up */
+        if (fr != FR_OK) { f_close(&f); return fail(fr); }
+    }
+    if (!nb) return fail(f_close(&f));
+    return write_all(&f, b, nb);
+}
+
 /* ── AN OPEN FILE ──────────────────────────────────────────────────────────────────────── */
 #define UVM2_SD_OPEN_MAGIC 0x4E45504Fu   /* 'OPEN' */
 #define FIL_OF(f) ((FIL *)(void *)(f)->fil)

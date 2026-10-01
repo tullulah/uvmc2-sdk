@@ -78,6 +78,7 @@ add_executable(${UVM2_NAME}
     ${UVM2_FATFS_DIR}/ffunicode.c
     ${UVM2_SDK_DIR}/uvm2_romzip.c
     ${UVM2_SDK_DIR}/uvm2_draw.c
+    ${UVM2_SDK_DIR}/uvm2_dump.c
     ${UVM2_SDK_DIR}/uvm2_config.c
     ${UVM2_SDK_DIR}/uvm2_wizard.c
     ${UVM2_SDK_DIR}/uvm2_input.c
@@ -214,6 +215,7 @@ set_source_files_properties(
     ${UVM2_FATFS_DIR}/ff.c
     ${UVM2_FATFS_DIR}/ffunicode.c
     ${UVM2_SDK_DIR}/uvm2_sd.c
+    ${UVM2_SDK_DIR}/uvm2_dump.c
     ${UVM2_SDK_DIR}/uvm2_config.c
     ${UVM2_SDK_DIR}/uvm2_wizard.c
     ${UVM2_SDK_DIR}/uvm2_psram.c

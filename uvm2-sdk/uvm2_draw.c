@@ -129,6 +129,10 @@ const uint8_t *uvm2_frame_buffer(uint32_t frame) { return s_cmds[frame & 1u]; }
 uint32_t        uvm2_frame_length(uint32_t frame) { return s_len[frame & 1u]; }
 #endif
 static uint32_t s_frames;
+/* For uvm2_last_list (single core): the closed frame's length, and whether a frame is open —
+ * with one buffer, an open frame is overwriting the closed one from its first command. */
+static uint32_t s_last_len;
+static int      s_frame_open;
 
 /* Shadow of the VIA state, so a command is only emitted when something really
  * changes.  Data bytes, not the shifted command fields. */
@@ -2822,6 +2826,7 @@ void uvm2_frame_begin(void)
     uvm2_input_count = 0;
 #endif
     vx_cart_refresh();       /* the sink and the timings, once for the whole frame */
+    s_frame_open = 1;
     s_count = 0;
     s_cycles = 0;
     s_limit = UVM2_CMD_CAPACITY - UVM2_CMD_RESERVE;
@@ -3181,6 +3186,7 @@ void uvm2_frame_end(void)
     }
     s_len[s_buf]        = s_count;
     s_cycles_pub[s_buf] = s_cycles;
+    s_frame_open        = 0;
     uvm2_stats.commands = s_count;
     uvm2_stats.dropped  = s_dropped;
     uvm2_stats.ramps_clamped = s_ramps_clamped;
@@ -3266,6 +3272,8 @@ void uvm2_frame_end(void)
 #endif
 
     uvm2_stats.commands   = s_count;
+    s_last_len            = s_count;
+    s_frame_open          = 0;
     uvm2_stats.bus_cycles = cycles;
     uvm2_stats.dropped    = s_dropped;
     uvm2_stats.ramps_clamped = s_ramps_clamped;
@@ -3369,3 +3377,38 @@ void uvm2_frame_end(void)
 uint32_t uvm2_frame_bus_cycles(void) { return s_frame_cycles; }
 
 uint32_t uvm2_frame_count(void) { return s_frames; }
+
+/* THE LAST CLOSED FRAME'S LIST, for uvm2_dump_list (uvm2_dump.c). Core 0 only.
+ *
+ * DUAL CORE: BY FRAME NUMBER, NOT BY LENGTH. The debug cartridge's RTT dump picks "the longer
+ * of the two buffers" because it runs inside the BIOS without knowing whether the image is
+ * single or dual core. Here that choice would be WRONG: the other buffer keeps the length of
+ * the frame before last while core 0 is REWRITING it with the frame being built, so the
+ * longer one can be a torn list. The buffer just published is frame s_frame_no - 1, and core
+ * 0 — the only writer of either buffer, and the caller — is writing the other one, so this one
+ * cannot change under the reader.
+ *
+ * AND IT WAITS FOR CORE 1 TO FINISH REPLAYING IT, as frame_end does (at most one frame).
+ * Reading the list while core 1 converts it for the stream is a second reader on the same
+ * memory — in PSRAM, a second master on the QMI — and that is timing taken from the bus
+ * replay. After the wait core 1 sits in its idle path (inputs, the gap hook) until the next
+ * frame is published, which cannot happen while core 0 is in here.
+ *
+ * SINGLE CORE (benches, host tools): one buffer, valid only between uvm2_frame_end and the
+ * next uvm2_frame_begin; with a frame open the answer is 0 commands, never a mix. */
+const uint8_t *uvm2_last_list(uint32_t *n, uint32_t *which)
+{
+#ifdef UVM2_DUAL_CORE
+    const uint32_t f = s_frame_no - 1u;           /* 0 = nothing published yet */
+    *which = f & 1u;
+    if (f == 0u) { *n = 0; return 0; }
+    while ((int32_t)(uvm2_frame_done - f) < 0) { }
+    __asm volatile ("dmb" ::: "memory");
+    *n = s_len[f & 1u];
+    return s_cmds[f & 1u];
+#else
+    *which = 0;
+    *n = (s_frame_open || s_frames == 0u) ? 0u : s_last_len;
+    return s_cmds[0];
+#endif
+}

@@ -33,6 +33,10 @@ int uvm2_sd_overwrite(const char *path, const unsigned char *data, uint32_t n);
 /** Writes a file of ANY size; missing folders are created and an existing file is replaced.
  *  1 if it was written. This is the one for dumping traces, saved games or captures. */
 int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n);
+/** The same file written from TWO pieces, one after the other (a header and a body kept
+ *  apart). 1 if it was written. */
+int uvm2_sd_write2(const char *path, const unsigned char *a, uint32_t na,
+                   const unsigned char *b, uint32_t nb);
 
 /* A CHUNK of the file, starting `from` bytes in. Returns what was copied, which may be less
  * than `max` without that being a failure (unlike uvm2_sd_read, where not fitting IS one). It
