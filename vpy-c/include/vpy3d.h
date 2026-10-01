@@ -260,10 +260,9 @@ vpy3d_error_t vpy3d_error(void);
  * hides anything, which is the picture we had before, never a wrong one.
  *
  * WHAT IT DOES NOT CUT, each of which reads as "the occluder is broken":
- *   - vpy3d_draw_mesh. Only strokes sent through vpy3d_occl_line are cut. A
- *     mesh drawn after an occluder was added goes straight through it; draw
- *     meshes before the silhouettes that should hide them, or not at all
- *     behind one.
+ *   - vpy3d_draw_mesh, unless vpy3d_set_mesh_occlusion(1) (below). By default
+ *     only strokes sent through vpy3d_occl_line are cut, and a mesh drawn after
+ *     an occluder was added goes straight through it.
  *   - A visible piece shorter than 1/48 of the line's own length on screen. It
  *     is dropped as a sliver. Relative, not absolute: on a stroke the width of
  *     the screen that is about 2% of the screen.
@@ -292,6 +291,22 @@ int  vpy3d_occl_add_mesh(const vpy_mesh *m, const vpy_xf *place);
 /* A line in world space, minus every occluder added so far. */
 void vpy3d_occl_line(int32_t ax, int32_t ay, int32_t az,
                      int32_t bx, int32_t by, int32_t bz, int br);
+/* The same in camera space, as vpy3d_line_cam is to vpy3d_line_world. */
+void vpy3d_occl_line_cam(const int32_t *a, const int32_t *b, int br);
+
+/* MESHES THROUGH THE OCCLUDER, opt-in. With it on, every stroke
+ * vpy3d_draw_mesh emits is cut by the occluders added so far, exactly as
+ * vpy3d_occl_line would cut it; the mesh's own hidden-line removal runs first,
+ * as always. Off by default, and that is deliberate: a game that draws a figure
+ * with meshes may depend on it never being cut (one that stands where no solid
+ * can be in front of it, say), and switching it on under that game would change
+ * its picture.
+ *
+ * The order rule does not change: draw a mesh, THEN vpy3d_occl_add_mesh it, and
+ * meshes near to far. A mesh is never cut by its own silhouette as long as it is
+ * added after it is drawn. With nothing added it costs one compare per stroke. */
+void vpy3d_set_mesh_occlusion(int on);
+int  vpy3d_get_mesh_occlusion(void);
 int  vpy3d_occl_count(void);
 
 /* ---- what did it cost, and did anything not fit ---- */

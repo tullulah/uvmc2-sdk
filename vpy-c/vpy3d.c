@@ -40,6 +40,7 @@ static uint16_t RA[VPY3D_POOL_E], RB[VPY3D_POOL_E];
 static uint8_t  RU[VPY3D_POOL_E];            /* already emitted */
 static int      s_chain = 1;                 /* follow connectivity when emitting */
 static int      s_wire;                      /* draw hidden edges too: see the header */
+static int      s_mesh_occl;                 /* meshes go through the occluder: see the header */
 
 /* ── camera and lens ─────────────────────────────────────────────────────── */
 static vpy_xf  s_cam;
@@ -586,6 +587,13 @@ void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br)
         if (ns < VPY3D_POOL_E) { RA[ns] = (uint16_t)start; RB[ns] = (uint16_t)v; RU[ns] = 0; ns++; }
     }
 
+    /* One of the mesh's strokes, in camera space. Through the occluder when the
+     * game asked for it, so a mesh drawn after a silhouette is cut by it like any
+     * line; otherwise exactly what it always was. With occlusion on and no
+     * occluder added this is still vpy3d_line_cam plus one compare. */
+#define MESH_LINE(p, q) (s_mesh_occl ? vpy3d_occl_line_cam((p), (q), br) \
+                                     : vpy3d_line_cam((p), (q), br))
+
     /* Put them in an order the BEAM likes. A stroke that starts where the last
      * one ended pays no blanked jump (~48 cycles), and — the part that is not
      * just cost — no re-centre either: the SDK re-zeroes the integrators before
@@ -598,7 +606,7 @@ void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br)
      * follows the mesh's own connectivity, which is exact — two runs meet or they
      * do not — so it cannot invent a join that is not there. */
     if (!s_chain) {
-        for (int i = 0; i < ns; i++) vpy3d_line_cam(TC[RA[i]], TC[RB[i]], br);
+        for (int i = 0; i < ns; i++) MESH_LINE(TC[RA[i]], TC[RB[i]]);
         return;
     }
     int cur = -1;
@@ -620,9 +628,13 @@ void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br)
         RU[pick] = 1;
         int a = flip ? RB[pick] : RA[pick];
         int b = flip ? RA[pick] : RB[pick];
-        vpy3d_line_cam(TC[a], TC[b], br);
+        /* A run that loses its start to an occluder no longer begins where the
+         * beam is, so `chained` counts the joins the mesh offers, not the ones
+         * that survived the cut. */
+        MESH_LINE(TC[a], TC[b]);
         cur = b;
     }
+#undef MESH_LINE
 }
 
 /* ── loading a compiled .vmesh ───────────────────────────────────────────
@@ -688,6 +700,8 @@ int vpy3d_load_mesh(vpy_mesh *m, const unsigned char *d)
 void vpy3d_set_wire(int on) { s_wire = on ? 1 : 0; }
 int  vpy3d_get_wire(void)   { return s_wire; }
 
+void vpy3d_set_mesh_occlusion(int on) { s_mesh_occl = on ? 1 : 0; }
+int  vpy3d_get_mesh_occlusion(void)   { return s_mesh_occl; }
 void vpy3d_set_chaining(int on) { s_chain = on ? 1 : 0; }
 int  vpy3d_get_chaining(void)    { return s_chain; }
 
@@ -884,7 +898,15 @@ void vpy3d_occl_line(int32_t ax, int32_t ay, int32_t az,
     int32_t a[3], b[3];
     vpy3d_to_camera(ax, ay, az, a);
     vpy3d_to_camera(bx, by, bz, b);
-    if (s_nocc == 0) { vpy3d_line_cam(a, b, br); return; }   /* nothing to hide behind */
+    vpy3d_occl_line_cam(a, b, br);
+}
+
+void vpy3d_occl_line_cam(const int32_t *ca, const int32_t *cb, int br)
+{
+    if (s_nocc == 0) { vpy3d_line_cam(ca, cb, br); return; } /* nothing to hide behind */
+    /* Copies: the near-plane cut below moves the ends, and the caller's points
+     * (a mesh's transformed vertices among them) are shared with other edges. */
+    int32_t a[3] = { ca[0], ca[1], ca[2] }, b[3] = { cb[0], cb[1], cb[2] };
 
     /* CUT AT THE NEAR PLANE FIRST, with vpy3d_line_cam's own arithmetic, so the
      * pieces handed back to it are the ones it would have drawn anyway. Without
