@@ -391,6 +391,14 @@ typedef struct {
      * stopped; two different faults. At the end of the struct, to not move any
      * offsets. */
     uint32_t samples;
+    /* Ramps started while the zero clamp was still asserted, last frame. MUST BE ZERO: the
+     * clamp holds both integrators at the centre, so such a ramp draws nothing where it
+     * was asked and, lit, a line out of (0,0) instead. That was the "asterisk" in every
+     * vpy3d scene (kuroishi, the occlusion demo): the frame's first jump was too short to
+     * re-zero, and in the SR dialect the re-zero is the only thing that releases the clamp.
+     * Fixed 2026-10-01 in move_abs_internal; this proves it stays fixed. At the end of the
+     * struct, to not move any offsets. */
+    uint32_t ramps_clamped;
 } uvm2_stats_t;
 
 extern uvm2_stats_t uvm2_stats;

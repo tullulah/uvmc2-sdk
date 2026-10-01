@@ -212,6 +212,7 @@ uint32_t uvm2_sig_emitted = 2166136261u, uvm2_sig_reread, uvm2_sig_bad, uvm2_sig
 uint32_t uvm2_sig_copy, uvm2_sig_copy_bad, uvm2_sig_copy_laps;
 
 static uint32_t s_dropped;
+static uint32_t s_ramps_clamped;   /* see uvm2_stats.ramps_clamped */
 
 /* THE FRAME CLOSE HAS RESERVED ROOM. If the list fills up half way through the game, what
  * gets thrown away is the TAIL — and the tail is frame_end's close: blanking the beam, the
@@ -1328,6 +1329,9 @@ static void vxs_emit(void *ctx, uint32_t reg, uint32_t data, uint32_t delay_q8)
      * could ask the same thing from another translation unit — two calls per ramp in a game
      * with no audio. Exactly the same semantics. */
     if (reg == UVM2_VIA_T1CL && uvm2_smp_active()) smp_inject();
+    /* A ramp started with the clamp on draws nothing where it was asked: see
+     * uvm2_stats.ramps_clamped and the note in move_abs_internal. */
+    if (reg == UVM2_VIA_T1CH && (s_pcr & UVM2_PCR_ZERO_OFF) == 0) s_ramps_clamped++;
     /* set_porta owns the Port A cache, and the model writes PORTA on its own account.
      * Without this the cache would believe a value that is no longer in the DAC and would
      * skip the next write — a fault that only shows up now and then, which is the worst
@@ -2636,7 +2640,21 @@ static void move_abs_internal(int x, int y)
          * To re-measure: the clamp-analysis script over either capture's bus.csv. */
         const int far = uvm2_zero_jump > 0 && m >= uvm2_zero_jump;
         const int many = uvm2_zero_every > 0 && s_ramps_from_zero >= (uint32_t)uvm2_zero_every;
-        if (far || many) uvm2_draw_reset();
+        /* AND IF THE CLAMP IS STILL ON, WHATEVER THE DISTANCE. In the SR dialect the frame
+         * prologue leaves /ZERO asserted and the only thing that releases it is the re-zero
+         * block — which `far` and `many` only ask for on a LONG jump. A frame whose first
+         * stroke starts near the centre (a 3D scene looking at its subject: kuroishi's
+         * board, the occlusion demo's nearest box) jumped a few units and never released
+         * it. Its first strokes were then drawn with both integrators held at the origin:
+         * missing from the picture, and lit as a line out of (0,0). With chaining the whole
+         * first chain went with it — the "asterisk" of several arms; without it, one line.
+         *
+         * Found 2026-10-01 by dumping the BIOS's command list over RTT on a frozen frame
+         * and replaying it: PCR=CC at command 4, the first chain at 14-44, and the release
+         * (PCR=CE) only at 54. Releasing a clamp that is on cannot hurt anything — nothing
+         * moves while it is on. uvm2_stats.ramps_clamped proves it stays fixed. */
+        const int held = (s_pcr & UVM2_PCR_ZERO_OFF) == 0;
+        if (far || many || held) uvm2_draw_reset();
     }
     int dx = x - s_pos_x;
     int dy = y - s_pos_y;
@@ -2808,6 +2826,7 @@ void uvm2_frame_begin(void)
     s_cycles = 0;
     s_limit = UVM2_CMD_CAPACITY - UVM2_CMD_RESERVE;
     s_dropped              = 0;
+    s_ramps_clamped        = 0;
     uvm2_stats.vectors     = 0;
     uvm2_stats.moves       = 0;
     uvm2_stats.ramp_cycles = 0;
@@ -3164,6 +3183,7 @@ void uvm2_frame_end(void)
     s_cycles_pub[s_buf] = s_cycles;
     uvm2_stats.commands = s_count;
     uvm2_stats.dropped  = s_dropped;
+    uvm2_stats.ramps_clamped = s_ramps_clamped;
 
     uvm2_stats.vectors_last     = uvm2_stats.vectors;
     uvm2_stats.moves_last       = uvm2_stats.moves;
@@ -3248,6 +3268,7 @@ void uvm2_frame_end(void)
     uvm2_stats.commands   = s_count;
     uvm2_stats.bus_cycles = cycles;
     uvm2_stats.dropped    = s_dropped;
+    uvm2_stats.ramps_clamped = s_ramps_clamped;
 #endif
 
     /* Freeze this frame's per-frame counters where a debugger can still read them
