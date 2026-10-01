@@ -348,6 +348,15 @@ int vpy3d_shadow(const int32_t (*corners)[3], int n, int32_t lx, int32_t ly, int
  * if it is behind the near plane. What a level of detail picks a mesh by. */
 int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius);
 
+/* TERRAIN: a height map drawn as rows, with the hidden parts hidden — the
+ * floating horizon. `h` is rows × cols heights (row-major), cell `cell` apart,
+ * row 0 at z0 and column 0 at x0. Rows are drawn nearest first, and each shows
+ * only what rises above everything drawn before it in its column of the screen:
+ * what a ridge hides behind it stays hidden. For a camera above the land
+ * looking across it (the underside is never seen). Returns strokes drawn.
+ * The convex occluder is the wrong tool for land; this is the right one. */
+int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, int32_t cell, int br);
+
 /* ---- what did it cost, and did anything not fit ---- */
 typedef struct {
     uint16_t verts, faces, face_idx, edges;   /* pool high-water marks */

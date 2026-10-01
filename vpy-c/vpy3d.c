@@ -1114,3 +1114,81 @@ int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius)
     if (c[2] < s_near) return 0;
     return (int32_t)((int64_t)radius * s_focal / c[2]);
 }
+
+/* ── terrain, by the floating horizon ────────────────────────────────────── */
+#ifndef VPY3D_HORIZON_COLS
+#define VPY3D_HORIZON_COLS 256     /* columns across the screen the horizon is kept in */
+#endif
+static int32_t s_hz[VPY3D_HORIZON_COLS];
+/* THE ROW RAISES THE HORIZON WHEN IT IS DONE, not segment by segment. Raising it
+ * as each segment went made a row hide bits of ITSELF where its segments meet —
+ * rounding at the shared column — and the lines came out with small gaps. A row
+ * hides what is behind it, never itself. */
+static int32_t s_row[VPY3D_HORIZON_COLS];
+
+static int hz_col(int64_t x)        /* screen x -> horizon column, clamped */
+{
+    const int64_t c = (x + s_clip_x) * (VPY3D_HORIZON_COLS - 1) / (2 * (int64_t)s_clip_x);
+    return c < 0 ? 0 : (c >= VPY3D_HORIZON_COLS ? VPY3D_HORIZON_COLS - 1 : (int)c);
+}
+
+/* One segment of a row, on screen: the parts above the horizon are drawn, then
+ * the horizon rises to it. Returns strokes drawn. */
+static int hz_segment(int64_t x0, int64_t y0, int64_t x1, int64_t y1, int br)
+{
+    if (x1 < x0) { int64_t t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t; }
+    const int c0 = hz_col(x0), c1 = hz_col(x1);
+    int strokes = 0, run = -1;
+    int64_t rx = 0, ry = 0;
+    for (int c = c0; c <= c1 + 1; c++) {
+        int vis = 0; int64_t x = 0, y = 0;
+        if (c <= c1) {
+            /* this column's x, and the segment's y there */
+            x = c == c0 ? x0 : (c == c1 ? x1 : -(int64_t)s_clip_x + (int64_t)c * 2 * s_clip_x / (VPY3D_HORIZON_COLS - 1));
+            y = x1 == x0 ? (y0 > y1 ? y0 : y1) : y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+            vis = y >= s_hz[c];
+        }
+        if (vis && run < 0) { run = c; rx = x; ry = y; }
+        if (!vis && run >= 0) {
+            /* the run ended at the previous column */
+            const int pc = c - 1;
+            const int64_t px = pc == c1 ? x1 : -(int64_t)s_clip_x + (int64_t)pc * 2 * s_clip_x / (VPY3D_HORIZON_COLS - 1);
+            const int64_t py = x1 == x0 ? y1 : y0 + (y1 - y0) * (px - x0) / (x1 - x0);
+            if (px != rx || py != ry) { line_screen(rx, ry, px, py, br); strokes++; }
+            run = -1;
+        }
+    }
+    for (int c = c0; c <= c1; c++) {
+        const int64_t x = -(int64_t)s_clip_x + (int64_t)c * 2 * s_clip_x / (VPY3D_HORIZON_COLS - 1);
+        const int64_t xc = x < x0 ? x0 : (x > x1 ? x1 : x);
+        const int64_t y = x1 == x0 ? (y0 > y1 ? y0 : y1) : y0 + (y1 - y0) * (xc - x0) / (x1 - x0);
+        if (y > s_row[c]) s_row[c] = (int32_t)y;
+    }
+    return strokes;
+}
+
+int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, int32_t cell, int br)
+{
+    if (!h || cols < 2 || rows < 1) return 0;
+    for (int c = 0; c < VPY3D_HORIZON_COLS; c++) s_hz[c] = INT32_MIN;
+    /* near to far: the row whose middle is nearest the camera first */
+    int32_t mid0[3], mid1[3];
+    vpy3d_to_camera(x0 + cell * (cols - 1) / 2, 0, z0, mid0);
+    vpy3d_to_camera(x0 + cell * (cols - 1) / 2, 0, z0 + cell * (rows - 1), mid1);
+    const int forward = mid0[2] <= mid1[2];
+    int strokes = 0;
+    for (int k = 0; k < rows; k++) {
+        const int r = forward ? k : rows - 1 - k;
+        int64_t px = 0, py = 0; int have = 0;
+        for (int c = 0; c < VPY3D_HORIZON_COLS; c++) s_row[c] = INT32_MIN;
+        for (int c = 0; c < cols; c++) {
+            int32_t cam[3], sx, sy;
+            vpy3d_to_camera(x0 + cell * c, h[r * cols + c], z0 + cell * r, cam);
+            if (!vpy3d_project(cam, &sx, &sy)) { have = 0; continue; }   /* behind us: break the row */
+            if (have) strokes += hz_segment(px, py, sx, sy, br);
+            px = sx; py = sy; have = 1;
+        }
+        for (int c = 0; c < VPY3D_HORIZON_COLS; c++) if (s_row[c] > s_hz[c]) s_hz[c] = s_row[c];
+    }
+    return strokes;
+}
