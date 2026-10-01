@@ -22,15 +22,15 @@
  *   rate       steps per second (vpyp_set_rate), default 50 — one per frame
  *   material   restitution and friction in Q8 (256 = 1.0)
  *
- * SHAPES. Spheres and boxes, moving or static, and an optional floor plane.
+ * SHAPES. Spheres, boxes and convex hulls, moving or static, and an optional
+ * floor plane.
  * BODIES TURN: a hit off-centre spins them, boxes tip over edges and tumble,
  * balls roll. vpyp_rotation() gives the orientation as a Q14 matrix in the
  * layout of vpy_xf.m, so a game draws a body with exactly the turn it has.
  * Inertia is a scalar (the mean of the three axes): exact for spheres and
  * cubes, approximate for long boxes. A little spin damping is the rolling
- * resistance that lets a rolling ball stop and sleep. Box against box tests the
- * six face axes, not the nine edge-against-edge ones: two boxes meeting edge to
- * edge at a skew can sink into each other a little before a face takes over.
+ * resistance that lets a rolling ball stop and sleep. Box against box tests all
+ * fifteen axes: six faces and nine edge-against-edge.
  *   angles     4096 per turn, like vpy_sin_q14; spin in 4096ths of a turn per second
  * Rotation needs vpy_sin_q14 from vpy.c, which every libvpy game links.
  *
@@ -55,10 +55,20 @@
  *   - a ball sliding onto a rough floor starts rolling with spin within 1% of
  *     -v/r, and stops. On an open floor a rolling ball takes tens of seconds
  *     to stop — that is the rolling resistance, and walls stop it sooner
+ *   - a box dropped crosswise onto another's ridge rests on it within a unit
+ *     (with the face axes alone it fell straight through)
+ *   - a hull made as a cube stacks exactly like the box; a pyramid dropped
+ *     tipped ends flat on a face at that face's height; a ball on a hull's
+ *     corner rolls off it
+ *   - a ball on a joint swings with the physical pendulum's period within 1%;
+ *     a hinged door swings without sagging or tilting, and the same door on a
+ *     ball joint falls; a chain of five boxes stretches at most 4 units
  *   - bit-for-bit identical results from the same calls
  *
- * WHAT IT COSTS: ~19 KB of code and ~80 KB of RAM with the default tables,
- * almost all of it the contact table (VPYP_MAX_CONTACTS × ~100 bytes). The
+ * WHAT IT COSTS: ~42 KB of code and ~99 KB of RAM with the default tables
+ * (arm-none-eabi-gcc -O2, measured 2026-10-01), most of the RAM the contact
+ * table (VPYP_MAX_CONTACTS × ~100 bytes); the hull shapes are 8.7 KB of it and
+ * the joints 3.8 KB. The
  * peak measured was 395 contacts in a step with 64 bodies tumbling in a pit,
  * 308 with 48. A game with fewer bodies can define a smaller table.
  *
@@ -90,6 +100,28 @@ extern "C" {
 #define VPYP_MAX_CONTACTS 512     /* up to 4 per box pair: 384 overflowed with 64 bodies tumbling in a pit (measured) */
 #endif
 
+/* CONVEX HULLS: a shape registered once (vpyp_hull_shape) and shared by every
+ * body made from it. These size the table; a shape past them is refused. */
+#ifndef VPYP_MAX_HULLS
+#define VPYP_MAX_HULLS        8
+#endif
+#ifndef VPYP_HULL_MAX_VERTS
+#define VPYP_HULL_MAX_VERTS   24
+#endif
+#ifndef VPYP_HULL_MAX_FACES
+#define VPYP_HULL_MAX_FACES   24
+#endif
+#ifndef VPYP_HULL_MAX_EDGES
+#define VPYP_HULL_MAX_EDGES   48
+#endif
+#ifndef VPYP_HULL_MAX_INDICES
+#define VPYP_HULL_MAX_INDICES 96   /* all the faces' corners together */
+#endif
+
+#ifndef VPYP_MAX_JOINTS
+#define VPYP_MAX_JOINTS       16
+#endif
+
 #define VPYP_FLOOR   (-2)         /* the floor's id in contacts and ray hits */
 #define VPYP_NONE    (-1)
 
@@ -111,6 +143,30 @@ void vpyp_step(void);
 int  vpyp_add_sphere(int32_t x, int32_t y, int32_t z, int32_t radius, int32_t mass);
 int  vpyp_add_box(int32_t x, int32_t y, int32_t z,
                   int32_t half_x, int32_t half_y, int32_t half_z, int32_t mass);
+/* A CONVEX HULL. `xyz` is nverts corners (x,y,z, world units, around the
+ * body's centre: the origin is the point it turns about and must be inside);
+ * `faces` is each face as a count and that many corner indices, in either
+ * winding, ending with a count of 0 — a vpy3d mesh's own faces will do:
+ *     { 4, 0,1,2,3,  3, 0,4,1, ..., 0 }
+ * The shape is CHECKED: every face flat (to two units), convex (every corner
+ * behind every face, to a unit), faces of 3 corners or more, the origin inside, and the tables big enough.
+ * Returns a shape id for vpyp_add_hull, or VPYP_NONE — then vpyp_hull_error()
+ * says why and vpyp_stats()->shapes_refused counts it. vpyp_reset() forgets
+ * every shape. COST: a hull pair tests every face of both and every pair of
+ * edge directions, so keep hulls small (a dozen corners); a box among hulls
+ * is tested as a hull of eight. */
+int  vpyp_hull_shape(const int16_t *xyz, int nverts, const uint8_t *faces);
+int  vpyp_add_hull(int32_t x, int32_t y, int32_t z, int shape, int32_t mass);
+enum {
+    VPYP_HULL_OK = 0,
+    VPYP_HULL_TABLE_FULL,        /* VPYP_MAX_HULLS shapes already */
+    VPYP_HULL_TOO_BIG,           /* past a VPYP_HULL_MAX_* limit */
+    VPYP_HULL_BAD_FACE,          /* < 3 corners, an index out of range, no area */
+    VPYP_HULL_NOT_FLAT,          /* a face's corners are not on one plane */
+    VPYP_HULL_NOT_CONVEX,        /* a corner in front of a face */
+    VPYP_HULL_ORIGIN_OUTSIDE     /* the centre is not inside the solid */
+};
+int  vpyp_hull_error(void);      /* why the last vpyp_hull_shape refused */
 void vpyp_remove(int id);
 int  vpyp_alive(int id);
 
@@ -145,6 +201,23 @@ void vpyp_spin(int id, int32_t *wx, int32_t *wy, int32_t *wz);
 void vpyp_rotation(int id, int32_t m[9]);
 void vpyp_velocity(int id, int32_t *vx, int32_t *vy, int32_t *vz);  /* units/s */
 int  vpyp_sleeping(int id);
+
+/* ---- joints ----------------------------------------------------------------
+ * A BALL JOINT holds body a and body b together at the world point (px,py,pz)
+ * as it is now: they may turn any way about it. b = VPYP_NONE pins a to that
+ * point of the world. A HINGE also keeps the axis (ax,ay,az, any length) of
+ * each body lined up, so they turn about it only: a door on its frame, a wheel
+ * on its axle, the links of a flail. No angle limits, no motor.
+ * Two joined bodies do not collide with each other. Removing a body removes
+ * its joints. Returns the joint's id, or VPYP_NONE (counted in joints_refused):
+ * the table full, a body that is not there, a body joined to itself, two
+ * things that cannot move, a hinge with no axis.
+ * A joint is held by impulses, not by moving the bodies: under a heavy load it
+ * gives a little, and vpyp_stats()->joint_stretch says how much. */
+int  vpyp_ball_joint(int a, int b, int32_t px, int32_t py, int32_t pz);
+int  vpyp_hinge(int a, int b, int32_t px, int32_t py, int32_t pz, int32_t ax, int32_t ay, int32_t az);
+void vpyp_joint_remove(int joint);
+int  vpyp_joint_alive(int joint);
 
 /* ---- what touched what, this step ----------------------------------------
  * Every contact of the last vpyp_step, with how hard it was. `impulse` is the
@@ -193,6 +266,11 @@ typedef struct {
     uint32_t refused;           /* bodies not added because the table was full: a
                                    limit the game has to handle, counted so it is
                                    never silent */
+    uint32_t joints;            /* in use */
+    uint32_t joints_refused;    /* vpyp_ball_joint / vpyp_hinge said no */
+    int32_t  joint_stretch;     /* the worst joint after the last step: units between
+                                   the two points it should hold together */
+    uint32_t shapes_refused;    /* hull shapes not registered: vpyp_hull_error() */
     uint32_t contacts_dropped;  /* contacts past VPYP_MAX_CONTACTS: two bodies that
                                    may pass through each other. NOT ZERO = raise it */
 } vpyp_stats_t;

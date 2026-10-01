@@ -209,6 +209,196 @@ int main(void){
   vpyp_position(shot,&x,&y,&z);
   CHECK(x==100 && vpyp_contact_count()==0, "shot inside its shooter, other mask: flew to x=%d untouched", x);
 
+  /* 13. edge across edge: a box dropped crosswise onto another's ridge, both
+   *     turned 45 degrees, rests on the ridge (edges touch at y = 2 sqrt2 h)
+   *     instead of sinking into it */
+  { vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    const int h = 100; const double rest = 2*sqrt(2.0)*h;
+    int A = vpyp_add_box(0,0,0,h,h,h,0); vpyp_set_rotation(A,0,0,1,512);
+    int B = vpyp_add_box(0,400,0,h,h,h,1); vpyp_set_rotation(B,1,0,0,512);
+    int worst = 0;
+    for (int i=0;i<40;i++){ vpyp_step(); vpyp_position(B,&x,&y,&z);
+      const int sink = (int)lround(rest - y); if (sink > worst) worst = sink; }
+    CHECK(worst <= 3, "box crosswise on a ridge: sinks at most %d units (rest at y=%.0f)", worst, rest);
+    vpyp_position(B,&x,&y,&z);
+    CHECK(y > rest - 5, "and is held there: y=%d after 0.8 s", y);
+  }
+
+  /* 14. convex hulls */
+  { static const int16_t CUBE[8*3] = { -100,-100,-100, 100,-100,-100, -100,100,-100, 100,100,-100,
+                                       -100,-100,100, 100,-100,100, -100,100,100, 100,100,100 };
+    static const uint8_t CUBE_F[] = { 4,0,2,6,4, 4,1,3,7,5, 4,0,1,5,4, 4,2,3,7,6, 4,0,1,3,2, 4,4,5,7,6, 0 };
+    /* a hull made as a cube does what the box does */
+    int32_t yb[2];
+    for (int kind=0; kind<2; kind++) {
+      vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,64,128);
+      const int sh = vpyp_hull_shape(CUBE, 8, CUBE_F);
+      int top=-1;
+      for (int i=0;i<4;i++) top = kind ? vpyp_add_hull(0,100+i*200,0,sh,1) : vpyp_add_box(0,100+i*200,0,100,100,100,1);
+      for (int i=0;i<400;i++) vpyp_step();
+      vpyp_position(top,&x,&y,&z); yb[kind]=y;
+      if (kind) CHECK(abs(y-700)<=6 && abs(x)<=6 && vpyp_stats()->awake==0, "4 hull cubes stack and sleep: top at (%d,%d), expected (0,700); awake %u", x, y, vpyp_stats()->awake);
+    }
+    CHECK(abs(yb[0]-yb[1])<=3, "the same stack of boxes: top at y=%d against the hulls' %d", yb[0], yb[1]);
+
+    /* a pyramid (square base 200, apex 200 above the base) dropped tipped ends on its base */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,64,128);
+    static const int16_t PYR[5*3] = { -100,-50,-100, 100,-50,-100, 100,-50,100, -100,-50,100, 0,150,0 };
+    static const uint8_t PYR_F[] = { 4,0,1,2,3, 3,0,1,4, 3,1,2,4, 3,2,3,4, 3,3,0,4, 0 };
+    int ps = vpyp_hull_shape(PYR, 5, PYR_F);
+    int p = vpyp_add_hull(0,400,0,ps,1); vpyp_set_rotation(p,1,0,1,700);
+    for (int i=0;i<500;i++) vpyp_step();
+    /* it ends FLAT on a face — base or side, both are stable for this pyramid —
+     * with its centre that face's distance above the floor */
+    int32_t m[9]; vpyp_rotation(p,m); vpyp_position(p,&x,&y,&z);
+    const double fn[5][3] = { {0,-1,0}, {0,1,-2}, {2,1,0}, {0,1,2}, {-2,1,0} };   /* outward, unnormalised */
+    const double fd[5] = { 50, 150, 150, 150, 150 };                              /* n·x = d, unnormalised */
+    int flat = -1; double want = 0;
+    for (int f=0; f<5; f++) {
+      const double l = sqrt(fn[f][0]*fn[f][0]+fn[f][1]*fn[f][1]+fn[f][2]*fn[f][2]);
+      const double wy = (m[3]*fn[f][0] + m[4]*fn[f][1] + m[5]*fn[f][2]) / 16384.0 / l;   /* world y of the normal */
+      if (wy < -0.999) { flat = f; want = fd[f] / l; }
+    }
+    CHECK(flat >= 0 && fabs(y-want)<=3 && vpyp_sleeping(p), "a pyramid dropped tipped lands flat on face %d: centre y=%d (%.0f), asleep %d", flat, y, want, vpyp_sleeping(p));
+
+    /* a ball dropped on a hull comes to rest on top of it */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,64,128);
+    int cs = vpyp_hull_shape(CUBE, 8, CUBE_F);
+    vpyp_add_hull(0,100,0,cs,0);
+    int ball = vpyp_add_sphere(0,500,0,50,1);
+    for (int i=0;i<300;i++) vpyp_step();
+    vpyp_position(ball,&x,&y,&z);
+    CHECK(abs(y-250)<=3, "a ball rests on a static hull cube: y=%d (250)", y);
+
+    /* and on its corner it rolls off rather than sinking in */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,64,128);
+    cs = vpyp_hull_shape(CUBE, 8, CUBE_F);
+    vpyp_add_hull(0,100,0,cs,0);
+    ball = vpyp_add_sphere(130,500,130,50,1);
+    int worst = 0;
+    for (int i=0;i<300;i++){ vpyp_step(); vpyp_position(ball,&x,&y,&z);
+      const double dx=x-100.0, dy=y-200.0, dz=z-100.0; const double d=sqrt(dx*dx+dy*dy+dz*dz);
+      if (x<100 && z<100 && y>200) { /* over the top face */ if (250-y>worst) worst=250-y; }
+      else if (d < 50-worst) worst=(int)(50-d); }
+    vpyp_position(ball,&x,&y,&z);
+    CHECK(worst<=3 && y<=60, "a ball on the corner of a hull rolls off it: sank %d at most, now at y=%d", worst, y);
+
+    /* hull edge across box edge, as test 13 */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    cs = vpyp_hull_shape(CUBE, 8, CUBE_F);
+    int A = vpyp_add_box(0,0,0,100,100,100,0); vpyp_set_rotation(A,0,0,1,512);
+    int B = vpyp_add_hull(0,400,0,cs,1); vpyp_set_rotation(B,1,0,0,512);
+    worst = 0;
+    for (int i=0;i<40;i++){ vpyp_step(); vpyp_position(B,&x,&y,&z);
+      const int sink = (int)lround(2*sqrt(2.0)*100 - y); if (sink > worst) worst = sink; }
+    CHECK(worst <= 3, "hull crosswise on a box's ridge: sinks at most %d units", worst);
+
+    /* a ray hits a hull's face */
+    vpyp_reset();
+    cs = vpyp_hull_shape(PYR, 5, PYR_F);
+    vpyp_add_hull(0,0,0,cs,0);
+    vpyp_hit h;
+    int id = vpyp_raycast(0,1000,0, 0,-1,0, 5000, 0xFF, &h);
+    CHECK(id==0 && h.y==150 && h.dist==850, "ray down onto the pyramid's apex: y=%d (150), dist %d", h.y, h.dist);
+    id = vpyp_raycast(-1000,-20,0, 1,0,0, 5000, 0xFF, &h);
+    const double sx = -(100.0 * (150+20) / 200.0);       /* the slope at y=-20 */
+    CHECK(id==0 && abs(h.x-(int)lround(sx))<=1 && h.nx<0 && h.ny>0, "ray along x into its side: x=%d (%.0f), normal (%d,%d)", h.x, sx, h.nx, h.ny);
+    /* x + y = 0 meets the -x side (-2x + y = 150) at (-50, 50) */
+    id = vpyp_raycast(-500,500,0, 3,-3,0, 5000, 0xFF, &h);
+    CHECK(id==0 && abs(h.x+50)<=1 && abs(h.y-50)<=1 && abs(h.dist-636)<=1, "a short direction (3,-3,0) is followed exactly: hit at (%d,%d) dist %d, expected (-50,50) 636", h.x, h.y, h.dist);
+
+    /* refusals are loud */
+    vpyp_reset();
+    static const int16_t SUNK[8*3] = { -100,-100,-100, 100,-100,-100, -100,100,-100, 100,100,-100,
+                                       -100,-100,100, 100,-100,100, -100,100,100, 30,30,30 };
+    int bad = vpyp_hull_shape(SUNK, 8, CUBE_F);
+    CHECK(bad==VPYP_NONE && vpyp_hull_error()==VPYP_HULL_NOT_FLAT && vpyp_stats()->shapes_refused==1, "a cube with a corner pushed in is refused: error %d (NOT_FLAT)", vpyp_hull_error());
+    static const int16_t SPIKE[6*3] = { -100,-50,-100, 100,-50,-100, 100,-50,100, -100,-50,100, 0,150,0, 0,300,0 };
+    bad = vpyp_hull_shape(SPIKE, 6, PYR_F);
+    CHECK(bad==VPYP_NONE && vpyp_hull_error()==VPYP_HULL_NOT_CONVEX, "a corner above the apex, outside every face: error %d (NOT_CONVEX)", vpyp_hull_error());
+    static const int16_t OFF[5*3] = { 400,-50,-100, 600,-50,-100, 600,-50,100, 400,-50,100, 500,150,0 };
+    bad = vpyp_hull_shape(OFF, 5, PYR_F);
+    CHECK(bad==VPYP_NONE && vpyp_hull_error()==VPYP_HULL_ORIGIN_OUTSIDE, "a shape around (500,0,0) is refused: error %d (ORIGIN_OUTSIDE)", vpyp_hull_error());
+    static const uint8_t BADF[] = { 4,0,1,2,9, 0 };
+    bad = vpyp_hull_shape(PYR, 5, BADF);
+    CHECK(bad==VPYP_NONE && vpyp_hull_error()==VPYP_HULL_BAD_FACE, "a face naming corner 9 of 5 is refused: error %d (BAD_FACE)", vpyp_hull_error());
+    int made=0; for (int i=0;i<VPYP_MAX_HULLS+1;i++) made += vpyp_hull_shape(PYR,5,PYR_F)>=0;
+    CHECK(made==VPYP_MAX_HULLS && vpyp_hull_error()==VPYP_HULL_TABLE_FULL, "%d shapes made of %d asked, the last refused: TABLE_FULL", made, VPYP_MAX_HULLS+1);
+  }
+
+  /* 15. joints */
+  { /* a ball on a joint is a physical pendulum: T = 2 pi sqrt((2/5 r^2 + L^2) / (g L)) */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    const int L = 500, r = 50; const double th = 0.15;
+    int b = vpyp_add_sphere((int)lround(L*sin(th)), 1000-(int)lround(L*cos(th)), 0, r, 1);
+    vpyp_set_material(b,0,0);
+    vpyp_ball_joint(b, VPYP_NONE, 0,1000,0);
+    int cross_n=0, first=-1, last=-1; int32_t px=1; int stretch=0;
+    for (int i=0;i<500;i++){ vpyp_step(); vpyp_position(b,&x,&y,&z);
+      if ((px>0)!=(x>0)) { cross_n++; if (first<0) first=i; last=i; } px=x;
+      if (vpyp_stats()->joint_stretch>stretch) stretch=vpyp_stats()->joint_stretch; }
+    const double T = 2.0*(last-first)/(cross_n-1)/50.0, Tth = 2*M_PI*sqrt((0.4*r*r+(double)L*L)/(9800.0*L));
+    CHECK(fabs(T-Tth) < 0.03*Tth, "pendulum on a ball joint: period %.3f s, theory %.3f s", T, Tth);
+    CHECK(stretch <= 2, "and the joint holds: stretch at most %d units", stretch);
+
+    /* hanging still it sleeps: the joint holds it up */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    b = vpyp_add_sphere(0,500,0,50,1); vpyp_ball_joint(b, VPYP_NONE, 0,1000,0);
+    for (int i=0;i<150;i++) vpyp_step();
+    vpyp_position(b,&x,&y,&z);
+    CHECK(vpyp_sleeping(b) && abs(y-500)<=2, "a ball hanging still on a joint sleeps: asleep %d, y=%d (500)", vpyp_sleeping(b), y);
+
+    /* a chain of five boxes from a pin, let go sideways: the links hold */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    int link[5]; stretch=0;
+    for (int i=0;i<5;i++) { link[i] = vpyp_add_box(50+i*100,1000,0,50,15,15,1);
+      vpyp_ball_joint(link[i], i ? link[i-1] : VPYP_NONE, i*100,1000,0); }
+    int lowest=1000;
+    for (int i=0;i<200;i++){ vpyp_step();
+      if (vpyp_stats()->joint_stretch>stretch) stretch=vpyp_stats()->joint_stretch;
+      vpyp_position(link[4],&x,&y,&z); if (y<lowest) lowest=y; }
+    CHECK(stretch <= 6 && lowest < 600, "a chain of 5 boxes swings down (end reached y=%d) and stretches at most %d units", lowest, stretch);
+
+    /* a door on a hinge about y: it swings, and it does not sag or tilt */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    int door = vpyp_add_box(200,0,0,200,300,20,4);
+    vpyp_hinge(door, VPYP_NONE, 0,0,0, 0,1,0);
+    vpyp_apply_impulse_at(door, 0,0,4*1500, 400,0,0);
+    int sag=0, tilt=16384; stretch=0;
+    for (int i=0;i<100;i++){ vpyp_step(); vpyp_position(door,&x,&y,&z); int32_t m[9]; vpyp_rotation(door,m);
+      if (-y>sag) sag=-y; if (m[4]<tilt) tilt=m[4];
+      if (vpyp_stats()->joint_stretch>stretch) stretch=vpyp_stats()->joint_stretch; }
+    int32_t wx,wy,wz; vpyp_spin(door,&wx,&wy,&wz);
+    const double dr = sqrt((double)x*x+(double)z*z);
+    CHECK(sag<=3 && tilt>16300 && fabs(dr-200)<=3 && abs(wy)>0, "a hinged door swings about y (spin %d) without sagging (%d) or tilting (up %d/16384), centre %.0f from the hinge (200)", wy, sag, tilt, dr);
+    CHECK(stretch<=3, "and its hinge holds: stretch at most %d", stretch);
+    /* the same door on a ball joint is not held upright: the axis is what the hinge adds */
+    vpyp_reset(); vpyp_set_gravity(0,-9800,0);
+    door = vpyp_add_box(200,0,0,200,300,20,4);
+    vpyp_ball_joint(door, VPYP_NONE, 0,0,0);
+    int low = 0;
+    for (int i=0;i<100;i++) { vpyp_step(); vpyp_position(door,&x,&y,&z); if (y<low) low=y; }
+    CHECK(low < -150, "the same door on a ball joint swings down instead: centre reached y=%d", low);
+
+    /* two halves of a hinge overlap and do not push each other apart */
+    vpyp_reset();
+    int h1 = vpyp_add_box(0,0,0,100,100,100,1), h2 = vpyp_add_box(150,0,0,100,100,100,1);
+    vpyp_hinge(h1,h2, 75,0,0, 0,0,1);
+    for (int i=0;i<50;i++) vpyp_step();
+    vpyp_position(h2,&x,&y,&z);
+    CHECK(x==150 && vpyp_contact_count()==0, "joined bodies overlapping by 50 are left alone: x=%d, contacts %d", x, vpyp_contact_count());
+    vpyp_remove(h1);
+    CHECK(vpyp_stats()->joints==0 || (vpyp_step(), vpyp_stats()->joints==0), "removing a body removes its joint (%u left)", vpyp_stats()->joints);
+
+    /* refusals */
+    vpyp_reset();
+    int s0 = vpyp_add_box(0,0,0,10,10,10,0), m1 = vpyp_add_box(0,0,0,10,10,10,1);
+    int bad = (vpyp_ball_joint(m1,m1,0,0,0)==VPYP_NONE) + (vpyp_ball_joint(s0,VPYP_NONE,0,0,0)==VPYP_NONE)
+            + (vpyp_hinge(m1,s0,0,0,0,0,0,0)==VPYP_NONE) + (vpyp_ball_joint(m1,40,0,0,0)==VPYP_NONE);
+    int madej=0; for (int i=0;i<VPYP_MAX_JOINTS+1;i++) madej += vpyp_ball_joint(m1,VPYP_NONE,0,0,0)>=0;
+    CHECK(bad==4 && madej==VPYP_MAX_JOINTS && vpyp_stats()->joints_refused==5, "joints refused: self, static to world, no axis, no body, table full (%u counted)", vpyp_stats()->joints_refused);
+  }
+
   printf("%s (%d failed)\n", fails?"FAILED":"ALL OK", fails);
   return fails;
 }
