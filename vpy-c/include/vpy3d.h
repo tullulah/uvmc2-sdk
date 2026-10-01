@@ -167,6 +167,7 @@ typedef struct {
     uint16_t f0, nf;
     uint16_t e0, ne;
     uint8_t  open;    /* 1 = a plate, not a solid: its outline is always drawn */
+    int16_t  hard_cos; /* the crease threshold it was built with: a dent re-applies it */
 } vpy_mesh;
 
 /* Crease threshold: two faces meeting at a sharper angle than this keep their
@@ -187,6 +188,24 @@ void vpy3d_mesh_open(vpy_mesh *m, int open);  /* mark a plate after building it 
 void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br);
 /* A built mesh's edges in model space, all of them (visible or not). For
  * effects that take a mesh apart — vpyfx_shatter. 0 if `e` is out of range. */
+/* DENTS. A mesh is shared by everything drawn with it, so an object that can
+ * be dented needs ITS OWN copy: vpy3d_mesh_copy(&mine, &shared). The copy uses
+ * pool space once; copying again into a mesh that is already a copy of the same
+ * shape resets it in place and uses none — that is how a game recycles a dented
+ * object. 0 if the pools are full (counted in vpy3d_error/stats overflow).
+ *
+ * vpy3d_mesh_dent moves every vertex within `radius` of the point (model
+ * space) along the direction, by `depth` at the point and less towards the
+ * rim, then works the normals, creases and straight runs out again — so a flat
+ * face pushed in shows the fold. A face only bends where it HAS vertices: give
+ * a dentable box a vertex in the middle of each face. Dents are drawing only;
+ * a physics body keeps its shape. vpy3d_world_to_model takes a hit point from
+ * the world into the mesh's own space (directions: pass place->t as zero). */
+int  vpy3d_mesh_copy(vpy_mesh *dst, const vpy_mesh *src);
+void vpy3d_mesh_dent(vpy_mesh *m, int32_t px, int32_t py, int32_t pz,
+                     int32_t dx, int32_t dy, int32_t dz, int32_t depth, int32_t radius);
+void vpy3d_world_to_model(const vpy_xf *place, int32_t wx, int32_t wy, int32_t wz,
+                          int32_t *mx, int32_t *my, int32_t *mz);
 int  vpy3d_mesh_edge_count(const vpy_mesh *m);
 int  vpy3d_mesh_edge(const vpy_mesh *m, int e, int32_t a[3], int32_t b[3]);
 

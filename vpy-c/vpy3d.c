@@ -428,13 +428,13 @@ static int edge_of(vpy_mesh *m, int a, int b, int face)
     return m->ne++;
 }
 
-int vpy3d_mesh_end(int hard_cos_q14)
+/* NORMALS, CREASES AND STRAIGHT RUNS, from the mesh's vertices as they are now.
+ * mesh_end runs it once; vpy3d_mesh_dent runs it again after moving vertices,
+ * because a dent changes all three: a flat face folds into a crease, and two
+ * edges that were one straight line stop being one — merging them into a single
+ * stroke would then draw a line that is not there. */
+static void mesh_geometry(vpy_mesh *m)
 {
-    if (!B) return 0;
-    vpy_mesh *m = B;
-    B = 0;
-    uint32_t bad = s_stats.overflow;
-
     /* --- face normals, by Newell's method ---------------------------------
      * Newell rather than a cross product of the first three vertices: it uses
      * every vertex, so it survives a quad that is slightly non-planar and a
@@ -473,15 +473,6 @@ int vpy3d_mesh_end(int hard_cos_q14)
         PN[fi][0] = (int16_t)u[0]; PN[fi][1] = (int16_t)u[1]; PN[fi][2] = (int16_t)u[2];
     }
 
-    /* --- the edge table, with the face either side ------------------------ */
-    for (int f = 0; f < m->nf; f++) {
-        int fi = m->f0 + f;
-        int n = PFn[fi];
-        const uint16_t *iv = &PFV[PFs[fi]];
-        for (int i = 0; i < n; i++)
-            if (edge_of(m, iv[i], iv[(i + 1) % n], f) < 0) break;
-    }
-
     /* --- which edges are creases ------------------------------------------ */
     for (int e = 0; e < m->ne; e++) {
         vpy3d_edge *E = &PE[m->e0 + e];
@@ -489,7 +480,7 @@ int vpy3d_mesh_end(int hard_cos_q14)
         const int16_t *p = PN[m->f0 + E->f0], *q = PN[m->f0 + E->f1];
         int32_t dot = ((int32_t)p[0] * q[0] + (int32_t)p[1] * q[1]
                      + (int32_t)p[2] * q[2]) >> 14;
-        E->hard = (uint8_t)(dot < hard_cos_q14);
+        E->hard = (uint8_t)(dot < m->hard_cos);
     }
 
     /* --- straight-run links ------------------------------------------------
@@ -525,11 +516,106 @@ int vpy3d_mesh_end(int hard_cos_q14)
         }
     }
 
+}
+
+int vpy3d_mesh_end(int hard_cos_q14)
+{
+    if (!B) return 0;
+    vpy_mesh *m = B;
+    B = 0;
+    uint32_t bad = s_stats.overflow;
+    m->hard_cos = (int16_t)hard_cos_q14;
+
+    /* --- the edge table, with the face either side ------------------------ */
+    for (int f = 0; f < m->nf; f++) {
+        int fi = m->f0 + f;
+        int n = PFn[fi];
+        const uint16_t *iv = &PFV[PFs[fi]];
+        for (int i = 0; i < n; i++)
+            if (edge_of(m, iv[i], iv[(i + 1) % n], f) < 0) break;
+    }
+
+    mesh_geometry(m);
+
     if (nPV > s_stats.verts)    s_stats.verts    = (uint16_t)nPV;
     if (nPF > s_stats.faces)    s_stats.faces    = (uint16_t)nPF;
     if (nPFV > s_stats.face_idx) s_stats.face_idx = (uint16_t)nPFV;
     if (nPE > s_stats.edges)    s_stats.edges    = (uint16_t)nPE;
     return s_stats.overflow == bad;
+}
+
+/* ── a mesh of its own, and dents in it ─────────────────────────────────── */
+int vpy3d_mesh_copy(vpy_mesh *dst, const vpy_mesh *src)
+{
+    if (!dst || !src) return 0;
+    const int same = dst->nv == src->nv && dst->nf == src->nf && dst->ne == src->ne
+                  && dst->v0 != src->v0 && dst->nv;
+    if (!same) {
+        int fv = 0;
+        for (int f = 0; f < src->nf; f++) fv += PFn[src->f0 + f];
+        if (nPV + src->nv > VPY3D_POOL_V || nPF + src->nf > VPY3D_POOL_F ||
+            nPFV + fv > VPY3D_POOL_FV || nPE + src->ne > VPY3D_POOL_E) {
+            s_stats.overflow++;
+            return 0;
+        }
+        dst->v0 = (uint16_t)nPV; nPV += src->nv;
+        dst->f0 = (uint16_t)nPF; nPF += src->nf;
+        dst->e0 = (uint16_t)nPE; nPE += src->ne;
+        dst->nv = src->nv; dst->nf = src->nf; dst->ne = src->ne;
+        for (int f = 0; f < src->nf; f++) {                    /* the faces' vertex lists */
+            const int sf = src->f0 + f, df = dst->f0 + f;
+            PFs[df] = (uint16_t)nPFV; PFn[df] = PFn[sf];
+            for (int i = 0; i < PFn[sf]; i++) PFV[nPFV++] = PFV[PFs[sf] + i];
+        }
+        if (nPV > s_stats.verts) s_stats.verts = (uint16_t)nPV;
+        if (nPF > s_stats.faces) s_stats.faces = (uint16_t)nPF;
+        if (nPFV > s_stats.face_idx) s_stats.face_idx = (uint16_t)nPFV;
+        if (nPE > s_stats.edges) s_stats.edges = (uint16_t)nPE;
+    }
+    /* reset (or fill) everything that depends on the shape */
+    for (int i = 0; i < src->nv; i++)
+        for (int k = 0; k < 3; k++) PV[dst->v0 + i][k] = PV[src->v0 + i][k];
+    for (int f = 0; f < src->nf; f++)
+        for (int k = 0; k < 3; k++) PN[dst->f0 + f][k] = PN[src->f0 + f][k];
+    for (int e = 0; e < src->ne; e++) PE[dst->e0 + e] = PE[src->e0 + e];
+    dst->open = src->open;
+    dst->hard_cos = src->hard_cos;
+    return 1;
+}
+
+void vpy3d_mesh_dent(vpy_mesh *m, int32_t px, int32_t py, int32_t pz,
+                     int32_t dx, int32_t dy, int32_t dz, int32_t depth, int32_t radius)
+{
+    if (!m || radius <= 0 || depth == 0) return;
+    const int64_t dl = isqrt64((int64_t)dx * dx + (int64_t)dy * dy + (int64_t)dz * dz);
+    if (dl == 0) return;
+    int moved = 0;
+    for (int i = 0; i < m->nv; i++) {
+        int16_t *v = PV[m->v0 + i];
+        const int64_t ex = v[0] - px, ey = v[1] - py, ez = v[2] - pz;
+        const int64_t d = isqrt64(ex * ex + ey * ey + ez * ez);
+        if (d >= radius) continue;
+        const int64_t push = (int64_t)depth * (radius - d) / radius;    /* falls off to the rim */
+        const int64_t mv[3] = { dx * push / dl, dy * push / dl, dz * push / dl };
+        for (int k = 0; k < 3; k++) {
+            int64_t c = v[k] + mv[k];
+            if (c > 32767) c = 32767;
+            if (c < -32768) c = -32768;
+            v[k] = (int16_t)c;
+        }
+        moved = 1;
+    }
+    if (moved) mesh_geometry(m);
+}
+
+void vpy3d_world_to_model(const vpy_xf *place, int32_t wx, int32_t wy, int32_t wz,
+                          int32_t *mx, int32_t *my, int32_t *mz)
+{
+    /* the rotation is orthonormal, so its inverse is its transpose */
+    const int64_t r[3] = { (int64_t)wx - place->t[0], (int64_t)wy - place->t[1], (int64_t)wz - place->t[2] };
+    *mx = (int32_t)((place->m[0] * r[0] + place->m[3] * r[1] + place->m[6] * r[2]) >> 14);
+    *my = (int32_t)((place->m[1] * r[0] + place->m[4] * r[1] + place->m[7] * r[2]) >> 14);
+    *mz = (int32_t)((place->m[2] * r[0] + place->m[5] * r[1] + place->m[8] * r[2]) >> 14);
 }
 
 /* ── drawing a mesh ──────────────────────────────────────────────────────── */
