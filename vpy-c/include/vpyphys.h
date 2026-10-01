@@ -22,10 +22,17 @@
  *   rate       steps per second (vpyp_set_rate), default 50 — one per frame
  *   material   restitution and friction in Q8 (256 = 1.0)
  *
- * SHAPES. Spheres and axis-aligned boxes, moving or static, and an optional
- * floor plane. BOXES DO NOT ROTATE: they collide as axis-aligned boxes whatever
- * a game draws, and there is no angular velocity yet. Spinning a box's MESH is
- * cosmetic. Rotation is the next step for this module (see TODO.md).
+ * SHAPES. Spheres and boxes, moving or static, and an optional floor plane.
+ * BODIES TURN: a hit off-centre spins them, boxes tip over edges and tumble,
+ * balls roll. vpyp_rotation() gives the orientation as a Q14 matrix in the
+ * layout of vpy_xf.m, so a game draws a body with exactly the turn it has.
+ * Inertia is a scalar (the mean of the three axes): exact for spheres and
+ * cubes, approximate for long boxes. A little spin damping is the rolling
+ * resistance that lets a rolling ball stop and sleep. Box against box tests the
+ * six face axes, not the nine edge-against-edge ones: two boxes meeting edge to
+ * edge at a skew can sink into each other a little before a face takes over.
+ *   angles     4096 per turn, like vpy_sin_q14; spin in 4096ths of a turn per second
+ * Rotation needs vpy_sin_q14 from vpy.c, which every libvpy game links.
  *
  * THE SOLVER is sequential impulses with warm starting: gravity into the
  * velocities, contacts found (speculatively — see below), last step's impulses
@@ -38,11 +45,22 @@
  *   - velocity under gravity exactly; position half a step AHEAD of the
  *     continuous formula — the integrator is semi-implicit Euler, the stable
  *     choice, and that is its known bias (2.5% of the drop after 0.5 s at 50 Hz)
- *   - a stack of five boxes holds within 3 units and sleeps; pull the bottom
- *     one out and the rest fall
+ *   - a stack of five boxes holds upright, within 6 units of drift at the top,
+ *     and sleeps; pull the bottom one out and the rest fall
  *   - a box sliding at 2000 units/s with friction 0.5 stops within 5% of
- *     v²/(2µg); an elastic head-on collision swaps velocities; momentum is kept
+ *     v²/(2µg), turning or not; an elastic head-on collision swaps velocities;
+ *     momentum is kept
+ *   - a box dropped on an edge ends on a face; a push off-centre spins it the
+ *     right way; a tall box pushed at the top tips over
+ *   - a ball sliding onto a rough floor starts rolling with spin within 1% of
+ *     -v/r, and stops. On an open floor a rolling ball takes tens of seconds
+ *     to stop — that is the rolling resistance, and walls stop it sooner
  *   - bit-for-bit identical results from the same calls
+ *
+ * WHAT IT COSTS: ~19 KB of code and ~80 KB of RAM with the default tables,
+ * almost all of it the contact table (VPYP_MAX_CONTACTS × ~100 bytes). The
+ * peak measured was 395 contacts in a step with 64 bodies tumbling in a pit,
+ * 308 with 48. A game with fewer bodies can define a smaller table.
  *
  * CONTACTS ARE SPECULATIVE: found as far ahead as the bodies can travel in one
  * substep, and the solver lets the gap close but no further. So a fast body
@@ -69,7 +87,7 @@ extern "C" {
 #define VPYP_MAX_BODIES   64      /* every pair is tested: 64 is 2016 pairs a step */
 #endif
 #ifndef VPYP_MAX_CONTACTS
-#define VPYP_MAX_CONTACTS 256     /* 128 overflowed with 64 bodies piled up (measured) */
+#define VPYP_MAX_CONTACTS 512     /* up to 4 per box pair: 384 overflowed with 64 bodies tumbling in a pit (measured) */
 #endif
 
 #define VPYP_FLOOR   (-2)         /* the floor's id in contacts and ray hits */
@@ -110,7 +128,21 @@ void vpyp_set_velocity(int id, int32_t vx, int32_t vy, int32_t vz); /* units/s *
 /* A kick: mass × units/s, divided by the body's mass. Wakes it. */
 void vpyp_apply_impulse(int id, int32_t ix, int32_t iy, int32_t iz);
 
+/* The same kick applied at a point (world units): off-centre, it also turns the
+ * body. A shot pushes where it hits. */
+void vpyp_apply_impulse_at(int id, int32_t ix, int32_t iy, int32_t iz,
+                           int32_t px, int32_t py, int32_t pz);
+/* Turn a body to `angle` (4096 per turn) about an axis of any length. */
+void vpyp_set_rotation(int id, int32_t ax, int32_t ay, int32_t az, int angle);
+/* Spin, in 4096ths of a turn per second about each world axis. */
+void vpyp_set_spin(int id, int32_t wx, int32_t wy, int32_t wz);
+/* Never turn (a character that must stay upright): 1 locks, 0 frees. */
+void vpyp_lock_rotation(int id, int on);
+
 void vpyp_position(int id, int32_t *x, int32_t *y, int32_t *z);
+void vpyp_spin(int id, int32_t *wx, int32_t *wy, int32_t *wz);
+/* The orientation, Q14, rows: world = m × local. Drop it into vpy_xf.m. */
+void vpyp_rotation(int id, int32_t m[9]);
 void vpyp_velocity(int id, int32_t *vx, int32_t *vy, int32_t *vz);  /* units/s */
 int  vpyp_sleeping(int id);
 

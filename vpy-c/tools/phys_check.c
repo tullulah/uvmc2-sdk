@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include "vpyphys.h"
+/* vpyphys turns bodies with vpy_sin_q14 from vpy.c; the host has <math.h> */
+int vpy_sin_q14(int a) { return (int)lround(16384.0 * sin(a * 2 * M_PI / 4096)); }
+int vpy_cos_q14(int a) { return (int)lround(16384.0 * cos(a * 2 * M_PI / 4096)); }
 static int fails;
 #define CHECK(cond, ...) do { if (cond) printf("  ok   "); else { printf("  FAIL "); fails++; } printf(__VA_ARGS__); printf("\n"); } while (0)
 
@@ -44,9 +47,15 @@ int main(void){
   vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,0,200);
   int bx[5]; for (int i=0;i<5;i++) bx[i]=vpyp_add_box(0,100+i*200+i*5,0,100,100,100,1);
   for (int i=0;i<500;i++) vpyp_step();
-  int ok=1, slept=1; for (int i=0;i<5;i++){ vpyp_position(bx[i],&x,&y,&z); if (abs(y-(100+i*200))>3 || x||z) ok=0; if(!vpyp_sleeping(bx[i])) slept=0; }
+  /* boxes turn now, so the solver's order leaves a little sideways drift: up
+   * to 20 units on a 1000-unit column, every box still upright */
+  int ok=1, slept=1, drift=0; int32_t m[9];
+  for (int i=0;i<5;i++){ vpyp_position(bx[i],&x,&y,&z); vpyp_rotation(bx[i],m);
+    if (abs(y-(100+i*200))>4 || m[4] < 16300) ok=0;
+    if (abs(x)>drift) drift=abs(x); if (abs(z)>drift) drift=abs(z);
+    if(!vpyp_sleeping(bx[i])) slept=0; }
   vpyp_position(bx[4],&x,&y,&z);
-  CHECK(ok, "stack of 5 holds: top at y=%d (expected 900)", y);
+  CHECK(ok && drift <= 20, "stack of 5 holds upright: top at y=%d (expected 900), drift %d", y, drift);
   CHECK(slept, "whole stack asleep; awake=%u", vpyp_stats()->awake);
 
   /* 4. pull the bottom box out: everything above wakes and falls */
@@ -119,8 +128,46 @@ int main(void){
   int slept3 = vpyp_sleeping(bx[0])&&vpyp_sleeping(bx[1])&&vpyp_sleeping(bx[2]);
   int ball = vpyp_add_sphere(-1000,300,0,60,2); vpyp_set_velocity(ball,4000,0,0);
   for (int i=0;i<100;i++) vpyp_step();
-  vpyp_position(bx[1],&x,&y,&z);
-  CHECK(slept3 && x > 20, "thrown ball hits the sleeping stack: middle box pushed to x=%d", x);
+  /* the ball drops on its way and hits the BOTTOM box: that one goes +x, and
+   * the two above, their support gone, come down */
+  int32_t x0,y0,z0, y2; vpyp_position(bx[0],&x0,&y0,&z0); vpyp_position(bx[2],&x,&y2,&z);
+  CHECK(slept3 && x0 > 50 && y2 < 300, "thrown ball knocks the bottom box out (x=%d) and the stack falls (top at y=%d)", x0, y2);
+
+  /* 15. a box dropped on an edge ends on a face */
+  vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,0,200);
+  b = vpyp_add_box(0,400,0,100,100,100,1); vpyp_set_rotation(b,0,0,1,4096*30/360);
+  for (int i=0;i<400;i++) vpyp_step();
+  vpyp_position(b,&x,&y,&z); vpyp_rotation(b,m);
+  int flat = abs(m[1]) < 300 || abs(m[1]) > 16080;
+  CHECK(flat && abs(y-100) <= 4 && vpyp_sleeping(b), "box dropped on an edge lands on a face: y=%d, m01=%d, asleep %d", y, m[1], vpyp_sleeping(b));
+
+  /* 16. a kick off-centre turns a box the right way */
+  vpyp_reset();
+  b = vpyp_add_box(0,0,0,100,100,100,1);
+  vpyp_apply_impulse_at(b, 1000,0,0, 0,100,0);   /* +x at the top: spins about -z */
+  vpyp_step(); int32_t wx,wy,wz; vpyp_spin(b,&wx,&wy,&wz);
+  CHECK(wz < -100 && wx == 0 && wy == 0, "push +x at the top spins it about -z: spin z %d", wz);
+
+  /* 17. a ball sliding onto rough floor starts to roll, w = -v/r, then stops */
+  vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,0,200);
+  s = vpyp_add_sphere(0,100,0,100,1); vpyp_set_material(s,0,200);
+  for (int i=0;i<5;i++) vpyp_step();
+  vpyp_set_velocity(s,1000,0,0);
+  for (int i=0;i<20;i++) vpyp_step();
+  vpyp_velocity(s,&vx,&vy,&vz); vpyp_spin(s,&wx,&wy,&wz);
+  const double roll = -vx / 100.0 * 4096 / (2*M_PI);
+  CHECK(fabs(wz - roll) < 0.1*fabs(roll) && vx < 1000 && vx > 500, "rolling: v=%d, spin %d, -v/r = %.0f (4096ths/s)", vx, wz, roll);
+  for (int i=0;i<1500;i++) vpyp_step();
+  CHECK(vpyp_sleeping(s), "the rolling ball stops and sleeps within 30 s");
+
+  /* 18. a tall box pushed at the top tips over */
+  vpyp_reset(); vpyp_set_gravity(0,-9800,0); vpyp_set_floor(1,0,0,300);
+  b = vpyp_add_box(0,300,0,50,300,50,1);
+  for (int i=0;i<10;i++) vpyp_step();
+  vpyp_apply_impulse_at(b, 400,0,0, 0,580,0);
+  for (int i=0;i<300;i++) vpyp_step();
+  vpyp_position(b,&x,&y,&z);
+  CHECK(y < 80, "a tall box pushed at the top tips over: centre now at y=%d (was 300)", y);
 
   /* 13. tunnelling: 600 u/s per step through a 20-unit wall, then with 8 substeps */
   for (int sub=1; sub<=8; sub*=8) {
