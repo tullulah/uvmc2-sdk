@@ -371,7 +371,16 @@ static void core1_main(void)
  * and core 0 replays; it is the UVM2 mirrored with the cores swapped). The loop and a
  * per-pass hook are exposed for whatever the BIOS does between lists besides the
  * controllers and the PSG: its music player and the SD work. */
+/* A BIOS MUST DEFINE IT, AND THE LINK SAYS SO. On 2026-10-01 the SDK's translation
+ * renamed this hook (it was uvm2_core1_hueco) and the BIOS kept the old name; this
+ * weak, empty default took its place without a word, and every BIOS built since
+ * lost what its hook does — the menu's music and SD previews among it — found only
+ * because a dump through the same hook printed nothing. So in a BIOS build
+ * (UVM2_BIOS) there is no default: a BIOS that does not define uvm2_core1_gap
+ * does not link. A .um2 keeps the empty one; it has nothing to do there. */
+#ifndef UVM2_BIOS
 __attribute__((weak)) void uvm2_core1_gap(void) { }
+#endif
 void uvm2_core1_loop(void) { core1_main(); }
 
 void uvm2_core1_stop(void)
