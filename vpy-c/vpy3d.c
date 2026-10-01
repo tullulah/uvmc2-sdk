@@ -1206,3 +1206,183 @@ int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, 
     }
     return strokes;
 }
+
+/* ── a ray against a mesh ────────────────────────────────────────────────── */
+/* The ray goes into the mesh's own space, where the vertices and normals already
+ * are, and comes back out with the answer. Positions in Q8 there, so a hit near
+ * an edge is decided on fractions of a unit and not rounded onto the wrong face. */
+#define RQ 8
+#define EDGE_TOL (1 << RQ)   /* one unit, Q8: what the rounding of a hit point can be off by */
+int vpy3d_ray_mesh(const vpy_mesh *m, const vpy_xf *place,
+                   int32_t ox, int32_t oy, int32_t oz, int32_t dx, int32_t dy, int32_t dz,
+                   int32_t max_dist, vpy3d_hit *out)
+{
+    if (!m || !place) return -1;
+    /* A SHORT DIRECTION IS SCALED UP before it is normalised: (3,-3,0) has a
+     * length isqrt calls 4, and a "unit" vector 6% short put the hit 100 units
+     * inside the box (found by tools/mesh_check.c). */
+    int64_t d[3] = { dx, dy, dz };
+    if (!(d[0] | d[1] | d[2])) return -1;
+    while ((d[0] < 0 ? -d[0] : d[0]) < ((int64_t)1 << 24) && (d[1] < 0 ? -d[1] : d[1]) < ((int64_t)1 << 24)
+           && (d[2] < 0 ? -d[2] : d[2]) < ((int64_t)1 << 24)) { d[0] <<= 1; d[1] <<= 1; d[2] <<= 1; }
+    const int64_t dl = isqrt64(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    /* origin and unit direction into model space: the transpose undoes the turn */
+    const int64_t r[3] = { (int64_t)ox - place->t[0], (int64_t)oy - place->t[1], (int64_t)oz - place->t[2] };
+    const int64_t uw[3] = { d[0] * VPY3D_ONE / dl, d[1] * VPY3D_ONE / dl, d[2] * VPY3D_ONE / dl };
+    int64_t o[3], u[3];
+    for (int k = 0; k < 3; k++) {
+        o[k] = ((place->m[k] * r[0] + place->m[3 + k] * r[1] + place->m[6 + k] * r[2]) << RQ) >> 14;   /* Q8 */
+        u[k] = (place->m[k] * uw[0] + place->m[3 + k] * uw[1] + place->m[6 + k] * uw[2]) >> 14;       /* Q14 */
+    }
+    int64_t best = (int64_t)max_dist << RQ;
+    int hit = -1, flip = 0;
+    for (int f = 0; f < m->nf; f++) {
+        const int fi = m->f0 + f, nvf = PFn[fi];
+        const uint16_t *iv = &PFV[PFs[fi]];
+        const int16_t *n = PN[fi];
+        int64_t den = ((int64_t)n[0] * u[0] + (int64_t)n[1] * u[1] + (int64_t)n[2] * u[2]) >> 14;   /* Q14 */
+        int back = 0;
+        if (den >= 0) { if (!m->open || den == 0) continue; back = 1; }
+        const int16_t *v0 = MV(m, iv[0]);
+        const int64_t num = (int64_t)n[0] * (((int64_t)v0[0] << RQ) - o[0]) + (int64_t)n[1] * (((int64_t)v0[1] << RQ) - o[1])
+                          + (int64_t)n[2] * (((int64_t)v0[2] << RQ) - o[2]);                        /* Q14 × Q8 */
+        const int64_t t = num / den;                                                                  /* Q8 */
+        if (t < 0 || t > best) continue;
+        /* the point, and is it inside the polygon: crossings, in the plane the
+         * face is most nearly flat in (its normal's largest axis dropped) */
+        int64_t p[3];
+        for (int k = 0; k < 3; k++) p[k] = o[k] + ((u[k] * t) >> 14);
+        const int64_t an[3] = { n[0] < 0 ? -n[0] : n[0], n[1] < 0 ? -n[1] : n[1], n[2] < 0 ? -n[2] : n[2] };
+        const int drop = an[0] >= an[1] ? (an[0] >= an[2] ? 0 : 2) : (an[1] >= an[2] ? 1 : 2);
+        const int a = drop == 0 ? 1 : 0, b = drop == 2 ? 1 : 2;
+        int inside = 0, on_edge = 0;
+        for (int i = 0, j = nvf - 1; i < nvf && !on_edge; j = i++) {
+            const int16_t *pi = MV(m, iv[i]), *pj = MV(m, iv[j]);
+            const int64_t ia = (int64_t)pi[a] << RQ, ib = (int64_t)pi[b] << RQ;
+            const int64_t ja = (int64_t)pj[a] << RQ, jb = (int64_t)pj[b] << RQ;
+            if ((ib > p[b]) != (jb > p[b]) && p[a] < ia + (ja - ia) * (p[b] - ib) / (jb - ib)) inside = !inside;
+            /* ON AN EDGE COUNTS. The crossing rule gives a point on the edge
+             * between two faces of one plane to exactly one of them, but on the
+             * edge between two faces that MEET AT AN ANGLE it can give it to
+             * neither: a ray straight through a box's edge passed through the box
+             * (tools/mesh_check.c). Within EDGE_TOL of an edge is inside. */
+            {
+                const int64_t ea = ja - ia, eb = jb - ib, qa = p[a] - ia, qb = p[b] - ib;
+                const int64_t l2 = ea * ea + eb * eb, dot = qa * ea + qb * eb;
+                if (l2 && dot >= 0 && dot <= l2) {
+                    const int64_t cr = qa * eb - qb * ea;          /* |cr| / |e| is the distance */
+                    if ((cr < 0 ? -cr : cr) <= EDGE_TOL * isqrt64(l2)) on_edge = 1;   /* not cr²: 2^98 */
+                }
+            }
+        }
+        if (!inside && !on_edge) continue;
+        best = t; hit = f; flip = back;
+    }
+    if (hit < 0) return -1;
+    if (out) {
+        const int16_t *n = PN[m->f0 + hit];
+        const int64_t nm[3] = { flip ? -n[0] : n[0], flip ? -n[1] : n[1], flip ? -n[2] : n[2] };
+        out->face = hit;
+        out->x = ox + (int32_t)((uw[0] * best) >> (14 + RQ));
+        out->y = oy + (int32_t)((uw[1] * best) >> (14 + RQ));
+        out->z = oz + (int32_t)((uw[2] * best) >> (14 + RQ));
+        out->nx = (int16_t)((place->m[0] * nm[0] + place->m[1] * nm[1] + place->m[2] * nm[2]) >> 14);
+        out->ny = (int16_t)((place->m[3] * nm[0] + place->m[4] * nm[1] + place->m[5] * nm[2]) >> 14);
+        out->nz = (int16_t)((place->m[6] * nm[0] + place->m[7] * nm[1] + place->m[8] * nm[2]) >> 14);
+        out->dist = (int32_t)(best >> RQ);
+    }
+    return hit;
+}
+
+/* ── marks where a shot landed ───────────────────────────────────────────── */
+/* The maths is examples/physics_demo's, as it was checked on the console
+ * (2026-10-01), moved here so a game does not carry its own copy. */
+#define MARK_SEG    6     /* a ring of six: round at the size a mark is on the tube, and cheap */
+#define MARK_LIFT   3     /* units off the face, so the face's own edges never cut the mark */
+/* An odd count, so no two spokes line up into one straight stroke through the
+ * point — which reads as a scratch and not as a crack. */
+#define CRACK_SPOKES 5
+
+void vpy3d_marks_clear(vpy3d_marks *mk) { if (mk) { mk->n = 0; mk->next = 0; } }
+
+void vpy3d_marks_add(vpy3d_marks *mk, const vpy_xf *place,
+                     int32_t x, int32_t y, int32_t z, int32_t nx, int32_t ny, int32_t nz)
+{
+    if (!mk || !place) return;
+    int32_t p[3], n[3];
+    vpy3d_world_to_model(place, x, y, z, &p[0], &p[1], &p[2]);
+    vpy_xf turn = *place; turn.t[0] = turn.t[1] = turn.t[2] = 0;   /* a direction: no translation */
+    vpy3d_world_to_model(&turn, nx, ny, nz, &n[0], &n[1], &n[2]);
+    const int s = mk->next;
+    for (int k = 0; k < 3; k++) { mk->p[s][k] = (int16_t)p[k]; mk->nrm[s][k] = (int16_t)n[k]; }
+    mk->next = (uint8_t)((s + 1) % VPY3D_MARKS);
+    if (mk->n < VPY3D_MARKS) mk->n++;
+}
+
+int vpy3d_marks_draw(const vpy3d_marks *mk, const vpy_xf *place, int32_t radius, int br, int style)
+{
+    if (!mk || !place) return 0;
+    int32_t eye[3]; vpy3d_eye(eye);
+    int drawn = 0;
+    for (int k = 0; k < mk->n; k++) {
+        int32_t c[3], n[3];
+        for (int r = 0; r < 3; r++) {
+            const int64_t mp = (int64_t)place->m[r*3] * mk->p[k][0] + (int64_t)place->m[r*3+1] * mk->p[k][1] + (int64_t)place->m[r*3+2] * mk->p[k][2];
+            const int64_t mn = (int64_t)place->m[r*3] * mk->nrm[k][0] + (int64_t)place->m[r*3+1] * mk->nrm[k][1] + (int64_t)place->m[r*3+2] * mk->nrm[k][2];
+            c[r] = place->t[r] + (int32_t)(mp >> 14);
+            n[r] = (int32_t)(mn >> 14);
+        }
+        const int64_t facing = (int64_t)n[0] * (eye[0] - c[0]) + (int64_t)n[1] * (eye[1] - c[1]) + (int64_t)n[2] * (eye[2] - c[2]);
+        if (facing <= 0) continue;
+        /* two directions across the face: from the axis least along n */
+        const int32_t a0 = n[0] < 0 ? -n[0] : n[0], a1 = n[1] < 0 ? -n[1] : n[1], a2 = n[2] < 0 ? -n[2] : n[2];
+        const int ax = a0 < a1 ? (a0 < a2 ? 0 : 2) : (a1 < a2 ? 1 : 2);
+        int64_t e[3] = { 0, 0, 0 }; e[ax] = VPY3D_ONE;
+        int64_t u[3] = { n[1] * e[2] - n[2] * e[1], n[2] * e[0] - n[0] * e[2], n[0] * e[1] - n[1] * e[0] };
+        const int64_t ul = isqrt64(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+        for (int r = 0; r < 3; r++) u[r] = ul ? u[r] * VPY3D_ONE / ul : 0;
+        const int64_t w[3] = { (n[1] * u[2] - n[2] * u[1]) >> 14, (n[2] * u[0] - n[0] * u[2]) >> 14, (n[0] * u[1] - n[1] * u[0]) >> 14 };
+        int32_t ctr[3];
+        for (int r = 0; r < 3; r++) ctr[r] = c[r] + (int32_t)(((int64_t)n[r] * MARK_LIFT) >> 14);
+        if (style == VPY3D_MARK_CRACK) {
+            for (int s = 0; s < CRACK_SPOKES; s++) {
+                const int a = s * VPY_Q14_TURN / CRACK_SPOKES;
+                const int64_t cs = vpy_cos_q14(a), sn = vpy_sin_q14(a);
+                /* every other spoke shorter: a star of equal arms reads as a drawn symbol */
+                const int64_t len = (s & 1) ? radius * 2 / 3 : radius;
+                int32_t q[3];
+                for (int r = 0; r < 3; r++) q[r] = ctr[r] + (int32_t)((((u[r] * cs + w[r] * sn) >> 14) * len) >> 14);
+                vpy3d_occl_line(ctr[0], ctr[1], ctr[2], q[0], q[1], q[2], br);
+            }
+        } else {
+            int32_t prev[3] = { 0, 0, 0 };
+            for (int s = 0; s <= MARK_SEG; s++) {
+                const int a = s * VPY_Q14_TURN / MARK_SEG;
+                const int64_t cs = vpy_cos_q14(a), sn = vpy_sin_q14(a);
+                int32_t q[3];
+                for (int r = 0; r < 3; r++) q[r] = ctr[r] + (int32_t)((((u[r] * cs + w[r] * sn) >> 14) * radius) >> 14);
+                if (s) vpy3d_occl_line(prev[0], prev[1], prev[2], q[0], q[1], q[2], br);
+                prev[0] = q[0]; prev[1] = q[1]; prev[2] = q[2];
+            }
+        }
+        drawn++;
+    }
+    return drawn;
+}
+
+/* ── level of detail ─────────────────────────────────────────────────────── */
+int vpy3d_lod_pick(const vpy_xf *place, int32_t radius, const int32_t *min_size, int n)
+{
+    if (!place || !min_size || n <= 0) return -1;
+    const int32_t size = vpy3d_screen_size(place->t[0], place->t[1], place->t[2], radius);
+    if (size <= 0) return -1;                      /* behind the near plane */
+    for (int i = 0; i < n; i++) if (size >= min_size[i]) return i;
+    return -1;
+}
+int vpy3d_draw_lod(const vpy_mesh *const *meshes, const int32_t *min_size, int n,
+                   const vpy_xf *place, int32_t radius, int br)
+{
+    const int i = vpy3d_lod_pick(place, radius, min_size, n);
+    if (i >= 0 && meshes[i]) vpy3d_draw_mesh(meshes[i], place, br);
+    return i;
+}

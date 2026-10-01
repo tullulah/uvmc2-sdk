@@ -362,6 +362,70 @@ int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius);
  * The convex occluder is the wrong tool for land; this is the right one. */
 int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, int32_t cell, int br);
 
+/* ---- a ray against a mesh ---------------------------------------------------
+ * The first face of mesh `m`, placed by `place`, that a ray from (ox,oy,oz)
+ * along (dx,dy,dz) meets within `max_dist` world units. Returns the face's index
+ * (0 .. faces-1, in the order they were built) or -1. The direction need not be
+ * normalised. A dented or morphed copy is hit where it is NOW, not where the
+ * shape it was copied from was.
+ *
+ * Only faces turned TOWARDS the ray are hit — a ray from outside meets the near
+ * side, and a ray starting inside a solid passes out through it. An open plate
+ * (vpy3d_mesh_open) is hit from either side. For what vpyphys does not model:
+ * the exact outline of a ship, the lightgun against what is drawn. */
+typedef struct {
+    int     face;
+    int32_t x, y, z;            /* the hit point, world units */
+    int16_t nx, ny, nz;         /* the face's normal, world, Q14, towards the ray */
+    int32_t dist;               /* from the origin, world units */
+} vpy3d_hit;
+int vpy3d_ray_mesh(const vpy_mesh *m, const vpy_xf *place,
+                   int32_t ox, int32_t oy, int32_t oz, int32_t dx, int32_t dy, int32_t dz,
+                   int32_t max_dist, vpy3d_hit *out);
+
+/* ---- marks where a shot landed ------------------------------------------------
+ * A mark is kept in the object's OWN space (a point and the face's normal), so it
+ * turns and moves with the object; the game keeps one vpy3d_marks per object and
+ * clears it when the object is recycled. On a full set the OLDEST mark gives way
+ * to the new one — what was hit longest ago is what a player has stopped looking
+ * at.
+ *
+ * Why a mark and not only a dent (vpy3d_mesh_dent): on the console a 55 mm dent
+ * in a 260 mm crate could not be seen at all (2026-10-01) — the crate is a few mm
+ * across on the tube — while a small bright ring on the face could. Use both.
+ *
+ * Draw them right after the object and BEFORE adding it as an occluder: they go
+ * through vpy3d_occl_line, so whatever is in front cuts them, and a mark on a face
+ * turned away from the camera is not drawn at all. */
+#ifndef VPY3D_MARKS
+#define VPY3D_MARKS 4
+#endif
+typedef struct {
+    uint8_t n, next;                     /* marks held; the slot the next one takes */
+    int16_t p[VPY3D_MARKS][3];           /* model space */
+    int16_t nrm[VPY3D_MARKS][3];         /* model space, Q14 */
+} vpy3d_marks;
+#define VPY3D_MARK_RING  0               /* a scorch ring round the point */
+#define VPY3D_MARK_CRACK 1               /* spokes out from it */
+void vpy3d_marks_clear(vpy3d_marks *mk);
+/* A hit at (x,y,z) on a face with world normal (nx,ny,nz) Q14 — a vpyp_hit or a
+ * vpy3d_hit as it comes — on an object placed by `place`. */
+void vpy3d_marks_add(vpy3d_marks *mk, const vpy_xf *place,
+                     int32_t x, int32_t y, int32_t z, int32_t nx, int32_t ny, int32_t nz);
+/* Returns how many marks were drawn (faced the camera). */
+int  vpy3d_marks_draw(const vpy3d_marks *mk, const vpy_xf *place, int32_t radius, int br, int style);
+
+/* ---- level of detail ---------------------------------------------------------
+ * Which of n versions of a mesh to draw for a ball of `radius` round place->t:
+ * the first i whose min_size[i] the ball still reaches on screen (deflection
+ * units, as vpy3d_screen_size), so list them most detailed first with falling
+ * sizes. -1 when it is smaller than every entry, or behind the near plane: draw
+ * nothing. A last entry of 1 keeps the plainest version down to a speck. */
+int vpy3d_lod_pick(const vpy_xf *place, int32_t radius, const int32_t *min_size, int n);
+/* Pick and draw. Returns the level drawn, or -1. */
+int vpy3d_draw_lod(const vpy_mesh *const *meshes, const int32_t *min_size, int n,
+                   const vpy_xf *place, int32_t radius, int br);
+
 /* ---- what did it cost, and did anything not fit ---- */
 typedef struct {
     uint16_t verts, faces, face_idx, edges;   /* pool high-water marks */
