@@ -7,6 +7,13 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 
+/* A BIOS that keeps cold code in flash defines UVM2_COLD (the debug cartridge does: this file
+ * runs at boot and while calibrating, and the BIOS's RAM code has a size past which its input
+ * stops working). Empty everywhere else. */
+#ifndef UVM2_COLD
+#define UVM2_COLD
+#endif
+
 /* The model's knobs live in Rust and come out as symbols; the SDK's live here. */
 extern volatile uint32_t DRAW_SCALE, T1_EXTRA_Q8;
 extern volatile int32_t  NEG_RATE_X, NEG_RATE_Y;   /* vectrex-draw, see uvm2_config.h */
@@ -94,7 +101,7 @@ void uvm2_config_game(const char *name, unsigned settings)
     s_game_path[p] = 0;
 }
 #define N_FIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
-static int32_t *field_of(struct uvm2_config *c, int i)
+UVM2_COLD static int32_t *field_of(struct uvm2_config *c, int i)
 {
     return (int32_t *)((unsigned char *)c + FIELDS[i].off);
 }
@@ -102,7 +109,7 @@ static int32_t *field_of(struct uvm2_config *c, int i)
 /* THE CHECKSUM, ALSO OVER THE TABLE. It used to be one line per field with its prime, and
  * every new field could be forgotten there without any warning: a saved calibration would pass
  * the check with a field half missing. Walking the table, a new field joins by itself. */
-static uint32_t sum_of(const struct uvm2_config *c)
+UVM2_COLD static uint32_t sum_of(const struct uvm2_config *c)
 {
     uint32_t h = 0x9E3779B9u;
     for (int k = 0; k < N_FIELDS; k++)
@@ -110,7 +117,7 @@ static uint32_t sum_of(const struct uvm2_config *c)
     return h;
 }
 
-void uvm2_config_current(struct uvm2_config *c)
+UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
 {
     c->scale  = (int32_t)DRAW_SCALE;
     c->t1_tail_q8 = (int32_t)T1_EXTRA_Q8;
@@ -128,7 +135,7 @@ void uvm2_config_current(struct uvm2_config *c)
     c->audio      = uvm2_setting_audio;
 }
 
-void uvm2_config_apply(const struct uvm2_config *c)
+UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
 {
     if (c->scale > 0)  DRAW_SCALE  = (uint32_t)c->scale;
     T1_EXTRA_Q8     = (uint32_t)c->t1_tail_q8;
@@ -159,7 +166,7 @@ void uvm2_config_apply(const struct uvm2_config *c)
  * `key value` per line, signed decimal. Text and not binary on purpose: it can be read and
  * edited from the PC, which while we are still tuning the beam is worth more than convenience
  * — and a calibration you cannot read is a calibration you cannot argue about. */
-static int read_int(const char *s, int32_t *out)
+UVM2_COLD static int read_int(const char *s, int32_t *out)
 {
     int32_t v = 0; int sign = 1, any = 0;
     if (*s == '-') { sign = -1; s++; }
@@ -168,7 +175,7 @@ static int read_int(const char *s, int32_t *out)
     return any;
 }
 
-static int load_from_sd(struct uvm2_config *c, const char *path, int game_only)
+UVM2_COLD static int load_from_sd(struct uvm2_config *c, const char *path, int game_only)
 {
     /* THIS FILE'S TWO ENDS CONTRADICTED EACH OTHER, AND NO SIZE SATISFIED BOTH.
      *
@@ -211,12 +218,12 @@ static int load_from_sd(struct uvm2_config *c, const char *path, int game_only)
 }
 
 /* ── THE FLASH ───────────────────────────────────────────────────────────────────────── */
-static const struct saved *in_flash(void)
+UVM2_COLD static const struct saved *in_flash(void)
 {
     return (const struct saved *)(XIP_BASE + UVM2_CONFIG_FLASH_OFF);
 }
 
-static int load_from_flash(struct uvm2_config *c)
+UVM2_COLD static int load_from_flash(struct uvm2_config *c)
 {
     const struct saved *g = in_flash();
     if (g->sig != SIGNATURE || g->sum != sum_of(&g->c)) return 0;
@@ -224,7 +231,7 @@ static int load_from_flash(struct uvm2_config *c)
     return 1;
 }
 
-int uvm2_config_load(void)
+UVM2_COLD int uvm2_config_load(void)
 {
     struct uvm2_config c;
     uvm2_config_current(&c);            /* start from whatever the game was compiled with */
@@ -251,7 +258,7 @@ int uvm2_config_load(void)
  * It is done in one go with interrupts off: a sector is 4096 bytes and what we write is 24, but
  * flash can only be erased by sectors. */
 /* An integer to text, without printf: pulling that in for four numbers costs 20 KB of flash. */
-static int put_int(char *d, int32_t v)
+UVM2_COLD static int put_int(char *d, int32_t v)
 {
     int p = 0;
     if (v < 0) { d[p++] = '-'; v = -v; }
@@ -261,7 +268,7 @@ static int put_int(char *d, int32_t v)
     return p;
 }
 
-static int put_field(char *d, const char *name, int32_t v)
+UVM2_COLD static int put_field(char *d, const char *name, int32_t v)
 {
     int p = 0;
     while (*name) d[p++] = *name++;
@@ -306,7 +313,7 @@ void uvm2_config_allow_create(int enable) { s_allow_create = enable != 0; }
 
 /* Writes the fields `mask` asks for (0 = the console's) to `path`. Overwrite in place first,
  * which touches neither the FAT nor the directory; create only if it is not there. */
-static int save_to(const char *path, const struct uvm2_config *c, unsigned mask)
+UVM2_COLD static int save_to(const char *path, const struct uvm2_config *c, unsigned mask)
 {
     char txt[256];
     int p = 0, k;
@@ -322,7 +329,7 @@ static int save_to(const char *path, const struct uvm2_config *c, unsigned mask)
     return uvm2_sd_create(path, (const unsigned char *)txt, (uint32_t)p);
 }
 
-int uvm2_config_save(void)
+UVM2_COLD int uvm2_config_save(void)
 {
     struct uvm2_config c;
     int ok;

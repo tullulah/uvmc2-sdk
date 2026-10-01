@@ -25,6 +25,13 @@
 #include "uvm2_text.h"
 #include "uvm2_bus.h"
 
+/* A BIOS that runs this from flash defines UVM2_COLD (the debug cartridge's build.rs puts it
+ * in .boot_text): it runs only while the calibration screen is open, and the BIOS's RAM code
+ * has a size past which its input stops working. Empty everywhere else. */
+#ifndef UVM2_COLD
+#define UVM2_COLD
+#endif
+
 void uvm2_core1_start(void);
 void uvm2_core1_stop(void);
 
@@ -71,7 +78,7 @@ static const signed char WHEEL[8][2] = {
     { -WHEEL_R,        0 }, { -WHEEL_D, -WHEEL_D }, {        0, -WHEEL_R }, {  WHEEL_D, -WHEEL_D },
 };
 
-static void wheel(int cx, int cy)
+UVM2_COLD static void wheel(int cx, int cy)
 {
     /* The rim: one chained polygon, so its closing is the test of the long strokes. */
     uvm2_draw_move_abs(cx + WHEEL[0][0], cy + WHEEL[0][1]);
@@ -108,7 +115,7 @@ static const char *const ZERO_ROWS[] = {
 #define ZERO_TOP    118      /* the first row's top */
 #define ZERO_ROW    15       /* distance between rows */
 
-static void zero_pattern(int bright)
+UVM2_COLD static void zero_pattern(int bright)
 {
     const int rows = (int)(sizeof ZERO_ROWS / sizeof ZERO_ROWS[0]);
     const int bottom = ZERO_TOP - rows * ZERO_ROW;
@@ -177,7 +184,7 @@ static const short RING_SIN[RING_V] = {   0,  98, 181, 237, 256, 237, 181,  98,
  * would be read as a fault of the hardware. */
 static inline int ring_div(int a) { return a >= 0 ? (a + 128) / 256 : -((-a + 128) / 256); }
 
-static void ring(int cx, int cy, int r)
+UVM2_COLD static void ring(int cx, int cy, int r)
 {
     /* Positions computed from the radius and the DIFFERENCES emitted, rather than sixteen
      * deltas from a table: rounding then lands on each vertex instead of accumulating
@@ -200,7 +207,7 @@ static void ring(int cx, int cy, int r)
  * until it leaves the screen; the count on screen therefore climbs from one to RING_MAX and
  * then empties, which is the shape Daniel described — it comes out from the inside, and at
  * some point there are about fifty of them. */
-static void rings_pattern(void)
+UVM2_COLD static void rings_pattern(void)
 {
     const unsigned period = RING_MAX + (RING_RMAX - RING_R0) / RING_STEP;
     const unsigned t = uvm2_frame_count() % period;
@@ -213,7 +220,7 @@ static void rings_pattern(void)
 
 /* A square drawn with `n` strokes per side, centred on (cx, cy). With n = 1 it is the 4 long
  * strokes; with n = 10, the 40 short ones. The total travel is THE SAME. */
-static void square(int cx, int cy, int n)
+UVM2_COLD static void square(int cx, int cy, int n)
 {
     static const int dx[4] = { 1, 0, -1, 0 };
     static const int dy[4] = { 0, 1,  0, -1 };
@@ -268,7 +275,7 @@ static const char *const LBL_FIGURE[] = { "AUTO", "TEXT", "WHEEL", "RINGS" };
  * PLACE and the rest of the screen — the values, the controller, the saving — is identical.
  * The game passes it already centred and at its own scale: the wizard knows nothing about
  * it. */
-int uvm2_config_wizard_with(void (*figure)(void))
+UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
 {
     struct uvm2_config c;
     uvm2_config_current(&c);
@@ -559,7 +566,7 @@ after_input:
     return saved;
 }
 
-int uvm2_config_wizard(void) { return uvm2_config_wizard_with(0); }
+UVM2_COLD int uvm2_config_wizard(void) { return uvm2_config_wizard_with(0); }
 
 /* HOLD BUTTONS 2 AND 3 WHILE LAUNCHING THE GAME, AND THE WIZARD OPENS FIRST.
  *
@@ -578,7 +585,7 @@ int uvm2_config_wizard(void) { return uvm2_config_wizard_with(0); }
  * refreshed the cache (the check could not be made). */
 volatile int32_t uvm2_boot_combo = -1;
 
-void uvm2_config_boot_combo(void)
+UVM2_COLD void uvm2_config_boot_combo(void)
 {
     /* FIRST, AND WHETHER OR NOT THE COMBO IS HELD. The game's settings have to be declared
      * before the wizard can show them, and loaded before the first sound plays — and this is
