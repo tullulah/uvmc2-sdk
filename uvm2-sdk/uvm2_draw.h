@@ -75,6 +75,10 @@ void uvm2_draw_move_abs(int x, int y);
  * question "is this shimmer a beat against the mains?" is either answered in seconds or it
  * is not answered at all. */
 extern volatile uint32_t uvm2_pacer_cycles;
+/* 1 (default): the inter-frame filler runs with the zero clamp on (the beam held at the
+ * centre); 0: the reference's filler, ramp free — which sweeps a dark diagonal that shows with
+ * the brightness up. See frame_filler. */
+extern volatile uint8_t  uvm2_filler_clamp;
 
 /* ── THE REFRESH RATE, IN HERTZ ──────────────────────────────────────────────────────
  *

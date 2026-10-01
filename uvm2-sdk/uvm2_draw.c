@@ -2979,7 +2979,23 @@ static void measure_period(void)
  * capacitors alive through the gap between frames, where we sat in silence with
  * `uvm2_bus_delay`. Silence does not refresh a capacitor.
  *
- * The cycles are theirs: header 3/6/3/6/0/212 and each alternation 6/0/41. */
+ * The cycles are theirs: header 3/6/3/6/0/212 and each alternation 6/0/41.
+ *
+ * BUT IT DOES NOT PARK THE BEAM, and the net displacement is not zero. Found 2026-10-01 from a
+ * list dumped off the console (uvm2_dump_list) and replayed in beam_sim.py once it modelled
+ * /RAMP held open by Port B: the header leaves the ramp open at +64 for ~220 cycles before the
+ * alternation starts, and with the mux on channel 0 the Y hold follows Port A too, so X and Y
+ * move together — 3385 dark cycles, out to 24699 units along the diagonal. With the brightness
+ * turned up that sweep is a corner-to-corner diagonal on every game and in the BIOS menu,
+ * which the original BIOS (Minestorm) does not show: it waits between frames with the zero
+ * clamp on.
+ *
+ * uvm2_filler_clamp = 1 runs the same filler — the same commands, cycles and audio — with the
+ * clamp ON, so the integrators are held at the centre through it. 0 is the reference's
+ * behaviour. Compared on a console over SWD, 2026-10-01, same brightness: with 0 the diagonal
+ * is there, with 1 it is gone, nothing else changed that was seen. 1 is the default; the knob
+ * stays so the next console can be compared the same way. */
+volatile uint8_t uvm2_filler_clamp = 1;
 static void frame_filler(void)
 {
     const uint32_t target = uvm2_pacer_cycles;
@@ -2990,7 +3006,8 @@ static void frame_filler(void)
 
     emit(UVM2_VIA_PORTA, 0x40, 3);
     emit(UVM2_VIA_PORTB, 0x00, 6);    /* channel 0, ramp open */
-    emit(UVM2_VIA_PCR,   0xCE, 3);
+    const uint8_t pcr = uvm2_filler_clamp ? 0xCC : 0xCE;   /* see above */
+    emit(UVM2_VIA_PCR,   pcr, 3);
     emit(UVM2_VIA_ACR,   0x18, 6);    /* PB7 out of T1's hands: PORTB drives the ramp */
     emit(UVM2_VIA_T1CL,  0xBF, 0);
     emit(UVM2_VIA_T1CH,  0x00, 212);
@@ -3024,7 +3041,7 @@ static void frame_filler(void)
     /* The caches, with the last thing that really went out. via_setup restores the ACR and
      * the PCR in the next frame. */
     s_porta = (uint8_t)((n & 1u) ? 0x40 : 0xC0); s_porta_stale = 0;
-    s_portb = 0x00; s_pcr = 0xCE;
+    s_portb = 0x00; s_pcr = pcr;
     uvm2_draw_invalidate();
 }
 

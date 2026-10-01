@@ -19,9 +19,9 @@ uint8_t uvm2_read_buttons(void);
 /* SYS_READ_AXES — (J1X << 24) | (J1Y << 16) | (J2X << 8) | J2Y, each an i8. */
 uint32_t uvm2_read_axes(void);
 
-/* Digital axes (the hardware-proven path) scale to +/-127 so ordinary game code
- * behaves as on a real cart.  Successive-approximation analog reads are
- * implemented but NOT hardware-validated — opt in explicitly. */
+/* Both come from the BIOS's successive-approximation read, centred on the stick's rest
+ * (measured at the first read). Default, digital: -127 / 0 / +127, so ordinary game code
+ * behaves as on a real cart. 1: the centred analog value, 0 inside a small dead zone. */
 void uvm2_input_set_analog(int enable);
 
 /* SYS_PSG_WRITE / SYS_PSG_READ. */

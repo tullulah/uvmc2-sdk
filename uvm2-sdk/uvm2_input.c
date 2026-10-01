@@ -85,51 +85,13 @@ uint8_t uvm2_read_buttons(void)
     return raw;
 }
 
-/* One axis, digital: drive the DAC to 0, let the comparator settle, then probe
- * once above and once below to tell "pushed" from "centred". */
-/* /RAMP (Port B bit 7) stays ASSERTED-OFF for the whole conversion.
- *
- * The BIOS gets away with clearing it because Joy_Analog runs immediately after
- * Wait_Recal with /ZERO clamping the integrators. We run in the inter-frame gap
- * too, but MEASURED on hardware 2026-08-04: with the input read removed entirely
- * the stray bright vectors dropped from 4-5 to 1, so this window is where most of
- * them come from. Freezing the ramp costs nothing — the mux is still selected and
- * enabled exactly as before, and the comparator does not care. */
-static int read_axis_digital(int channel)
-{
-    uint32_t sel = (uint32_t)(channel << 1);
-    uint8_t  probe, expect, state;
-    int      value;
-
-    uvm2_via_write(UVM2_VIA_DDRA, 0xFF);   /* the DAC goes out on port A */
-
-    uvm2_via_write(UVM2_VIA_PORTB, UVM2_PB_RAMP_OFF | 0x01u | sel);
-    uvm2_via_write(UVM2_VIA_PORTA, 0x00);
-    uvm2_via_write(UVM2_VIA_PORTB, UVM2_PB_RAMP_OFF | 0x00u | sel);
-
-    uvm2_bus_delay(32u * 5u);                 /* pot + comparator settle */
-
-    uvm2_via_write(UVM2_VIA_PORTB, UVM2_PB_RAMP_OFF | 0x01u | sel);
-    state = uvm2_via_read(UVM2_VIA_PORTB);
-
-    if (state & 0x20u) { probe = 0x40; value =  1; expect = 0x20; }
-    else               { probe = 0xC0; value = -1; expect = 0x00; }
-
-    uvm2_via_write(UVM2_VIA_PORTA, probe);
-    uvm2_bus_delay(10u);
-    state = uvm2_via_read(UVM2_VIA_PORTB);
-    if ((state & 0x20u) != expect) value = 0;   /* comparator disagreed → centred */
-
-    uvm2_via_write(UVM2_VIA_PORTB, PSG_INACTIVE);
-    return value;
-}
-
 /* One axis, successive approximation — the BIOS Joy_Analog algorithm: walk the
  * DAC bit by bit, keeping each bit the comparator agrees with.  Costs about
  * seven extra read cycles per axis over the digital path.
  *
- * NOT yet validated on hardware: the comparator polarity here is inferred from
- * the BIOS listing, not measured.  uvm2_input_set_analog() gates it. */
+ * VALIDATED on the console 2026-10-02 (a debug cartridge, values read over SWD): right
+ * +127, left -128, up +127, down -128; at rest X 4..12 and Y 31..48, not 0. It is now the
+ * only axis read — see uvm2_read_axes for why the digital one went. */
 static int read_axis_analog(int channel)
 {
     const uint32_t sel     = (uint32_t)(channel << 1);
@@ -171,20 +133,49 @@ static int read_axis_analog(int channel)
     return (int8_t)pa;
 }
 
+/* THE AXES COME FROM THE ANALOG READ ALONE, and the digital answer is made from it.
+ *
+ * The digital read probed the comparator with the DAC at +64 or -64, whichever way the stick
+ * leant, and that probe left a DOT on the tube: with the brightness up, a spot on the
+ * diagonal that followed the stick (south-west at rest or up, north-east down) in every game
+ * and in the BIOS menu, and Minestorm had none. Bisected on the console 2026-10-02 over SWD:
+ * the dot went with the axis read switched off, went with the read kept but the probe
+ * dropped, and did not come back with the analog read — the BIOS's own Joy_Analog. Zeroing
+ * the DAC after the probe did NOT cure it, so it is the probe itself, not what it leaves.
+ *
+ * THE REST IS NOT ZERO. Measured on the same console: X 4..12, Y 31..48. The first reading
+ * is taken as the stick's centre — unless it is past REST_MAX, which is a stick already
+ * pushed at power-on, and then 0 is the centre — and every reading is taken from it.
+ *   digital (the default): -127 / 0 / +127, past DIGITAL_AT either way, as before — and a
+ *            rest of 40 in Y no longer reads as "up" to `if (J1_Y() > 32)`
+ *   analog (uvm2_input_set_analog(1)): the centred value, 0 inside DEADZONE — the rest
+ *            wanders by ~8 either side, measured */
+#define REST_MAX    64   /* half the travel: further out at power-on is a pushed stick */
+#define DIGITAL_AT  64   /* the old digital read's own threshold: its probe sat at +-64 */
+#define DEADZONE    16   /* twice the rest's measured wander (~8) */
+static int     s_centred;
+static int     s_cx, s_cy;
+static int clamp8(int v) { return v > 127 ? 127 : (v < -128 ? -128 : v); }
+static int shape(int v)
+{
+    if (!s_analog) return v > DIGITAL_AT ? 127 : (v < -DIGITAL_AT ? -127 : 0);
+    if (v > -DEADZONE && v < DEADZONE) return 0;
+    return clamp8(v);
+}
+
 uint32_t uvm2_read_axes(void)
 {
-    int jx, jy;
+    int jx = read_axis_analog(0);
+    int jy = read_axis_analog(1);
     int j2x = 0, j2y = 0;
 
-    if (s_analog) {
-        jx = read_axis_analog(0);
-        jy = read_axis_analog(1);
-    } else {
-        /* Scale the digital verdict to the i8 range our ABI carries, so the
-         * usual `if J1_X() > 32` game code behaves as it does on a real cart. */
-        jx = read_axis_digital(0) * 127;
-        jy = read_axis_digital(1) * 127;
+    if (!s_centred) {
+        s_cx = (jx > -REST_MAX && jx < REST_MAX) ? jx : 0;
+        s_cy = (jy > -REST_MAX && jy < REST_MAX) ? jy : 0;
+        s_centred = 1;
     }
+    jx = shape(clamp8(jx - s_cx));
+    jy = shape(clamp8(jy - s_cy));
 
     uvm2_via_write(UVM2_VIA_PORTB, UVM2_PB_IDLE);
 

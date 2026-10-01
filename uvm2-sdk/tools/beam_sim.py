@@ -16,7 +16,9 @@ THE MODEL, and its limits. It is the SR dialect uvm2_draw.c speaks:
   - the mux puts Port A into a sample-and-hold: channel 0 Y, 1 the zero
     reference, 2 brightness;
   - while a ramp runs, X integrates Port A and Y the Y hold, both against the
-    reference.
+    reference;
+  - with ACR bit 7 CLEAR, T1 lets go of PB7 and Port B's own bit 7 is /RAMP:
+    the integrators run for as long as it is 0, whatever T1 does.
 It is IDEAL: no leakage, no settling, no analog anything. So what it finds is
 what the LIST gets wrong — a beam that cannot be where it is drawn — not what
 the console's electronics do to a list that is right.
@@ -26,6 +28,12 @@ WHAT IT REPORTS
                             so a lit ramp draws a line out of (0,0) instead of
                             its stroke (the 2026-10-01 asterisk)
   lit with the clamp on     the same fault, counted in cycles
+  free-running, dark        cycles the integrators ran with /RAMP held open by
+                            Port B, the clamp off and the beam blanked, and how far
+                            from the centre that took the beam. Blanked is not
+                            invisible: a slow dark sweep shows as a line once the
+                            brightness is turned up (2026-10-01, a corner-to-corner
+                            diagonal on every game and the BIOS menu)
   cycles                    the frame's length; 30000 is 50 Hz
 """
 import json
@@ -57,6 +65,9 @@ def simulate(cmds):
     clamped_ramps = []
     lit_clamped = 0
     segs = []
+    free = 0
+    far = 0.0
+    dark = []
     for i, c in enumerate(cmds):
         reg, data, delay = decode(c)
         if reg in (1, 15):
@@ -83,11 +94,15 @@ def simulate(cmds):
                 zr = porta
         x0, y0 = x, y
         for _ in range(1 + delay):
+            by_portb = not (acr & 0x80) and not (portb & 0x80)
             if zero:
                 x = y = 0.0
-            elif ramp:
+            elif ramp or by_portb:
                 x += s8(porta) - s8(zr)
                 y += s8(yh) - s8(zr)
+                if by_portb and not lit:
+                    free += 1
+                    far = max(far, (x * x + y * y) ** 0.5)
             if ramp:
                 ramp -= 1
             if lit and zero:
@@ -95,10 +110,12 @@ def simulate(cmds):
             cycles += 1
         if lit and (x0, y0) != (x, y):
             segs.append((x0, y0, x, y))
-    return cycles, clamped_ramps, lit_clamped, segs
+        elif not lit and (x0, y0) != (x, y) and not zero:
+            dark.append((x0, y0, x, y))
+    return cycles, clamped_ramps, lit_clamped, segs, free, far, dark
 
 
-def svg(segs, path):
+def svg(segs, path, dark=()):
     if not segs:
         return
     xs = [v for s in segs for v in (s[0], s[2])]
@@ -107,6 +124,8 @@ def svg(segs, path):
     out = ["<svg xmlns='http://www.w3.org/2000/svg' viewBox='%g %g %g %g' width='700' height='700' "
            "style='background:#000'><g transform='scale(1,-1)'>" % (-m, -m, 2 * m, 2 * m)]
     w = m / 300
+    for a, b, c, d in dark:          # where the blanked beam went, faint red
+        out.append("<line x1='%g' y1='%g' x2='%g' y2='%g' stroke='#a33' stroke-width='%g'/>" % (a, b, c, d, w))
     for a, b, c, d in segs:
         out.append("<line x1='%g' y1='%g' x2='%g' y2='%g' stroke='#8f8' stroke-width='%g'/>" % (a, b, c, d, w))
     out.append("</g></svg>")
@@ -117,17 +136,18 @@ def main():
     if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
     cmds = json.load(open(sys.argv[1]))
-    cycles, clamped, lit_clamped, segs = simulate(cmds)
+    cycles, clamped, lit_clamped, segs, free, far, dark = simulate(cmds)
     print("commands              %d" % len(cmds))
     print("cycles                %d%s" % (cycles, "  (a 50 Hz frame is 30000)" if cycles != 30000 else ""))
     print("lit moves             %d" % len(segs))
     print("ramps, clamp on       %d%s" % (len(clamped), "  <- MUST BE 0" if clamped else ""))
     print("lit cycles, clamp on  %d" % lit_clamped)
+    print("free-running, dark    %d cycles, to %.0f from the centre" % (free, far))
     if clamped:
         print("  first at command %d; the clamp is released (PCR=CE) at command %s"
               % (clamped[0], next((i for i, c in enumerate(cmds) if decode(c)[0] == 12 and (c[0] & 0x0E) == 0x0E), "never")))
     if len(sys.argv) == 3:
-        svg(segs, sys.argv[2])
+        svg(segs, sys.argv[2], dark)
         print("picture -> %s" % sys.argv[2])
     sys.exit(1 if clamped else 0)
 
