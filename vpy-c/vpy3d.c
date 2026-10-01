@@ -1024,9 +1024,10 @@ void vpy3d_occl_line_cam(const int32_t *ca, const int32_t *cb, int br)
         b[1] += (int32_t)((((int64_t)a[1] - b[1]) * k) >> 16);
         b[2] = s_near;
     }
-    int32_t s0x, s0y, s1x, s1y;
-    vpy3d_project(a, &s0x, &s0y);                    /* both at or past near now */
-    vpy3d_project(b, &s1x, &s1y);
+    int32_t s0x = 0, s0y = 0, s1x = 0, s1y = 0;
+    /* both ends are at or past the near plane now, so both project; if one ever
+     * did not, the line is drawn whole rather than cut with garbage */
+    if (!vpy3d_project(a, &s0x, &s0y) || !vpy3d_project(b, &s1x, &s1y)) { vpy3d_line_cam(a, b, br); return; }
     const int64_t dx = (int64_t)s1x - s0x, dy = (int64_t)s1y - s0y;
 
     /* Every span the line spends inside an occluder, then the gaps between
@@ -1070,4 +1071,46 @@ void vpy3d_occl_line_cam(const int32_t *ca, const int32_t *cb, int br)
         occ_at_t(a, b, cur, p);
         vpy3d_line_cam(p, b, br);
     }
+}
+
+/* ── shading the world: depth, shadows, size ─────────────────────────────── */
+int vpy3d_fog(int br, int32_t x, int32_t y, int32_t z, int32_t full_until, int32_t gone_at)
+{
+    int32_t c[3];
+    vpy3d_to_camera(x, y, z, c);
+    const int32_t d = c[2];                      /* depth: what perspective divides by */
+    if (d <= full_until) return br;
+    if (d >= gone_at || gone_at <= full_until) return 0;
+    return (int)((int64_t)br * (gone_at - d) / (gone_at - full_until));
+}
+
+int vpy3d_shadow(const int32_t (*corners)[3], int n, int32_t lx, int32_t ly, int32_t lz,
+                 int32_t floor_y, int br)
+{
+    if (n < 3 || n > 8 || ly >= 0) return 0;     /* the light has to come down */
+    int32_t px[8], pz[8];
+    for (int i = 0; i < n; i++) {
+        /* slide the corner down the light ray to the floor */
+        const int64_t h = (int64_t)corners[i][1] - floor_y;
+        if (h < 0) return 0;                     /* a corner below the floor: no shadow */
+        px[i] = (int32_t)(corners[i][0] + (int64_t)lx * h / -ly);
+        pz[i] = (int32_t)(corners[i][2] + (int64_t)lz * h / -ly);
+    }
+    occ_hull hull;
+    if (!occ_hull_of(&hull, px, pz, n)) return 0;
+    /* a hair above the floor, so the floor's own lines do not fight it */
+    const int32_t y = floor_y + 2;
+    for (int i = 0; i < hull.n; i++) {
+        const int j = (i + 1 == hull.n) ? 0 : i + 1;
+        vpy3d_occl_line(hull.x[i], y, hull.y[i], hull.x[j], y, hull.y[j], br);
+    }
+    return hull.n;
+}
+
+int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius)
+{
+    int32_t c[3];
+    vpy3d_to_camera(x, y, z, c);
+    if (c[2] < s_near) return 0;
+    return (int32_t)((int64_t)radius * s_focal / c[2]);
 }

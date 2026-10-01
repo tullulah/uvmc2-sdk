@@ -332,6 +332,22 @@ void vpy3d_set_mesh_occlusion(int on);
 int  vpy3d_get_mesh_occlusion(void);
 int  vpy3d_occl_count(void);
 
+/* ---- shading the world ------------------------------------------------------
+ * FOG: on a monochrome tube distance is the one depth cue there is. Full
+ * brightness up to `full_until` units in front of the camera, nothing from
+ * `gone_at`, a straight line between. Ask it per stroke or per object. */
+int vpy3d_fog(int br, int32_t x, int32_t y, int32_t z, int32_t full_until, int32_t gone_at);
+/* A SHADOW: up to 8 corners of a solid slid down the light (lx, ly, lz — ly
+ * negative, the light coming down) onto the floor y = floor_y, and the outline
+ * of what they cover drawn there, through the occluder. One polygon per object,
+ * so draw it with the floor (after the solids). Returns its strokes; 0 if the
+ * light does not come down or a corner is under the floor. */
+int vpy3d_shadow(const int32_t (*corners)[3], int n, int32_t lx, int32_t ly, int32_t lz,
+                 int32_t floor_y, int br);
+/* How big a ball of `radius` at (x,y,z) is on screen, in deflection units; 0
+ * if it is behind the near plane. What a level of detail picks a mesh by. */
+int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius);
+
 /* ---- what did it cost, and did anything not fit ---- */
 typedef struct {
     uint16_t verts, faces, face_idx, edges;   /* pool high-water marks */
