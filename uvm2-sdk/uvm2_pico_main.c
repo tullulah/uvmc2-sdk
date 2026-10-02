@@ -26,6 +26,7 @@ void uvm2_runtime_init(void);      /* uvm2_svc.c */
 void uvm2_romzip_load(void);       /* uvm2_romzip.c: reads roms/<game>.zip off the SD */
 #ifdef UVM2_DUAL_CORE
 void uvm2_core1_start(void);       /* uvm2_core1.c */
+void uvm2_stack_paint(void);       /* uvm2_core1.c: stack0_peak / stack1_peak */
 #endif
 
 /* PANIC, WITH NO printf IN THE WAY.
@@ -129,7 +130,8 @@ int main(void)
 #  ifdef UVM2_DUAL_CORE
     /* After the runtime init, never before: core 1 takes the bus from here on,
      * and it must not start until the VIA has been programmed and the 6809 is
-     * halted. */
+     * halted. Paint both stacks first: core 1's must be painted before it runs on it. */
+    uvm2_stack_paint();
     uvm2_core1_start();
     /* Buttons 2+3 held at start: the calibration wizard, before the game. It needs core 1
      * running — the wizard draws frames and the buttons come from core 1's cache. */

@@ -403,6 +403,18 @@ typedef struct {
      * (UVM2_REPLAY_LAST): a game slower than the beam keeps its picture instead of going
      * dark between lists. At the end of the struct, to not move any offsets. */
     uint32_t replays;
+    /* THE STACKS, MEASURED, because overflowing one is silent. A .um2's core 0 — the game —
+     * has 4 KB (SCRATCH_Y) with core 1's 2 KB right below it, and an overflow does not
+     * report itself: it overwrites core 1's stack and the console hangs. That is how
+     * physics_demo hung the UVMC2 on 2026-10-02, and only -fstack-usage found it.
+     * Both regions are painted at boot (uvm2_stack_paint) and core 1 looks, once a second,
+     * for how far the paint is gone from the top: the deepest the stack has been, in bytes.
+     * `stack_overflow` is sticky: bit 0 = core 0 reached its floor (it is into core 1's
+     * stack), bit 1 = core 1 reached its own. Not in a BIOS build, whose memory is laid out
+     * by the BIOS. At the end of the struct, to not move any offsets. */
+    uint32_t stack0_peak;
+    uint32_t stack1_peak;
+    uint32_t stack_overflow;
 } uvm2_stats_t;
 
 extern uvm2_stats_t uvm2_stats;

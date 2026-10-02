@@ -143,6 +143,38 @@ static void psg_drain(void)
  * the game polls from; dual-core fills it asynchronously, so the game can read first.
  * Seen on SnowBros 2026-08-25, the first VPy game to actually launch core 1. */
 volatile uint8_t  uvm2_cached_buttons = 0xFFu;
+
+#ifndef UVM2_BIOS
+/* THE STACK PAINT (see stack0_peak in uvm2_bus.h). The pico-sdk memory map puts core 0's stack
+ * in SCRATCH_Y, from __StackTop down to __StackOneTop, and core 1's below it, from
+ * __StackOneTop down to __StackOneBottom. A word that still holds the paint has never been
+ * stack; the lowest word that does not is the deepest the stack has been. */
+extern uint32_t __StackOneBottom[], __StackOneTop[], __StackTop[];
+#define STACK_PAINT 0x57AC57ACu
+#define STACK_CHECK_FRAMES 50           /* once a second at 50 Hz: a scan is ~1500 loads */
+/* Core 0, before core 1 starts: its whole stack (it is not running yet) and core 0's own,
+ * up to a margin below where core 0 is now. */
+void uvm2_stack_paint(void)
+{
+    uint32_t sp;
+    __asm volatile ("mov %0, sp" : "=r"(sp));
+    for (uint32_t *p = __StackOneTop; p < (uint32_t *)(sp - 256u); p++) *p = STACK_PAINT;
+    for (uint32_t *p = __StackOneBottom; p < __StackOneTop; p++) *p = STACK_PAINT;
+}
+static uint32_t stack_peak(const uint32_t *floor, const uint32_t *top)
+{
+    const uint32_t *p = floor;
+    while (p < top && *p == STACK_PAINT) p++;
+    return (uint32_t)(top - p) * 4u;
+}
+static void stack_check(void)
+{
+    uvm2_stats.stack0_peak = stack_peak(__StackOneTop, __StackTop);
+    uvm2_stats.stack1_peak = stack_peak(__StackOneBottom, __StackOneTop);
+    if (__StackOneTop[0]    != STACK_PAINT) uvm2_stats.stack_overflow |= 1u;
+    if (__StackOneBottom[0] != STACK_PAINT) uvm2_stats.stack_overflow |= 2u;
+}
+#endif
 volatile uint32_t uvm2_cached_axes;
 
 /* Vectrex time not yet handed to the sequencer, in bus cycles. */
@@ -263,6 +295,12 @@ static void core1_main(void)
          * is. */
         uvm2_stats.us_c1_exec_acc += t1 - t0;
         uvm2_stats.us_c1_exec_n++;
+#ifndef UVM2_BIOS
+        {
+            static uint32_t since_check;
+            if (++since_check >= STACK_CHECK_FRAMES) { since_check = 0; stack_check(); }
+        }
+#endif
 
         /* HOW LONG THE LIST TAKES AGAINST WHAT IT ASKS FOR, which is the one figure that
          * separates two opposite faults and which we did not have.
