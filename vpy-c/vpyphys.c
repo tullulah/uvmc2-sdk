@@ -711,9 +711,16 @@ static int64_t box_radius(const body_t *b, const int64_t ax[3])
  * corners of the contact polygon — which is what holds a box flat. `u` and `v`
  * are two directions across the face, Q14. */
 #define MAX_CAND 32
+/* THE CANDIDATE LISTS ARE STATIC, NOT ON THE STACK. A list is 32 × 32 bytes, and box against
+ * box held three of them at once — box_box's, spread's, and body_floor's inlined into the
+ * step: measured with -fstack-usage, substep 1752 + box_box 1808 + spread 1168 bytes, ~4.7 KB
+ * on one call path. A .um2's core 0 has 4 KB of stack (SCRATCH_Y) with core 1's — the one
+ * replaying the list — right below it, so physics_demo crashed the UVMC2 the day MAX_CAND
+ * went from 16 to 32, while it ran on the debug cartridge, whose game core has another stack.
+ * The physics is not re-entrant, and each function keeps its own list, so static is safe. */
 static int spread(cand_t *list, int n, const int64_t u[3], const int64_t v[3], cand_t *out)
 {
-    cand_t uniq[MAX_CAND]; int m = 0;
+    static cand_t uniq[MAX_CAND]; int m = 0;
     for (int i = 0; i < n; i++) {
         int dup = 0;
         for (int j = 0; j < m && !dup; j++) {
@@ -855,7 +862,7 @@ static int box_box(const body_t *a, const body_t *b, cand_t *out, int64_t mg)
     int32_t nab[3];
     for (int k = 0; k < 3; k++) nab[k] = (int32_t)(ref ? -n[k] : n[k]);
 
-    cand_t list[MAX_CAND]; int nl = 0;
+    static cand_t list[MAX_CAND]; int nl = 0;
     const int u = (refk + 1) % 3, v = (refk + 2) % 3;                  /* the face's own axes */
     int64_t ci[8][3]; corners(I, ci);
     for (int c = 0; c < 8; c++) {
@@ -1054,7 +1061,7 @@ static int poly_poly(const body_t *a, const body_t *b, cand_t *out, int64_t mg)
     const int64_t *n = R->fn[rf];                          /* out of R, towards I */
     int32_t nab[3];
     for (int k = 0; k < 3; k++) nab[k] = (int32_t)(ref ? -n[k] : n[k]);
-    cand_t list[MAX_CAND]; int nl = 0;
+    static cand_t list[MAX_CAND]; int nl = 0;
     for (int i = 0; i < I->nv && nl < MAX_CAND; i++) {
         const int64_t depth = R->fd[rf] - dot14(I->v[i], n);
         if (depth <= -mg || !in_face(R, rf, I->v[i], mg)) continue;
@@ -1164,7 +1171,7 @@ static int body_floor(const body_t *a, cand_t *out, int64_t mg)
         out->feat = 0;
         return 1;
     }
-    cand_t list[MAX_CAND]; int nl = 0;
+    static cand_t list[MAX_CAND]; int nl = 0;
     poly_t *P = &s_pa; poly_of(a, P);
     int64_t (*c8)[3] = P->v;
     for (int c = 0; c < P->nv && nl < MAX_CAND; c++) {
