@@ -71,6 +71,20 @@ extern uint32_t          uvm2_frame_length(uint32_t frame);
  * has ended is impossible. */
 static uint32_t s_cycle_us;
 
+#ifdef UVM2_REPLAY_LAST
+/* A REDRAW MUST NOT RUN WHILE THE PROGRAM IS INSIDE THE BIOS. On our own cartridge the
+ * program's core reads the SD card inside some calls (SYS_LAUNCH loads the game, its ROM
+ * and its samples), and a card read while this core drives the cartridge bus comes back
+ * as garbage: the games loaded corrupt and died at their first call into the BIOS
+ * (dkong, SM64, 2026-10-02). Before UVM2_REPLAY_LAST this core was idle then, because a
+ * program inside a call publishes no list. So the BIOS raises uvm2_replay_hold around
+ * every call and waits for uvm2_replaying to drop; a redraw starts only with the hold
+ * down, and announces itself before looking (with a barrier on each side, so one of the
+ * two always sees the other). */
+volatile uint32_t uvm2_replay_hold;
+volatile uint32_t uvm2_replaying;
+#endif
+
 /* PSG writes the game issued mid-frame, drained between frames.
  *
  * A ring rather than a flag per register: a game that writes the same register
@@ -144,6 +158,9 @@ static void core1_main(void)
          * ~17 ms per frame that were not the beam came from: the audio was blamed and
          * measured not to be it. A clock costs less than a hypothesis. */
         uint32_t t_w0 = time_us_32();
+#ifdef UVM2_REPLAY_LAST
+        int replay = 0;
+#endif
         /* WITHOUT A LIST THERE ARE NO CONTROLS — unless we read them here. The cache is
          * refreshed after replaying a list, so a game that stops drawing never sees a
          * button change: Major Havoc pauses while button 1 is held (no IRQs, no GO, no
@@ -156,6 +173,31 @@ static void core1_main(void)
             const uint32_t period_us = uvm2_pacer_cycles ? uvm2_pacer_cycles * 2u / 3u : 20000u;
             uint32_t t_idle = t_w0;
             while (uvm2_frame_request == served) {         /* nothing published yet */
+#ifdef UVM2_REPLAY_LAST
+                /* NO NEW LIST: DRAW THE LAST ONE AGAIN. Between lists the beam was simply off,
+                 * so a game slower than 50 Hz flickered at its own rate (SM64 at ~14 Hz:
+                 * 22 ms drawn out of every 70, 2026-10-02). The buffer of `served` is held by
+                 * stepping frame_done back to served - 1, which uvm2_frame_begin waits on
+                 * before writing frame served + 2 into it; then the request is checked AGAIN
+                 * after a barrier. If the game published meanwhile, the hold is dropped and
+                 * the new list is served, since the producer may already be past its wait. */
+                if (served != 0u && !uvm2_replay_hold) {
+                    uvm2_replaying = 1u;
+                    __asm volatile ("dmb" ::: "memory");
+                    if (uvm2_replay_hold) {                 /* the program just went in */
+                        uvm2_replaying = 0u;
+                        __asm volatile ("dmb" ::: "memory");
+                    } else {
+                        uvm2_frame_done = served - 1u;
+                        __asm volatile ("dmb" ::: "memory");
+                        if (uvm2_frame_request == served) { replay = 1; break; }
+                        uvm2_frame_done = served;
+                        uvm2_replaying = 0u;
+                        __asm volatile ("dmb" ::: "memory");
+                        break;
+                    }
+                }
+#endif
                 if (time_us_32() - t_idle >= period_us) {
                     t_idle = time_us_32();
                     uvm2_single_cycles = 0;
@@ -172,6 +214,10 @@ static void core1_main(void)
         uint32_t t0 = time_us_32();
         uvm2_stats.us_wait = t0 - t_w0;
         uvm2_stats.us_c1_wait_acc += t0 - t_w0;   /* what core 1 waited for core 0 */
+#ifdef UVM2_REPLAY_LAST
+        if (replay) uvm2_stats.replays++;
+        else
+#endif
         served++;
         __asm volatile ("dmb" ::: "memory");       /* the buffer before the count */
 
@@ -360,6 +406,12 @@ static void core1_main(void)
         uvm2_stats.us_rest = time_us_32() - t2;
         __asm volatile ("dmb" ::: "memory");       /* the work before the flag */
         uvm2_frame_done = served;
+#ifdef UVM2_REPLAY_LAST
+        if (replay) {
+            __asm volatile ("dmb" ::: "memory");
+            uvm2_replaying = 0u;
+        }
+#endif
     }
 }
 

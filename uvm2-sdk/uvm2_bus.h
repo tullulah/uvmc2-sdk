@@ -399,6 +399,10 @@ typedef struct {
      * Fixed 2026-10-01 in move_abs_internal; this proves it stays fixed. At the end of the
      * struct, to not move any offsets. */
     uint32_t ramps_clamped;
+    /* Passes in which the executor REDREW the last list because no new one had come
+     * (UVM2_REPLAY_LAST): a game slower than the beam keeps its picture instead of going
+     * dark between lists. At the end of the struct, to not move any offsets. */
+    uint32_t replays;
 } uvm2_stats_t;
 
 extern uvm2_stats_t uvm2_stats;

@@ -2821,6 +2821,31 @@ extern unsigned uvm2_input_count;
 
 void uvm2_frame_begin(void)
 {
+#if defined(UVM2_DUAL_CORE) && defined(UVM2_REPLAY_LAST)
+    /* THE WAIT FOR THE BUFFER, HERE AND NOT RIGHT AFTER PUBLISHING. The buffer about to be
+     * filled (frame s_frame_no) last held frame s_frame_no - 2; the executor must be done
+     * with it. uvm2_frame_end used to wait for that the moment it published, which is the
+     * same thing for a caller that opens the next frame at once. The point is the caller
+     * that does NOT: a BIOS can open the frame lazily, at the game's first drawing call
+     * (the debug cart's uvm2c.rs), so the wait lands when the buffer is really needed.
+     *
+     * That is what makes UVM2_REPLAY_LAST affordable. While no new list comes, the
+     * executor REDRAWS the last one (uvm2_core1.c) and holds its buffer by keeping
+     * uvm2_frame_done one behind; a game slower than the beam would otherwise stall here
+     * for a whole redraw on every frame. A game that draws at the end of its frame (all
+     * the emulated ones, SM64) reaches this long after the redraw has finished.
+     *
+     * The barrier pairs with the executor's: it stores frame_done then loads the request,
+     * this side stored the request (uvm2_frame_end) and now loads frame_done; with a dmb
+     * on both sides at least one of them sees the other. */
+    __asm volatile ("dmb" ::: "memory");
+    {
+        uint32_t rotations = 0;
+        while ((int32_t)(uvm2_frame_done - (s_frame_no - 2u)) < 0) { rotations++; }
+        uvm2_stats.wait_spins = rotations;
+    }
+    __asm volatile ("dmb" ::: "memory");
+#endif
 #ifdef UVM2_INPUT_COUNT
     uvm2_stats.recals = uvm2_input_count;   /* the one from the frame just finished */
     uvm2_input_count = 0;
@@ -3231,11 +3256,14 @@ void uvm2_frame_end(void)
      * unambiguously: if it waits a lot, core 1 is tight and the beam rules; if it waits for
      * nothing, core 1 is idle and the game's logic rules. Spins are counted, not time: only a
      * comparison is needed. */
+#ifndef UVM2_REPLAY_LAST
     {
         uint32_t rotations = 0;
         while ((int32_t)(uvm2_frame_done - (s_frame_no - 1u)) < 0) { rotations++; }
         uvm2_stats.wait_spins = rotations;
     }
+#endif
+    /* With UVM2_REPLAY_LAST that wait is at the top of uvm2_frame_begin instead: see there. */
 
     s_frame_no++;
     s_buf = s_frame_no & 1u;
