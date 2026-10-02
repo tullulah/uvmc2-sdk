@@ -23,6 +23,9 @@ void v_readJoystick1Analog(void) {} uint32_t v_millis(void) { return 0; }
 void v_playSample(int a, int b, int c) { (void)a; (void)b; (void)c; } void v_stopSample(int v) { (void)v; }
 int v_samplePlaying(int v) { (void)v; return 0; }
 static uint8_t psg[16];
+int16_t *g_capL, *g_capR; int *g_ncap;
+void sink(const int16_t *l, const int16_t *r, int n)
+{ for (int i = 0; i < n && *g_ncap < 32000; i++) { g_capL[*g_ncap] = l[i]; g_capR[*g_ncap] = r[i]; (*g_ncap)++; } }
 void v_writePSG(uint8_t r, uint8_t v) { psg[r & 15] = v; }
 void v_setSoundAY(uint8_t r, uint8_t v) { v_writePSG(r, v); }
 
@@ -118,6 +121,60 @@ int main(void)
         CHECK(vpyimpact_stats()->played == after_rest, "drop from %d: once it rests it is silent (%u hits, none after 3 s)", h ? 1600 : 400, vpyimpact_stats()->played);
     }
     CHECK(vol_drop[1] > vol_drop[0], "a crate dropped from 1600 lands louder (%d) than from 400 (%d)", vol_drop[1], vol_drop[0]);
+
+    /* 7. where it happened: quieter far away, silent past `far`, panned to its side */
+    vpyimpact_reset(); vpyimpact_set_pcm(NULL, 32000, 1);
+    vpyimpact_set_listener(0, 0, 0, 1, 0, 1000, 10000);
+    vpyimpact_hit_at(20000, VPYI_WOOD, 500, 0, 0);  int v_near = vpyimpact_stats()->last_volume; run(vols, 64);
+    vpyimpact_hit_at(20000, VPYI_WOOD, 6000, 0, 0); int v_mid2 = vpyimpact_stats()->last_volume; run(vols, 64);
+    const int heard_far = vpyimpact_hit_at(20000, VPYI_WOOD, 12000, 0, 0);
+    CHECK(v_near == 15 && v_mid2 < v_near && v_mid2 > 0 && !heard_far && vpyimpact_stats()->far == 1,
+          "distance: full at 500 (%d), less at 6000 (%d), nothing past 10000 (counted as far)", v_near, v_mid2);
+    run(vols, 64);
+    vpyimpact_hit_at(20000, VPYI_WOOD, 3000, 0, 100); int pr = vpyimpact_stats()->last_pan; run(vols, 64);
+    vpyimpact_hit_at(20000, VPYI_WOOD, -3000, 0, 100); int pl = vpyimpact_stats()->last_pan; run(vols, 64);
+    vpyimpact_hit_at(20000, VPYI_WOOD, 0, 0, 3000); int pc = vpyimpact_stats()->last_pan;
+    CHECK(pr > 100 && pl < -100 && pc > -10 && pc < 10, "pan: right %d, left %d, straight ahead %d", pr, pl, pc);
+
+    /* 8. the PCM path: a hit on the right is louder in the right channel */
+    {
+        static int16_t capL[32000], capR[32000]; static int ncap;
+        void sink(const int16_t *l, const int16_t *r, int n);
+        vpyimpact_reset();
+        vpyimpact_set_listener(0, 0, 0, 1, 0, 1000, 10000);
+        extern int16_t *g_capL, *g_capR; extern int *g_ncap;
+        g_capL = capL; g_capR = capR; g_ncap = &ncap; ncap = 0;
+        vpyimpact_set_pcm(sink, 32000, 0);
+        vpyimpact_hit_at(20000, VPYI_WOOD, 2500, 0, 500);
+        for (int f = 0; f < 10; f++) { vpyimpact_pcm(640); vpyimpact_step(); }
+        int64_t el = 0, er = 0;
+        for (int i = 0; i < ncap; i++) { el += (int64_t)capL[i] * capL[i]; er += (int64_t)capR[i] * capR[i]; }
+        CHECK(ncap == 6400 && er > 4 * el && er > 0 && vpyimpact_stats()->pcm_samples == 6400,
+              "PCM: 6400 samples for 10 frames, and a hit on the right is %.1fx louder on the right", el ? (double)er / el : 999.0);
+        /* four at once; a fifth takes the quietest */
+        vpyimpact_reset(); ncap = 0;
+        for (int k = 0; k < 4; k++) vpyimpact_hit_at(20000, VPYI_METAL, 0, 0, 2000);
+        const uint32_t st4 = vpyimpact_stats()->pcm_stolen;
+        vpyimpact_hit_at(20000, VPYI_METAL, 0, 0, 2000);
+        CHECK(st4 == 0 && vpyimpact_stats()->pcm_stolen == 1 && vpyimpact_stats()->played == 5,
+              "four hits sound together on the PCM path; a fifth takes a voice (stolen %u)", vpyimpact_stats()->pcm_stolen);
+        vpyimpact_set_pcm(sink, 32000, 0);                 /* clears the voices */
+
+        /* 9. DOPPLER: a 400 Hz engine coming at the listener sounds higher, going away lower */
+        int hz[3];
+        const int32_t vel[3] = { 0, -40000, 40000 };   /* along +z from a source at z=2000: approaching, receding */
+        for (int c = 0; c < 3; c++) {
+            vpyimpact_reset(); ncap = 0; vpyimpact_set_pcm(sink, 32000, 0);
+            vpyimpact_loop(0, 0, 0, 2000, 0, 0, vel[c], 400, 15);
+            vpyimpact_pcm(32000);                             /* one second */
+            int cross = 0; for (int i = 1; i < ncap; i++) if ((capL[i - 1] < 0) != (capL[i] < 0)) cross++;
+            hz[c] = cross / 2;
+        }
+        CHECK(abs(hz[0] - 400) <= 2 && hz[1] > hz[0] && hz[2] < hz[0],
+              "Doppler: 400 Hz still = %d, approaching at 40 m/s = %d, receding = %d (theory %.0f / %.0f)",
+              hz[0], hz[1], hz[2], 400 * 343000.0 / (343000 - 40000), 400 * 343000.0 / (343000 + 40000));
+        vpyimpact_set_pcm(NULL, 32000, 1);
+    }
 
     printf("%s (%d failed)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails;
