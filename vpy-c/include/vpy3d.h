@@ -114,6 +114,19 @@ void vpy3d_set_focal(int32_t focal);
  * comes out three quarters as wide as it did then, and that is the correction.
  * The knob is for a console whose size pots are off, not for a default in doubt. */
 void vpy3d_set_aspect(int32_t num, int32_t den);
+/* THE CONSOLE'S SHAPE, from its calibration (uvm2_config.h: aspect_q8, win_x, win_y — set on
+ * the calibration screen). The aspect is used on its own unless the game calls
+ * vpy3d_set_aspect; the visible window only when the game asks for it here, since it changes
+ * what a game composed in the 15500 square shows. 1 if there was a console window to use.
+ * Without the UVMC2 SDK linked in (host, PiTrex, a game under the debug cart's BIOS) there is
+ * no console shape and nothing changes. */
+int  vpy3d_use_console_window(void);
+/* STEREO, for the 3D Imager: draw the scene once per eye. `eye` -1 left, +1 right,
+ * 0 back to one eye; each eye sits `half_separation` world units to its side of the
+ * camera, and what is `converge` units away has no parallax (it sits ON the screen;
+ * nearer comes out, further goes in). The Imager's own driver — the wheel's speed
+ * and its sync — is not in the SDK yet: see TODO.md. */
+void vpy3d_set_stereo(int eye, int32_t half_separation, int32_t converge);
 void vpy3d_aspect(int32_t *num, int32_t *den);
 
 /* Half of what is actually on screen, in the Q14 trig's units (VPY_Q14_TURN per
@@ -361,6 +374,26 @@ int32_t vpy3d_screen_size(int32_t x, int32_t y, int32_t z, int32_t radius);
  * looking across it (the underside is never seen). Returns strokes drawn.
  * The convex occluder is the wrong tool for land; this is the right one. */
 int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, int32_t cell, int br);
+
+/* ---- text in the world ---------------------------------------------------------
+ * The vector font — the very letters PRINT_TEXT draws — on a plane in the world: a
+ * sign on a wall, words painted on the floor, credits that turn. `place` puts the
+ * plane: its local x runs along the text, y up the letters, and it is read from its
+ * -z side (where a camera looking along +z sees it). `height` is a capital letter's
+ * height in world units. One stroke per font stroke, so a word costs what it does
+ * on screen.
+ *   VPY3D_TEXT_OCCLUDE  through the occluder: solids in front hide it
+ *   VPY3D_TEXT_CENTRE   centred on place->t instead of starting there
+ *   VPY3D_TEXT_FRONT    only when its -z side faces the camera (a sign seen from
+ *                       behind reads backwards; this hides it instead)
+ * Returns the strokes it sent. vpy3d_text_billboard() puts the plane at a point,
+ * square to the camera, so it is always read the right way: a label over an
+ * object. */
+#define VPY3D_TEXT_OCCLUDE 1
+#define VPY3D_TEXT_CENTRE  2
+#define VPY3D_TEXT_FRONT   4
+int vpy3d_text(const char *s, const vpy_xf *place, int32_t height, int br, int flags);
+int vpy3d_text_billboard(const char *s, int32_t x, int32_t y, int32_t z, int32_t height, int br, int flags);
 
 /* ---- a ray against a mesh ---------------------------------------------------
  * The first face of mesh `m`, placed by `place`, that a ray from (ox,oy,oz)

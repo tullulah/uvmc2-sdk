@@ -148,7 +148,8 @@ vpy_xf vpy3d_translate(int32_t x, int32_t y, int32_t z)
 }
 
 /* ── the camera ──────────────────────────────────────────────────────────── */
-void vpy3d_set_camera(const vpy_xf *c) { s_cam = *c; s_cam_set = 1; }
+static void console_aspect(void);
+void vpy3d_set_camera(const vpy_xf *c) { s_cam = *c; s_cam_set = 1; console_aspect(); }
 const vpy_xf *vpy3d_camera(void)
 {
     if (!s_cam_set) { s_cam = vpy3d_identity(); s_cam_set = 1; }
@@ -259,14 +260,55 @@ static int64_t lim(int64_t v)
 #endif
 static int32_t s_asp_num = VPY3D_ASPECT_NUM, s_asp_den = VPY3D_ASPECT_DEN;
 
+/* THE CONSOLE'S OWN SHAPE, when there is one: the calibration screen stores an aspect and a
+ * visible window per console (uvm2_config.h, aspect_q8 / win_x / win_y). Weak, so a build
+ * without the UVMC2 SDK in it — the host, the PiTrex, a game under the debug cartridge's
+ * BIOS — simply has none and keeps the defaults. The aspect is taken on its own unless the
+ * game set one; the window only when the game asks (vpy3d_use_console_window), because it
+ * changes what a game composed in the 15500 square shows. */
+/* Weak DEFINITIONS at 0 ("no console shape"), not weak references: uvm2_config.c's strong
+ * ones replace them in a .um2, and a linker that will not take an undefined weak reference
+ * (the host's) still links. */
+__attribute__((weak)) volatile int32_t uvm2_screen_aspect_q8 = 0;
+__attribute__((weak)) volatile int32_t uvm2_screen_win_x = 0;
+__attribute__((weak)) volatile int32_t uvm2_screen_win_y = 0;
+static int s_asp_user;
+
+static void console_aspect(void)
+{
+    if (s_asp_user || uvm2_screen_aspect_q8 <= 0) return;
+    s_asp_num = uvm2_screen_aspect_q8; s_asp_den = 256;
+}
+
+int vpy3d_use_console_window(void)
+{
+    if (uvm2_screen_win_x <= 0 || uvm2_screen_win_y <= 0) return 0;
+    s_clip_x = uvm2_screen_win_x; s_clip_y = uvm2_screen_win_y;
+    return 1;
+}
+
 void vpy3d_set_aspect(int32_t num, int32_t den)
 {
-    if (num > 0 && den > 0) { s_asp_num = num; s_asp_den = den; }
+    if (num > 0 && den > 0) { s_asp_num = num; s_asp_den = den; s_asp_user = 1; }
 }
 void vpy3d_aspect(int32_t *num, int32_t *den) { *num = s_asp_num; *den = s_asp_den; }
 
+/* STEREO: one eye half the separation to its side of the camera, looking parallel,
+ * and the picture moved back so that the convergence plane has no parallax. What is
+ * nearer than it comes out of the screen, what is further goes in. 0 = one eye. */
+static int32_t s_eye_off, s_converge = 1;
+
+void vpy3d_set_stereo(int eye, int32_t half_separation, int32_t converge)
+{
+    s_eye_off = eye < 0 ? -half_separation : (eye > 0 ? half_separation : 0);
+    s_converge = converge > 0 ? converge : 1;
+}
+
 static inline int64_t proj_x(int64_t x, int64_t z)
 {
+    if (s_eye_off)
+        return lim((x - s_eye_off) * s_focal * s_asp_num / (z * s_asp_den)
+                   + (int64_t)s_eye_off * s_focal * s_asp_num / ((int64_t)s_converge * s_asp_den));
     return lim(x * s_focal * s_asp_num / (z * s_asp_den));
 }
 static inline int64_t proj_y(int64_t y, int64_t z) { return lim(y * s_focal / z); }
@@ -1385,4 +1427,69 @@ int vpy3d_draw_lod(const vpy_mesh *const *meshes, const int32_t *min_size, int n
     const int i = vpy3d_lod_pick(place, radius, min_size, n);
     if (i >= 0 && meshes[i]) vpy3d_draw_mesh(meshes[i], place, br);
     return i;
+}
+
+/* ── text in the world ─────────────────────────────────────────────────────────
+ * The glyphs are the font's own streams (vpy_font_glyph), walked exactly as vpy.c's
+ * font_draw_string walks them, but each point is put on the plane instead of on the
+ * screen. GLYPH_CAP is a capital's height in the font's delta units ('A' climbs
+ * 45 + 45), so `height` means what a reader means by it. */
+#define GLYPH_CAP 90
+
+static int glyph_width(const char *s)
+{
+    int x = 0;
+    for (; *s; s++) {
+        const signed char *g = vpy_font_glyph((unsigned char)*s);
+        do { x += g[2]; g += 3; } while ((int)g[0] <= 0);
+    }
+    return x;
+}
+
+int vpy3d_text(const char *s, const vpy_xf *place, int32_t height, int br, int flags)
+{
+    if (!s || !place || height <= 0) return 0;
+    if (flags & VPY3D_TEXT_FRONT) {
+        /* read from -z: the eye must be on that side of the plane */
+        int32_t eye[3]; vpy3d_eye(eye);
+        const int64_t nz = (int64_t)place->m[2] * (eye[0] - place->t[0]) + (int64_t)place->m[5] * (eye[1] - place->t[1])
+                         + (int64_t)place->m[8] * (eye[2] - place->t[2]);
+        if (nz >= 0) return 0;
+    }
+    int32_t gx = (flags & VPY3D_TEXT_CENTRE) ? -glyph_width(s) / 2 : 0, gy = 0;
+    int n = 0;
+    int32_t pw[3] = { 0, 0, 0 };
+    for (; *s; s++) {
+        const signed char *g = vpy_font_glyph((unsigned char)*s);
+        do {
+            const int32_t nx = gx + g[2], ny = gy + g[1];
+            if (g[0] != 0) {
+                int32_t a[3], b[3];
+                const int32_t la[2] = { (int32_t)((int64_t)gx * height / GLYPH_CAP), (int32_t)((int64_t)gy * height / GLYPH_CAP) };
+                const int32_t lb[2] = { (int32_t)((int64_t)nx * height / GLYPH_CAP), (int32_t)((int64_t)ny * height / GLYPH_CAP) };
+                for (int r = 0; r < 3; r++) {
+                    a[r] = place->t[r] + (int32_t)(((int64_t)place->m[r * 3] * la[0] + (int64_t)place->m[r * 3 + 1] * la[1]) >> 14);
+                    b[r] = place->t[r] + (int32_t)(((int64_t)place->m[r * 3] * lb[0] + (int64_t)place->m[r * 3 + 1] * lb[1]) >> 14);
+                }
+                if (flags & VPY3D_TEXT_OCCLUDE) vpy3d_occl_line(a[0], a[1], a[2], b[0], b[1], b[2], br);
+                else                             vpy3d_line_world(a[0], a[1], a[2], b[0], b[1], b[2], br);
+                n++;
+            }
+            gx = nx; gy = ny;
+            g += 3;
+        } while ((int)g[0] <= 0);
+    }
+    (void)pw;
+    return n;
+}
+
+int vpy3d_text_billboard(const char *s, int32_t x, int32_t y, int32_t z, int32_t height, int br, int flags)
+{
+    /* the camera's own axes, turned back into the world: the rows of world→camera
+     * are the camera's right, up and forward as seen from the world */
+    const vpy_xf *c = vpy3d_camera();
+    vpy_xf at;
+    for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) at.m[r * 3 + k] = c->m[k * 3 + r];
+    at.t[0] = x; at.t[1] = y; at.t[2] = z;
+    return vpy3d_text(s, &at, height, br, flags & ~VPY3D_TEXT_FRONT);
 }

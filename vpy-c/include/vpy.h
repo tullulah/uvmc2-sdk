@@ -111,6 +111,11 @@ void vpy_draw_anim(const unsigned char *anim, const unsigned char *const *sprite
 /* ---- text ---- */
 void vpy_set_text_size(int s);       /* glyph scale (VPy units per grid unit ~ s) */
 void vpy_print_text(int x, int y, const char *s);
+/* The vector font's glyph for a character: [pattern, dy, dx] signed-byte triples,
+ * pattern != 0 a stroke and 0 a move, deltas in units of 1/15 of the font's grid,
+ * ending before the next positive pattern byte (see vpy.c). For drawing the same
+ * letters elsewhere — vpy3d_text puts them on a plane in the world. */
+const signed char *vpy_font_glyph(int c);
 void vpy_print_number(int x, int y, long n);
 
 /* ---- input ----

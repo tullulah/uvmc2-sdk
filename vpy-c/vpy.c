@@ -451,6 +451,9 @@ static const signed char *font_glyph(unsigned char c)
  * (matches the inline PITREX_TEXT_SIZE default = m6809 "normal"). */
 static int font_text_size(void) { return (s_text_size > 0) ? s_text_size : 8; }
 
+/* The glyph stream for a character, for drawing the font somewhere else (vpy3d_text). */
+const signed char *vpy_font_glyph(int c) { return font_glyph((unsigned char)c); }
+
 /* Core glyph-stream renderer, reproducing the inline PiTrex print sequence
  * (builtins.rs pitrex_print_text) followed by v_printString's pipeline, but
  * pushing each stroke to the buffer in raw deflection units:
