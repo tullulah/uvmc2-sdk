@@ -68,9 +68,15 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(drift_x, 0), FIELD(drift_y, 0),
     FIELD(hz, UVM2_SETTING_HZ), FIELD(start_menu, UVM2_SETTING_MENU), FIELD(rotate, UVM2_SETTING_ROTATE),
     FIELD(audio, UVM2_SETTING_AUDIO),
+    FIELD(aspect_q8, 0), FIELD(win_x, 0), FIELD(win_y, 0),
 };
 volatile int32_t uvm2_setting_hz = 50, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
 volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
+/* the screen's shape: 1:1 and the 15500 square every vpy3d game was composed in */
+#define SCREEN_ASPECT_DEFAULT 256
+#define SCREEN_WIN_DEFAULT    15500
+volatile int32_t uvm2_screen_aspect_q8 = SCREEN_ASPECT_DEFAULT;
+volatile int32_t uvm2_screen_win_x = SCREEN_WIN_DEFAULT, uvm2_screen_win_y = SCREEN_WIN_DEFAULT;
 
 /* The default is to have no settings of one's own, which is what 43 of the 44 ports want.
  * See the note on uvm2_game_settings in the header for why the hook exists at all. */
@@ -133,6 +139,9 @@ UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
     c->start_menu = uvm2_setting_menu;
     c->rotate     = uvm2_setting_rotate;
     c->audio      = uvm2_setting_audio;
+    c->aspect_q8  = uvm2_screen_aspect_q8;
+    c->win_x      = uvm2_screen_win_x;
+    c->win_y      = uvm2_screen_win_y;
 }
 
 UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
@@ -159,6 +168,10 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
     /* And this one is NOT applied to anything: the SDK does not route a game's sound. It is
      * stored so the game finds it where it left it. See uvm2_config.h. */
     uvm2_setting_audio = c->audio ? 1 : 0;
+    /* ZERO IS "AN OLD FILE", as with the holds above: a shape of 0 means nothing was saved. */
+    if (c->aspect_q8 > 0) uvm2_screen_aspect_q8 = c->aspect_q8;
+    if (c->win_x > 0)     uvm2_screen_win_x = c->win_x;
+    if (c->win_y > 0)     uvm2_screen_win_y = c->win_y;
 }
 
 /* ── THE TEXT FILE ON THE SD ────────────────────────────────────────────────────────

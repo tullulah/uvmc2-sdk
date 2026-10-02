@@ -260,6 +260,33 @@ static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE" };
  * field and saves nothing. What you calibrate against is a choice made at the screen, not a
  * property of the console. */
 static const char *const LBL_FIGURE[] = { "AUTO", "TEXT", "WHEEL", "RINGS" };
+
+/* THE SCREEN'S SHAPE, by eye: a square and a circle drawn with x scaled by the ASPECT being
+ * set — square and round on the glass is right — and a frame at the window's edges (WIN X,
+ * WIN Y), which is right when it just touches the edges of what the tube shows. The window
+ * is in vpy3d's deflection units; this draws in device units, one of which is 127 of those
+ * (VS_Q4 in sdk_rp2350.c). */
+#define DEFL_PER_DEVICE 127
+#define SHAPE_HALF      40       /* the square's half side, device units */
+UVM2_COLD static void shape_pattern(int32_t aspect_q8, int32_t win_x, int32_t win_y)
+{
+    const int hx = (int)(SHAPE_HALF * aspect_q8 / 256), hy = SHAPE_HALF;
+    uvm2_draw_move_abs(-hx, -hy);
+    uvm2_draw_delta(2 * hx, 0); uvm2_draw_delta(0, 2 * hy); uvm2_draw_delta(-2 * hx, 0); uvm2_draw_delta(0, -2 * hy);
+    /* the circle inside the square, ring()'s polygon with x scaled the same: it must touch
+     * all four sides */
+    int px = ring_div(hx * RING_COS[0]), py = ring_div(hy * RING_SIN[0]);
+    uvm2_draw_move_abs(px, py);
+    for (int k = 1; k <= RING_V; k++) {
+        const int j = k & (RING_V - 1);
+        const int x = ring_div(hx * RING_COS[j]), y = ring_div(hy * RING_SIN[j]);
+        uvm2_draw_delta(x - px, y - py);
+        px = x; py = y;
+    }
+    const int wx = (int)(win_x / DEFL_PER_DEVICE), wy = (int)(win_y / DEFL_PER_DEVICE);
+    uvm2_draw_move_abs(-wx, -wy);
+    uvm2_draw_delta(2 * wx, 0); uvm2_draw_delta(0, 2 * wy); uvm2_draw_delta(-2 * wx, 0); uvm2_draw_delta(0, -2 * wy);
+}
 #define FIG_AUTO 0
 #define FIG_TEXT 1
 #define FIG_WHEEL 2
@@ -305,7 +332,9 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
     /* Four of the console's plus every one the game declares. It was 8, which is EXACTLY
      * full now that AUDIO exists — and a fifth game setting would have written past the end
      * with nothing to say so. */
-    struct field fields[12];
+    /* Sixteen: the console's four, the shape's three, FIGURE and every game setting there is,
+     * with room. It was 12, EXACTLY full once the shape's three came in. */
+    struct field fields[16];
     int n = 0;
     fields[n++] = (struct field){ "ZERO",   &c.zero,       0, 255, 1 };
     fields[n++] = (struct field){ "BRIGHT", &c.bright,     0, 127, 1 };
@@ -315,6 +344,12 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
      * of the stick clamped it to 512 — the calibration moved without anyone asking, and it
      * could never be put back. Reported on the console 2026-09-28: "tail no sube de 512". */
     fields[n++] = (struct field){ "TAIL",   &c.t1_tail_q8, -512, 1280, 8 };
+    /* THE SCREEN'S SHAPE (see shape_pattern). Ranges: an aspect a quarter either side of 1:1
+     * is already a console far out of adjustment; the window from a little over half the
+     * composed square to the edge of what the DAC reaches. */
+    fields[n++] = (struct field){ "ASPECT", &c.aspect_q8,  192, 320, 2 };
+    fields[n++] = (struct field){ "WIN X",  &c.win_x,     8000, 24000, 250 };
+    fields[n++] = (struct field){ "WIN Y",  &c.win_y,     8000, 24000, 250 };
     /* A LOCAL, ON PURPOSE. uvm2_config_apply and uvm2_config_save only ever see `c`, so a
      * field pointing here moves like the others and is gone when the screen closes. */
     int32_t figsel = FIG_AUTO;
@@ -390,6 +425,9 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
             square( 70, 10, 10);
         } else if (fields[sel].value == &c.zero) {
             zero_pattern(c.bright);       /* the zero's own pattern, whatever the game passed */
+        } else if (fields[sel].value == &c.aspect_q8 || fields[sel].value == &c.win_x ||
+                   fields[sel].value == &c.win_y) {
+            shape_pattern(c.aspect_q8, c.win_x, c.win_y);   /* the shape's own pattern */
         } else if (figure) {
             figure();                     /* the game's, see above */
         } else {

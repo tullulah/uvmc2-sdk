@@ -89,12 +89,25 @@ struct uvm2_config {
      * ZERO IS THE JACK because zero is what a file written before this existed brings, and on
      * the UVMC2 the jack is what it was already doing. */
     int32_t audio;
+    /* THE SCREEN'S SHAPE, per console. `aspect_q8` is how much wider an x unit draws than a
+     * y unit should — 256 = the same, which is what one console measured by photograph
+     * (2026-10-01, docs/12); a console whose size pots are off differs, and vpy3d multiplies
+     * x by it. `win_x`/`win_y` are the half extents of what is visible on the tube, in
+     * deflection units (vpy3d's clip): 15500 square is what every vpy3d game was composed
+     * in, and that console showed about +-18000 x +-20500. The calibration screen sets them by
+     * eye, against a square and a circle and a frame drawn at the window's edges. Appended,
+     * like everything after `hz`: a file or a BIOS without them keeps the old behaviour. */
+    int32_t aspect_q8;
+    int32_t win_x;
+    int32_t win_y;
 };
 extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu;
 /* The audio one is declared separately: `sdk_rp2350.c` does not define it, because the debug
  * board has no jack and the choice does not exist there. Whoever reads it fences itself off
  * with its own UVM2-only guard. */
 extern volatile int32_t uvm2_setting_audio;
+/* The screen's shape (see aspect_q8 above), for vpy3d to read. Defaults 256, 15500, 15500. */
+extern volatile int32_t uvm2_screen_aspect_q8, uvm2_screen_win_x, uvm2_screen_win_y;
 
 /* WHICH OF ITS OWN SETTINGS THIS GAME USES. Beam calibration belongs to the CONSOLE and is
  * shared; this is what belongs to the game, and each one declares only what it has — so

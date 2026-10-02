@@ -57,6 +57,10 @@ enum {
     SYS_SAMPLE_POS    = 10,
     SYS_RASTER_TEXT   = 26,   /* (r0:x, r1:y, r2:str, r3:len) — see sdk_rp2350.c */
     SYS_DRAW_GAPPED   = 27,   /* (r0:dx, r1:dy, r2:gaps, r3:n) — one ramp, BLANK toggled inside */
+    /* () -> r0: 1 saved. The console calibration screen, as the debug cartridge's BIOS serves
+     * it, so a VPy game's CALIBRATE() means the same on both. 30 and not 26: 26 is
+     * RASTER_TEXT here, and for one day (2026-10-02) the BIOS gave CALIBRATE that same number. */
+    SYS_CALIBRATE     = 30,
     SYS_MOVE_Q4       = 28,   /* (r0:dx, r1:dy) in 1/16 of a unit: VPy in subunits */
     SYS_DRAW_DELTA_Q4 = 29,   /* (r0:dx, r1:dy) in 1/16 of a unit, lit */
 };
@@ -414,6 +418,15 @@ void uvm2_svc_dispatch(uint32_t *frame)
         if (str) uvm2_print_text((int)(int8_t)r0, (int)(int8_t)r1, str, 1, 0x5F);
         break;
     }
+
+    /* The game calls it in the middle of its frame: close that frame, let the calibration
+     * screen draw its own until button 4, and open a fresh one for the game — as the BIOS does. */
+    case SYS_CALIBRATE:
+        uvm2_frame_end();
+        frame[0] = (uint32_t)uvm2_config_wizard();
+        uvm2_draw_invalidate();
+        uvm2_frame_begin();
+        break;
 
 #endif /* UVM2_NO_DRAW */
 
