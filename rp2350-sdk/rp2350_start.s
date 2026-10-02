@@ -52,6 +52,18 @@ game_header:
     .type game_main, %function
     .thumb_func
 game_main:
+    @ THE FPU ON, before anything else runs. The BIOS starts a game on a core whose
+    @ CPACR (banked per core) leaves CP10/CP11 off, so the first float instruction is
+    @ a NOCP HardFault. Measured 2026-10-02 on the debug cart (n64/sm64): a bench's
+    @ first vpush faulted, and a fix inside main() came too late for a main whose
+    @ own prologue saves an FPU register. Harmless for a game with no float at all.
+    @ (The .um2 does not come through here: the pico-sdk's crt0 already does this.)
+    ldr     r0, =0xE000ED88         @ CPACR
+    ldr     r1, [r0]
+    orr     r1, r1, #0x00F00000     @ CP10, CP11: full access
+    str     r1, [r0]
+    dsb
+    isb
     @ copy .sram_text [lma, lma+size) -> [vma, end): hot code the game asked to run
     @ from internal SRAM instead of PSRAM (see rp2350_game_ram.ld). Empty = no-op.
     ldr     r0, =__sram_text_lma
