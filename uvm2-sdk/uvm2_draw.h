@@ -75,6 +75,24 @@ void uvm2_draw_move_abs(int x, int y);
  * question "is this shimmer a beat against the mains?" is either answered in seconds or it
  * is not answered at all. */
 extern volatile uint32_t uvm2_pacer_cycles;
+
+/* ── THE DIAGNOSTICS HUD (uvm2_hud.c) ─────────────────────────────────────────────────────
+ * The figures stats.py reads over SWD, drawn on the tube over any game, two lines:
+ * "F<fps> C<game's cycles> D<dropped> Z<ramps_clamped>" ("!!" when D or Z is not 0) and
+ * "S<core 0 stack> <core 1 stack> N<commands> V<vectors>" ("!" after the stacks on an
+ * overflow). It costs ~7000 bus cycles a frame: see uvm2_hud.c. Hold buttons 1 and 4 — only those — for two seconds to switch it on or off,
+ * or poke `uvm2_hud` over SWD. Not in a BIOS build. */
+extern volatile uint8_t uvm2_hud;                  /* 0 off, 1 on */
+typedef struct {
+    uint32_t cmds, cycles, vectors;  /* what the HUD added to the last frame */
+    uint32_t drawn;                  /* frames it was drawn on */
+    uint32_t skipped;                /* frames it was on but the list had no room for it */
+    uint32_t toggles;                /* times the combo switched it */
+} uvm2_hud_stats_t;
+extern uvm2_hud_stats_t uvm2_hud_stats;
+void     uvm2_hud_frame(void);       /* called by uvm2_frame_end; not for games */
+extern char uvm2_hud_text[2][32];    /* the lines last drawn, as text */
+uint32_t uvm2_list_room(void);       /* commands the game may still add this frame */
 /* 1 (default): the inter-frame filler runs with the zero clamp on (the beam held at the
  * centre); 0: the reference's filler, ramp free — which sweeps a dark diagonal that shows with
  * the brightness up. See frame_filler. */

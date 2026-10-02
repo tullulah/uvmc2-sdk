@@ -20,11 +20,12 @@ mkdir -p "$OUT"
 LIB=../vectrex-draw/cabi/target/release/libvectrex_draw_cabi.a
 FLAGS="-O2 -w -DUVM2_HOST -DUVM2_BENCH_NO_CORE1 -DUVM2_SUBUNITS -DUVM2_HZ=0 -DUVM2_CMD_CAPACITY=65536u -I."
 fail=0
-for t in uvm2_anatomy uvm2_budget uvm2_gapped_budget uvm2_list_count uvm2_op_cost uvm2_order uvm2_ramp_cost uvm2_smp_test uvm2_dump_test; do
+for t in uvm2_anatomy uvm2_budget uvm2_gapped_budget uvm2_list_count uvm2_op_cost uvm2_order uvm2_ramp_cost uvm2_smp_test uvm2_dump_test uvm2_hud_test; do
     extra=""
     grep -q "uvm2_smp.c" "tools/$t.c" && extra="uvm2_smp.c"
     [ "$t" = uvm2_dump_test ] && extra="uvm2_dump.c"
-    if cc $FLAGS -o "$OUT/$t" "tools/$t.c" uvm2_draw.c $extra tools/uvm2_host_stubs.c "$LIB"; then
+    # uvm2_frame_end calls the diagnostics HUD, which draws with uvm2_text: every tool links both
+    if cc $FLAGS -o "$OUT/$t" "tools/$t.c" uvm2_draw.c uvm2_hud.c uvm2_text.c $extra tools/uvm2_host_stubs.c "$LIB"; then
         echo "  ok    $t"
     else
         echo "  FAIL  $t"; fail=$((fail + 1))

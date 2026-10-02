@@ -42,3 +42,7 @@ WEAK uint8_t uvm2_via_read(uint32_t r) { (void)r; return 0; }
 
 /* the Rust beam model's static library asks for this; nothing unwinds here */
 WEAK void rust_eh_personality(void) {}
+
+/* The button cache core 1 fills on the console (uvm2_core1.c). uvm2_hud.c reads it; a tool
+ * that tests buttons defines its own, which wins over this weak one. Nothing pressed. */
+__attribute__((weak)) volatile uint8_t uvm2_cached_buttons = 0xFFu;

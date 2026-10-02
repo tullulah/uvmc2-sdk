@@ -247,6 +247,9 @@ uint32_t uvm2_list_cycles(void) { return s_cycles; }
  * call cost, which `uvm2_stats.commands` cannot because it is only written when the
  * frame closes. Nothing in a game should need it. */
 uint32_t uvm2_list_commands(void) { return s_count; }
+/* How many more commands the game may still put in this frame's list (uvm2_hud.c asks, so it
+ * never makes a list overflow). */
+uint32_t uvm2_list_room(void) { return s_limit > s_count ? s_limit - s_count : 0u; }
 
 /* Those of the frame already PUBLISHED, which is the one core 1 replays. */
 uint32_t uvm2_frame_cycles(uint32_t frame) { return s_cycles_pub[frame & 1u]; }
@@ -3089,6 +3092,13 @@ void uvm2_frame_end(void)
      * touches neither, so all its frames looked empty and none was published — core 1 was left
      * with nothing to draw and `uvm2_frame_request` stayed at zero. */
     if (s_count <= s_count_after_begin) return;
+
+#ifndef UVM2_BIOS
+    /* THE DIAGNOSTICS HUD (uvm2_hud.c), if it is on: a few lines of text at the end of the
+     * game's frame, before the close and the filler, so the frame still blanks, re-zeroes
+     * and pads to the pace exactly as without it. Off, it only counts the combo. */
+    uvm2_hud_frame();
+#endif
 
     /* BLANK EXPLICITLY, do not assume it. This used to say "blanked already (every lit
      * segment restores the PCR)", which is an ASSUMPTION: it only holds if the frame ended on
