@@ -27,6 +27,7 @@ void uvm2_romzip_load(void);       /* uvm2_romzip.c: reads roms/<game>.zip off t
 #ifdef UVM2_DUAL_CORE
 void uvm2_core1_start(void);       /* uvm2_core1.c */
 void uvm2_stack_paint(void);       /* uvm2_core1.c: stack0_peak / stack1_peak */
+void uvm2_restart_snapshot(void);  /* uvm2_core1.c: .data, for the reset button's restart */
 #endif
 
 /* PANIC, WITH NO printf IN THE WAY.
@@ -85,6 +86,10 @@ int uvm2_psram_ready = -1;   /* 1 = the PSRAM answered, 0 = it did not, -1 = nev
 
 int main(void)
 {
+#ifdef UVM2_DUAL_CORE
+    /* FIRST, before anything writes a global: the values a restart must start from. */
+    uvm2_restart_snapshot();
+#endif
 #ifndef UVM2_STEP_OWNS_INIT
     uvm2_runtime_init();
     /* With the bus already taken: 256 E periods, about 170 us. It leaves the clock/E ratio

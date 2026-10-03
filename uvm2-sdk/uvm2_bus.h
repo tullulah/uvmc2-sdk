@@ -242,6 +242,12 @@ UVM2_RAMFUNC void uvm2_bus_delay(uint32_t cycles);
  * its frame.  uvm2_via_write is the one-off equivalent of a single command. */
 UVM2_RAMFUNC void    uvm2_via_write(uint32_t reg, uint32_t data);
 UVM2_RAMFUNC uint8_t uvm2_via_read(uint32_t reg);
+#ifndef UVM2_BIOS
+/* One write anywhere on the Vectrex's bus — its RAM at $C800-$CBFF, say — with the same
+ * timing as uvm2_via_write. Core 1, between frames, like every single access. UVMC2 pin map
+ * only: the debug cartridge's BIOS has its own. */
+UVM2_RAMFUNC void    uvm2_mem_write(uint32_t addr, uint32_t data);
+#endif
 
 /* ── Instrumentation ───────────────────────────────────────────────────────
  * A 50 Hz frame is 30000 bus cycles.  These let a game (or the IDE) report how

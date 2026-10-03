@@ -500,6 +500,27 @@ uint32_t uvm2_write_out, uvm2_write_in, uvm2_write_oe;
  * its own bus access: the write as a stream word and the read with the bus free. What
  * follows is the UVM2's SIO path (its pins, its masks). */
 #ifndef UVM2_BIOS
+#ifndef UVM2_BIOS
+UVM2_RAMFUNC void uvm2_mem_write(uint32_t addr, uint32_t data)
+{
+    const uint32_t out = ((addr & 0x3FFFu) << 8)                 /* A0-A13 → GPIO8-21 */
+                       | ((addr & 0x4000u) ? UVM2_A14_MASK : 0u)
+                       | ((addr & 0x8000u) ? UVM2_A15_MASK : 0u)
+                       | (data & 0xFFu);                         /* D0-D7  → GPIO0-7  */
+    UVM2_BUS_TAKE();
+    /* the phase rule of uvm2_via_write, and its reasons: a whole edge first, present with
+     * E high, hold through, park with E high again */
+    UVM2_WAIT_CLK_LOW();
+    UVM2_WAIT_CLK_HIGH();
+    uvm2_put_masked(out, UVM2_BUS_MASK);                         /* R/W low = write */
+    UVM2_WAIT_CLK_LOW();
+    UVM2_WAIT_CLK_HIGH();
+    uvm2_put_masked(UVM2_PARK_BITS, UVM2_BUS_MASK & ~UVM2_DATA_MASK);
+    uvm2_single_cycles += 2;
+    UVM2_BUS_RELEASE();
+}
+#endif
+
 UVM2_RAMFUNC void uvm2_via_write(uint32_t reg, uint32_t data)
 {
     uint32_t out = UVM2_VIA_BASE_BITS

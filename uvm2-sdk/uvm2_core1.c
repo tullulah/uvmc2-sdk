@@ -54,6 +54,13 @@ uint32_t uvm2_sig_failures, uvm2_sig_compared, uvm2_sig_read, uvm2_sig_last_ok;
 
 #include "pico/multicore.h"
 #include "pico/time.h"
+#ifdef UVM2_BIOS
+#define INPUT_HELD() 0
+#endif
+#ifndef UVM2_BIOS
+#include "pico/bootrom.h"
+#include "boot/picoboot_constants.h"
+#endif
 
 /* Published by uvm2_draw.c. `request` counts frames core 0 has finished
  * building, `done` frames core 1 has finished replaying; the buffer for frame n
@@ -145,6 +152,100 @@ static void psg_drain(void)
 volatile uint8_t  uvm2_cached_buttons = 0xFFu;
 
 #ifndef UVM2_BIOS
+/* THE CONSOLE'S RESET BUTTON: HELD 3 SECONDS, BACK TO THE UVMC2's MENU; HELD 1 TO 3 AND LET GO,
+ * THE GAME STARTS AGAIN (restart_game, below). Under a second it does nothing, so a brush
+ * against the button costs nothing.
+ *
+ * The reset button is not wired to the cartridge (the UVMC2's schematic: its one button, SW1,
+ * is the RP2350's BOOTSEL, and /RUN has only a pull-up). What it does reach is the VIA: the
+ * console's reset holds the 6522 in reset, and a VIA in reset STOPS ITS TIMERS. So the way to
+ * see the button is to watch a timer — Ralf's games do exactly that, and reboot into the
+ * firmware with rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0).
+ *
+ * Between frames (CLAUDE.md invariant 7: reads happen between frames), core 1 reads T1's
+ * HIGH byte twice, UVM2_RESET_GAP bus cycles apart. T1 counts down one per cycle and keeps
+ * counting after it expires, so its high byte moves at least once in more than 256 cycles;
+ * the high byte, because reading the LOW one clears T1's interrupt flag. Not moving = the
+ * VIA is held in reset. Held for UVM2_RESET_HOLD_US, the cartridge reboots — at once, while
+ * still held, as Ralf's do. A shorter press only costs the VIA its setup, which every frame's
+ * list programs again at its start.
+ * `uvm2_reset_seen` counts the presses noticed and `uvm2_reset_held_us` is how long the
+ * current one has lasted, so "it never reboots" can be told from "it never saw the button". */
+#define UVM2_RESET_GAP      300u        /* bus cycles between the two reads: > 256 */
+#define UVM2_RESET_HOLD_US  3000000u    /* held this long: back to the UVMC2's menu */
+#define UVM2_RESTART_US     1000000u    /* held this long and let go: the game starts again */
+volatile uint32_t uvm2_reset_seen, uvm2_reset_held_us;
+/* THE CONTROLLERS ARE NOT READ WHILE THE VIA IS IN RESET, nor for UVM2_RESET_SETTLE frames
+ * after: a VIA in reset reads back zeros, which on the active-low buttons is "all pressed".
+ * Reported on the UVMC2 2026-10-03: a short press of the reset button dropped a crate and
+ * punched the ball in soft_demo — buttons 3 and 2, seen down for a frame or two. The game
+ * keeps the last good reading instead; the frame after, the list has programmed the VIA
+ * again. */
+#define UVM2_RESET_SETTLE 2u
+static uint32_t s_input_hold;
+#define INPUT_HELD() (s_input_hold != 0u)
+
+/* THE GAME, STARTED AGAIN, without the menu: the reset button held between one and three
+ * seconds and let go. The image is still in SRAM, so the bootrom is asked to boot it again
+ * from there (BOOT_TYPE_RAM_IMAGE, the way the UVMC2's launcher started it). What would not
+ * be clean is .data: a no_flash image keeps its initial values in place, so whatever the game
+ * changed would start the next run. So .data is copied aside as the game starts
+ * (uvm2_restart_snapshot, from main) and put back just before the reboot; .bss and the
+ * stacks are cleared by the start-up itself. A .data too big for the copy turns the restart
+ * off and counts it in `uvm2_restart_refused` — the button then does nothing short of the
+ * menu, rather than restart a game with stale globals. */
+#define UVM2_RESTART_SNAP   4096u       /* bytes of .data that can be put back */
+#define UVM2_IMAGE_BASE     0x20000000u /* where the launcher loads a .um2 (uvm2_game.ld) */
+#define UVM2_IMAGE_WINDOW   (496u * 1024u)
+extern uint8_t __data_start__[], __data_end__[];
+static uint8_t s_data_snap[UVM2_RESTART_SNAP];
+static int     s_snap_ok;
+volatile uint32_t uvm2_restart_refused;
+void uvm2_restart_snapshot(void)
+{
+    const uint32_t n = (uint32_t)(__data_end__ - __data_start__);
+    if (n > UVM2_RESTART_SNAP) { uvm2_restart_refused++; return; }
+    for (uint32_t i = 0; i < n; i++) s_data_snap[i] = __data_start__[i];
+    s_snap_ok = 1;
+}
+static void restart_game(void)
+{
+    if (!s_snap_ok) { uvm2_restart_refused++; return; }
+    const uint32_t n = (uint32_t)(__data_end__ - __data_start__);
+    __asm volatile ("cpsid i" ::: "memory");      /* nothing runs on what is being put back */
+    for (uint32_t i = 0; i < n; i++) __data_start__[i] = s_data_snap[i];
+    rom_reboot(BOOT_TYPE_RAM_IMAGE | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, UVM2_IMAGE_BASE, UVM2_IMAGE_WINDOW);
+}
+/* THE VECTREX'S WARM-START MARK. On a reset its BIOS checks Vec_Cold_Flag at $CBFE: $7321
+ * there means warm — no logo, straight to the cartridge, which is how the UVMC2's firmware
+ * comes back to its menu ("loading", then the menu) after a game of Ralf's. Without it the
+ * console cold-starts: logo first. Reported on the UVMC2 2026-10-03 with this SDK: the
+ * reboot worked but went through the full start. Written ONCE, as core 1 starts, with the
+ * 6809 halted and the bus ours; nothing in the SDK writes the console's RAM afterwards. Not
+ * at the moment of the reboot: with the reset button down the 6809 may be driving the bus. */
+#define VEC_COLD_FLAG_ADDR 0xCBFEu
+#define VEC_COLD_FLAG_WARM 0x7321u
+static void reset_poll(void)
+{
+    static uint32_t since;
+    static int down;
+    const uint8_t a = uvm2_via_read(UVM2_VIA_T1CH);
+    uvm2_bus_delay(UVM2_RESET_GAP);
+    const uint8_t b = uvm2_via_read(UVM2_VIA_T1CH);
+    if (a == b) {
+        s_input_hold = UVM2_RESET_SETTLE;
+        if (!down) { down = 1; uvm2_reset_seen++; since = time_us_32(); }
+        uvm2_reset_held_us = time_us_32() - since;
+        if (uvm2_reset_held_us >= UVM2_RESET_HOLD_US)
+            rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
+    } else {
+        if (s_input_hold) s_input_hold--;
+        /* let go: between one and three seconds is a restart (three is the menu, above) */
+        if (down && uvm2_reset_held_us >= UVM2_RESTART_US) restart_game();
+        down = 0; uvm2_reset_held_us = 0;
+    }
+}
+
 /* THE STACK PAINT (see stack0_peak in uvm2_bus.h). The pico-sdk memory map puts core 0's stack
  * in SCRATCH_Y, from __StackTop down to __StackOneTop, and core 1's below it, from
  * __StackOneTop down to __StackOneBottom. A word that still holds the paint has never been
@@ -184,6 +285,10 @@ void uvm2_core1_gap(void);   /* per-pass hook; weak, below */
 static void core1_main(void)
 {
     uint32_t served = 0;
+#ifndef UVM2_BIOS
+    uvm2_mem_write(VEC_COLD_FLAG_ADDR,      VEC_COLD_FLAG_WARM >> 8);   /* 6809: big-endian */
+    uvm2_mem_write(VEC_COLD_FLAG_ADDR + 1u, VEC_COLD_FLAG_WARM & 0xFFu);
+#endif
 
     for (;;) {
         /* REALLY TIMED, in microseconds. We got here after two rounds of guessing where
@@ -233,9 +338,14 @@ static void core1_main(void)
                 if (time_us_32() - t_idle >= period_us) {
                     t_idle = time_us_32();
                     uvm2_single_cycles = 0;
+#ifndef UVM2_BIOS
+                    reset_poll();                 /* first: it decides whether input is read */
+#endif
 #ifndef UVM2_NO_INPUT
-                    uvm2_cached_buttons = uvm2_read_buttons();
-                    uvm2_cached_axes    = uvm2_read_axes();
+                    if (!INPUT_HELD()) {
+                        uvm2_cached_buttons = uvm2_read_buttons();
+                        uvm2_cached_axes    = uvm2_read_axes();
+                    }
 #endif
                     uvm2_draw_invalidate();
                     uvm2_core1_gap();
@@ -300,6 +410,7 @@ static void core1_main(void)
             static uint32_t since_check;
             if (++since_check >= STACK_CHECK_FRAMES) { since_check = 0; stack_check(); }
         }
+        reset_poll();
 #endif
 
         /* HOW LONG THE LIST TAKES AGAINST WHAT IT ASKS FOR, which is the one figure that
@@ -359,8 +470,10 @@ static void core1_main(void)
          */
         uvm2_single_cycles = 0;
 #ifndef UVM2_NO_INPUT
-        uvm2_cached_buttons = uvm2_read_buttons();
-        uvm2_cached_axes    = uvm2_read_axes();
+        if (!INPUT_HELD()) {                       /* see UVM2_RESET_SETTLE */
+            uvm2_cached_buttons = uvm2_read_buttons();
+            uvm2_cached_axes    = uvm2_read_axes();
+        }
 #endif
         uint32_t t2 = time_us_32();
         uvm2_stats.us_input = t2 - t1;
