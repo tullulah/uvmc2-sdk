@@ -72,7 +72,7 @@ UVM2_CFLAGS += -DUVM2_HZ=$(UVM2_HZ)
 # SUBUNITS FOR EVERYONE. The geometry travels in 1/16 of a unit end to end:
 # v_directDraw32 (sdk_rp2350.c) calls uvm2_draw_move_abs_q4/delta_q4 and the SDK
 # (uvm2_draw.c, UVM2_Q_BITS=4) splits, re-zeroes and calibrates in that unit. It is what was
-# validated as optimal in dkong against the reference capture, and it is the ONLY path: the
+# validated as optimal in dkong, and it is the ONLY path: the
 # integer knobs (merging, Douglas-Peucker, reordering, clipping) no longer exist. Our own
 # cartridge's BIOS compiles it the same way (build.rs).
 UVM2_CFLAGS += -DUVM2_SUBUNITS

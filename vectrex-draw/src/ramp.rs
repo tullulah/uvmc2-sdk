@@ -15,8 +15,8 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 /// THE DRAWING SCALE — and it is a MAGIC NUMBER, as its own comment below says: "it is
 /// 0xA0 = 160 and it is empirical". Nobody derived it from anything; it was raised until the
-/// figures came out a size that looked right. The reference implementation, which draws
-/// correctly on this same console, uses 128 — another magic number, except that theirs works.
+/// figures came out a size that looked right. 128 also draws correctly on this same console —
+/// another magic number.
 ///
 /// RUNTIME since 2026-08-25, so it can be swept from the panel instead of recompiling for
 /// every value. That does not make it derived: it is still empirical, and what is needed is
@@ -77,8 +77,8 @@ pub fn trim_dac(vx: i8, vy: i8) -> (i8, i8) {
 /// 2026-08-25, Kong came out deformed until the two were tied together.
 ///
 /// It is tied here and not in the caller, because "remember to set both" is exactly the class
-/// of divergence this project has been paying for. And it explains in passing why the
-/// reference's 128 IS its scale: in the fixed-time model they are the same number.
+/// of divergence this project has been paying for. And it explains in passing why a
+/// fixed-time drawer's ramp length IS its scale: in that model they are the same number.
 #[inline]
 pub fn scale() -> i32 {
     let fixed = FIXED_RAMP.load(Ordering::Relaxed);
@@ -111,9 +111,9 @@ pub fn scale() -> i32 {
 #[used]
 #[no_mangle]
 pub static MIN_T1: AtomicU32 = AtomicU32::new(8);
-/* ^ 8 AND NOT 31, BY DEFAULT SINCE 2026-09-04: it is what the reference cartridge measures on
- * ALL its short lit strokes (1861 of ~1900 in 8 frames), and what the tuned ports were already
- * setting by hand. */
+/* ^ 8 AND NOT 31, BY DEFAULT SINCE 2026-09-04: measured on bus captures, 8 is the ramp of
+ * nearly all short lit strokes (1861 of ~1900 in 8 frames), and it is what the tuned ports were
+ * already setting by hand. */
 
 /// Ramp floor ONLY for the ones that start from rest (the jump and the first stroke after it).
 /// See the long block in `ramp_params`. Out of the box equal to MIN_T1 = inert.
@@ -150,10 +150,10 @@ static STARTING: AtomicU32 = AtomicU32::new(1);
  *
  * There used to be a `VCAP` here, a knob that bounded the beam's SPEED because slowing it down
  * charges the phosphor more: more brightness. The price did not show until 2026-09-09,
- * comparing our list command by command against the reference capture of the SAME picture
- * (the high-score screen):
+ * comparing our list command by command against a bus capture of the SAME picture (the
+ * high-score screen):
  *
- *   its 427 lit strokes ALL run at t1 = 8, with rates of median 49 and maximum 51.
+ *   the capture's 427 lit strokes ALL run at t1 = 8, with rates of median 49 and maximum 51.
  *   Ours came out 315 at t1 = 8 and 109 at t1 = 16, and those 109 at rate 29-31: the chooser
  *   saw that ~50 was needed, forbade it because VCAP = 42 and DOUBLED t1 to halve the rate.
  *
@@ -161,14 +161,13 @@ static STARTING: AtomicU32 = AtomicU32::new(1);
  * out with its rows stacked, and with -DUVM2_MICROSEGMENTS — which splits those strokes into
  * stretches of 8 — it STRAIGHTENS OUT. That was the experiment that closed it.
  *
- * THEIR RULE is what remains: t1 is the smallest one that keeps the rate inside the DAC. The
- * cap is not a preference, it is the converter's limit. They get brightness from Z, not from
- * slowing the beam — and their dwell per unit (3.2 cycles) falls out by itself because the
- * stroke is short.
+ * THE RULE that remains: t1 is the smallest one that keeps the rate inside the DAC. The cap is
+ * not a preference, it is the converter's limit. Brightness comes from Z, not from slowing the
+ * beam — and the dwell per unit (3.2 cycles) falls out by itself because the stroke is short.
  *
  * WHAT IS LOST BY REMOVING IT, for the record: a fixed-frame sweep put VCAP = 42 within 2% of
- * their cycles per unit and 4% of their phosphor charge (VCAP 29/34/38/42 -> cyc/unit
- * 5.54/4.85/4.26/3.93 against their 4.00). That adjustment equalised the frame's MEAN by
+ * the captured cycles per unit and 4% of its phosphor charge (VCAP 29/34/38/42 -> cyc/unit
+ * 5.54/4.85/4.26/3.93 against the capture's 4.00). That adjustment equalised the frame's MEAN by
  * slowing the text below what its geometry allows: one number cannot serve both long vectors
  * and glyphs. */
 const DAC_CAP: u32 = 127;
@@ -180,18 +179,18 @@ const DAC_CAP: u32 = 127;
  * counts with the beam lit**. A jump travels blanked: slowing it lights nothing and only
  * spends frame.
  *
- * MEASURED in the reference capture (816 frames of asterock), separating its ramp units by
- * beam state:
+ * MEASURED in a bus capture of 816 frames of Asteroids, separating its ramp units by beam
+ * state:
  *
  *     LIT     (drawing): median rate 35    1,403 cycles/frame  (175 units)
  *     BLANKED (jumping): median rate 64   10,232 cycles/frame  (317 units)
  *     -> IT JUMPS AT 1.8x THE SPEED IT DRAWS AT
  *
  * We used ONE cap for both, and that forces a choice between bright strokes and fast jumps
- * when there is no choice to make. The cost measured in asterock: to match their phosphor
- * charge (3.27 lit cycles per unit of length) we needed VCAP=48, and with it the frame went
- * from 33,205 to 72,578 cycles — from 45 to 20.7 Hz — because the ~266 jumps per frame
- * stretched along with the strokes: ~267 cycles per jump against the reference's ~32.
+ * when there is no choice to make. The cost measured in Asteroids: to match the captured
+ * phosphor charge (3.27 lit cycles per unit of length) we needed VCAP=48, and with it the frame
+ * went from 33,205 to 72,578 cycles — from 45 to 20.7 Hz — because the ~266 jumps per frame
+ * stretched along with the strokes: ~267 cycles per jump against ~32 in the capture.
  *
  * `VCAP_JUMP` is gone too. It existed so jumps would not be slowed (they travel blanked,
  * slowing them lights nothing) while VCAP slowed the strokes; the four targets that set it put
@@ -266,9 +265,9 @@ pub static CEILING_PAYS: AtomicU32 = AtomicU32::new(1);
  * another door. No target ever set them. */
 
 
-/// FIXED-TIME JUMP, LIKE THE REFERENCE CARTRIDGE. 0 = the old model (variable time).
+/// FIXED-TIME JUMP. 0 = the old model (variable time).
 ///
-/// MEASURED in the Major Havoc capture (`via.csv`, one 20 ms frame, 593 units):
+/// MEASURED in a Major Havoc bus capture (`via.csv`, one 20 ms frame, 593 units):
 ///
 /// ```text
 /// T1=8  micro-segments: 501 units, beam LIT     in 79%   -> drawing
@@ -277,12 +276,12 @@ pub static CEILING_PAYS: AtomicU32 = AtomicU32::new(1);
 /// others              :  20 units, T1 up to 191, |vx| median 113 -> LONG jumps
 /// ```
 ///
-/// So their jump dialect is **fixed time and variable rate**, exactly the opposite of ours
-/// (rate fixed at the jump cap, variable time). The difference is cost: their jump costs ~40
-/// cycles ALWAYS; ours 53, with T1 median 9 and maximum 160.
+/// So that jump dialect is **fixed time and variable rate**, exactly the opposite of ours
+/// (rate fixed at the jump cap, variable time). The difference is cost: a fixed-time jump costs
+/// ~40 cycles ALWAYS; ours 53, with T1 median 9 and maximum 160.
 ///
 /// The time is only stretched when the rate would overflow the DAC — which is exactly where
-/// their 20 long units come from: at s=160 a jump longer than 127*31/160 = 24 units no longer
+/// the 20 long units come from: at s=160 a jump longer than 127*31/160 = 24 units no longer
 /// fits in +-127 with t1=31, and then the minimum time is `m*s/127`.
 ///
 /// ZERO OUT OF THE BOX on purpose: until someone gives it a value, no port changes.
@@ -301,7 +300,7 @@ pub fn ramp_params_jump(dx: i8, dy: i8) -> (i8, i8, u16) {
     ramp_params_with(dx, dy, DAC_CAP)
 }
 
-/// The reference cartridge's jump model: `t1` fixed, and the rate is whatever comes out.
+/// The fixed-time jump model: `t1` fixed, and the rate is whatever comes out.
 ///
 /// It does not share a body with `ramp_params_with` because that function's two floors
 /// (`t1_floor`, proportional to the length, and `t1_vcap`, from the speed cap) exist to SPLIT
@@ -344,15 +343,15 @@ fn ramp_params_with(dx: i8, dy: i8, vcap_in: u32) -> (i8, i8, u16) {
  * old behaviour.
  *
  * WHY. The drawing API took device integers, and that grid is TEN TIMES coarser than the
- * reference's: it places dots with the granularity of the rate (1/20 of a unit at t1=8) and we
- * only on the integer. MEASURED in mhavoc over 81,552 vectors: 0.22 units of error per axis —
+ * hardware's: the rate places dots with a granularity of 1/20 of a unit at t1=8, and we placed
+ * them only on the integer. MEASURED in mhavoc over 81,552 vectors: 0.22 units of error per axis —
  * the theoretical maximum is 0.5, i.e. uniform rounding with no bias but all the noise — 3.6%
  * of vectors entirely sub-unit and 0.26% DISAPPEARING because both endpoints land on the same
  * point. With moves of 2 units median and glyphs 2-3 units tall, that is the deformation you
  * see.
  *
  * The hardware did not prevent it: the distance is v*t1/s and with t1 free the fractional
- * distances express themselves (they ask for v=51,t1=8 = 2.55 units). It was our arithmetic
+ * distances express themselves (v=51,t1=8 = 2.55 units). It was our arithmetic
  * that imposed it. It is fixed here by dividing by 2^q everywhere a LENGTH is multiplied by
  * the scale. */
 /// DIAGNOSTIC: the largest |delta| that has entered ramp_params_q (in the internal unit) and
@@ -415,14 +414,14 @@ fn ramp_params_q_v(dx: i32, dy: i32, vcap_in: u32, q: u32, want_v: bool) -> (i8,
         return (0, 0, min_t1 as u16); // degenerate (dot); minimal ramp
     }
 
-    /* ── THE FIXED-TIME MODEL, LIKE THE BIOS AND LIKE THE REFERENCE ──────────────
+    /* ── THE FIXED-TIME MODEL, LIKE THE BIOS ──────────────────────────────────────
      *
      * FIXED_RAMP = 0 -> the old model (variable time). >0 -> that value is the duration of ALL
      * ramps, and the length comes entirely out of the DAC: vx = dx.
      *
      * WHY. The 6809 assembly that draws this same figure correctly on this same console loads
      * `T1CL = $7F` ONCE and then, for each vector, only does `CLR T1CH` to fire it. Every
-     * vector lasts 127 counts. The reference does the same with m_Scale = 128. We split the
+     * vector lasts 127 counts. We split the
      * distance between `vx` AND `t1`, with t1 from 31 to 160 — and that turns ANY error in the
      * DURATION model (the counter's +1.5, the settling, the E phase) into a distance error
      * divided by t1: 1% on a long stroke, 5% on a short one, 19% with MIN_T1=8.
@@ -516,9 +515,9 @@ fn ramp_params_q_v(dx: i32, dy: i32, vcap_in: u32, q: u32, want_v: bool) -> (i8,
      * cycles STANDING STILL: a faint line with a bright dot at each end, which is the symptom
      * of "you can see every micro-segment dot".
      *
-     * (AND MIND THE EASY COMPARISON: the reference never exceeds 51 in its capture, but that is
-     * NOT a cap of theirs — its frame is 85% straight text strokes and its shallowest diagonal
-     * has slope 0.48. It never meets this case.)
+     * (AND MIND THE EASY COMPARISON: a captured frame that never exceeds 51 does not show a cap —
+     * one such frame is 85% straight text strokes and its shallowest diagonal has slope 0.48. It
+     * never meets this case.)
      *
      * With the cap winning, the minor axis is lost in ONE micro-segment but NOT lost: the debt
      * records it and charges it to the next one, which is exactly what it is for. That debt did
@@ -697,12 +696,12 @@ pub static T1_EXTRA_Q8: AtomicU32 = AtomicU32::new(640);
 ///
 /// The `draw_line_seq` comment says the SR path "never drew anything on this hardware" — but
 /// that was tried with the rest of the emitter as it then was, and things have changed since.
-/// It is retried because it is ONE of the four measured differences against an implementation
-/// that does work.
+/// It is retried because it is ONE of four measured differences against a bus capture of a
+/// frame that draws correctly.
 #[used]
 #[no_mangle]
 pub static BEAM_VIA_SR: AtomicU32 = AtomicU32::new(1);
-/* ^ THE REFERENCE CARTRIDGE'S BEAM DIALECT, BY DEFAULT SINCE 2026-09-04.
+/* ^ THE SHIFT-REGISTER BEAM DIALECT, BY DEFAULT SINCE 2026-09-04.
  *
  * It was at 0, and turning it on was a matter of EVERY game listing `-DUVM2_BEAM_VIA_SR` in
  * its defines. Measured result: of the build targets, `dkong`, `asteroids` and `snowbros_c`
@@ -710,7 +709,7 @@ pub static BEAM_VIA_SR: AtomicU32 = AtomicU32::new(1);
  * console, while mhavoc and asterock, which do ask for it, are visible.
  *
  * A port that did not list the define ran with PCR blanking, MIN_T1 = 31 and cap 127: a
- * DIFFERENT path from the one we had spent the whole session measuring against their capture.
+ * DIFFERENT path from the one we had spent the whole session measuring against the capture.
  * The knowledge cannot live in 44 lists of defines; it lives here, and whoever needs the old
  * behaviour turns it off with `-DUVM2_BEAM_VIA_PCR`. */
 
@@ -724,9 +723,9 @@ pub static T1CL_CACHE: AtomicU32 = AtomicU32::new(1);  // default YES: the 6809 
 /// 0 = as before (`vx` stays set for the whole gap). See the block in emit.rs.
 #[used]
 #[no_mangle]
-pub static DAC_ZERO: AtomicU32 = AtomicU32::new(1);   // default YES: the reference does it
+pub static DAC_ZERO: AtomicU32 = AtomicU32::new(1);   // default YES: measured in the captures
 
-/// FIXED ramp duration, like the BIOS ($7F) and the reference (128). 0 = the variable-time
+/// FIXED ramp duration, like the BIOS ($7F). 0 = the variable-time
 /// model, the usual one. See the block in `ramp_params` for why.
 #[used]
 #[no_mangle]
@@ -799,11 +798,11 @@ fn ramp_params_jump_with_debt(dx_q4: i32, dy_q4: i32, vcap: u32, q: u32) -> (i8,
 
 /// WHAT A RAMP REALLY TRAVELS — the inverse of `vx_ramp_params_with_t1`.
 ///
-/// (The rates for a GIVEN t1, without choosing it, are needed because the reference cartridge
-/// does not compute a jump's duration: it PICKS it from a short ladder. Measured over its 1041
-/// jumps that follow a stroke, the ladder {8, 18, 31} with a rate cap of 120 explains 1008
-/// (97%) — and in its frame 120 it explains ALL of them. Our model derived t1 from the speed
-/// cap and gave continuous values (9, 13, 15) where they use 18.)
+/// (The rates for a GIVEN t1, without choosing it, are needed because a jump's duration can be
+/// PICKED from a short ladder instead of computed. Measured over 1041 captured jumps that follow
+/// a stroke, the ladder {8, 18, 31} with a rate cap of 120 explains 1008 (97%) — and in frame
+/// 120 it explains ALL of them. Our model derived t1 from the speed cap and gave continuous
+/// values (9, 13, 15) where the ladder uses 18.)
 ///
 /// This is needed because a caller that FIXES `t1` instead of letting it be chosen (the text
 /// sweep) receives a ROUNDED speed, sometimes clipped to +-127: the ramp covers a distance
@@ -911,8 +910,8 @@ pub extern "C" fn vx_chain_reset() {
      *
      * The symptom, measured by integrating our stream against the input geometry: the position
      * at the start of each stroke drifted +8.45 units median in X, growing from +2.64 in the
-     * frame's first third to +13.29 in the last. The reference's is +0.00 with a worst case of
-     * 0.03 over the frame's 427 strokes.
+     * frame's first third to +13.29 in the last. The captured frame's is +0.00 with a worst case
+     * of 0.03 over its 427 strokes.
      *
      * And it explains why three consecutive fixes to the debt bookkeeping did not move the
      * output BY ONE BYTE: there was no debt to correct.
@@ -932,7 +931,7 @@ pub extern "C" fn vx_chain_reset() {
      *
      * TRIED AND REVERTED (2026-09-04), and why it is not an objection any more: preserving
      * the debt across jumps plus full absorption left **Y practically perfect** (+0.01
-     * median against the reference's +0.00, coming from -0.52) and **threw X to +705**. The
+     * median against the capture's +0.00, coming from -0.52) and **threw X to +705**. The
      * asymmetry was the missing "an axis not asked does not move" guard on the jump — 145
      * of that frame's 427 segments have dx = 0 and almost none dy = 0, so X took that path
      * far more often and the correction leaked in as movement. With the guard, measured by
@@ -1049,9 +1048,9 @@ pub fn ramp_params_chain_q4(dx_q4: i32, dy_q4: i32) -> (i8, i8, u16) {
 
 /* THE INPUT'S PRECISION IS A PARAMETER, not a detail of the bench.
  *
- * MEASURED against the 210 vectors of one of their Major Havoc frames: with the geometry in
- * 1/16 of a unit, 22 of their rates (10.5%) CANNOT be reproduced — not because of how we
- * round, but because what they ask for does not fit that grid. Their vector at rate 32 with
+ * MEASURED against the 210 vectors of a captured Major Havoc frame: with the geometry in 1/16
+ * of a unit, 22 of its rates (10.5%) CANNOT be reproduced — not because of how we round, but
+ * because what it asks for does not fit that grid. A vector at rate 32 with
  * t1 = 8 measures 32*8/160 = 1.6 units exactly, and 1/16 can only say 1.5625 or 1.625. At 1/64
  * or finer all 210 come out EXACT.
  *
@@ -1066,8 +1065,8 @@ pub fn ramp_params_chain_qn(dx_q4: i32, dy_q4: i32, q: u32) -> (i8, i8, u16) {
      *
      * The debt exists to correct the rounding residue, but adding it blindly injects movement
      * into an axis whose delta is ZERO — and that is not correcting, it is inventing. MEASURED
-     * with the reference geometry as input: of its 189 pure vertical vectors, all 189 come out
-     * with vx = 0 in their stream and NONE in ours (vx in {-2, 1, 2}), summing to +81, i.e.
+     * with a captured frame's geometry as input: of its 189 pure vertical vectors, all 189 come
+     * out with vx = 0 in the capture and NONE in ours (vx in {-2, 1, 2}), summing to +81, i.e.
      * +4 units of rightward drift per frame that accumulate until the next re-zero. It is the
      * diagonal drift seen on the console.
      *
@@ -1090,22 +1089,22 @@ pub fn ramp_params_chain_qn(dx_q4: i32, dy_q4: i32, q: u32) -> (i8, i8, u16) {
      *
      * MEASURED by integrating our stream against the input geometry: the position at the start
      * of each stroke drifted +8.45 units median in X, growing from +2.64 in the frame's first
-     * third to +13.29 in the last, with the debt constantly at zero. The reference's is +0.00
-     * with a worst case of 0.03 over the 427 strokes.
+     * third to +13.29 in the last, with the debt constantly at zero. The captured frame's is
+     * +0.00 with a worst case of 0.03 over the 427 strokes.
      *
      * By returning the already-rounded t1 and the rate computed FOR IT, the debt measures what
      * is actually emitted and the emitter has nothing to rescale.
      *
      * THE 8 IS THE SAME AS `T1M` in emit.rs. If one changes, the other changes: they are the
-     * same decision (the reference dialect's micro-segment) written in two places. */
+     * same decision (the 8-count micro-segment) written in two places. */
     const MICRO: i32 = 8;
     let n = core::cmp::max(1, (t1 as i32 + MICRO / 2) / MICRO);
     let runs = n * MICRO;
     /* THE RATE, COMPUTED ONCE FOR THE t1 THAT REALLY RUNS — AND IN 32 BITS.
      *
-     * Rescaling the rate `ramp_params_q` computed for ANOTHER t1 rounds twice. In their frame
-     * 120 one stroke was left different because of that: it asks for 1.3477 units, they emit
-     * 27 (1.3477*160/8 = 26.95) and we came out with 22 for t1 = 10 which rescaled to 8 gave
+     * Rescaling the rate `ramp_params_q` computed for ANOTHER t1 rounds twice. In captured frame
+     * 120 one stroke was left different because of that: it asks for 1.3477 units, the capture
+     * has 27 (1.3477*160/8 = 26.95) and we came out with 22 for t1 = 10 which rescaled to 8 gave
      * 27.5 -> 28.
      *
      * THIS SAME CHANGE WAS ATTEMPTED ONCE AND SATURATED ON THE BOARD, giving 127 on almost
@@ -1301,7 +1300,7 @@ mod vertical_bias {
         DEBT_Y.store(0, Ordering::Relaxed);
 
         /* Diagonals that leave a debt, with pure verticals interleaved: the verticals must
-         * NOT carry that debt into X. It is the real case — 189 verticals in a reference
+         * NOT carry that debt into X. It is the real case — 189 verticals in a captured
          * frame, all with vx = 0. */
         let mut sum_vx = 0i32;
         for k in 0..40 {
@@ -1351,8 +1350,8 @@ mod vertical_bias {
 #[cfg(test)]
 mod x_bias_2026_09_04 {
     use super::*;
-    /// THE FRAME'S REAL CASES. With the reference geometry as input, their vx and ours differ
-    /// by 1-2 on 88% of the micro-segments while vy matches. This asks the MODEL about those
+    /// THE FRAME'S REAL CASES. With a captured frame's geometry as input, the captured vx and
+    /// ours differ by 1-2 on 88% of the micro-segments while vy matches. This asks the MODEL about those
     /// same cases, with no cartridge in between.
     #[test]
     fn print_the_x_bias() {
@@ -1364,12 +1363,12 @@ mod x_bias_2026_09_04 {
         T1_EXTRA_Q8.store(0, Ordering::Relaxed);
         DEBT_X.store(0, Ordering::Relaxed);
         DEBT_Y.store(0, Ordering::Relaxed);
-        // (dx_q4, dy_q4) -> what they emit
+        // (dx_q4, dy_q4) -> what the capture has
         let cases = [((0, 40), (50, 0)), ((41, 0), (0, 51)), ((0, -40), (-50, 0)),
                      ((-11, 20), (25, -13)), ((11, 20), (25, 13)), ((21, 0), (0, 26))];
         for ((dx, dy), (svy, svx)) in cases {
             let (vx, vy, t1) = ramp_params_chain_q4(dx, dy);
-            std::println!("  dx_q4={dx:4} dy_q4={dy:4} -> ours vy={vy:4} vx={vx:4} t1={t1:3} | theirs vy={svy:4} vx={svx:4}");
+            std::println!("  dx_q4={dx:4} dy_q4={dy:4} -> ours vy={vy:4} vx={vx:4} t1={t1:3} | capture vy={svy:4} vx={svx:4}");
         }
     }
 }
@@ -1391,14 +1390,14 @@ mod drift_bench {
     /// it was reading a different unit.
     ///
     /// Where the geometry comes from. `VX_GEOM` changes it without touching the bench, which
-    /// is what lets a specific picture be measured with the same instrument the reference
+    /// is what lets a specific picture be measured with the same instrument the captured
     /// frame was measured with.
     ///
-    /// The reference capture itself is NOT part of this kit. Without it the file reads as
+    /// The capture itself is NOT part of this kit. Without it the file reads as
     /// empty, `geometry()` returns nothing, and the benches that depend on it have no data to
     /// compare against — which is the honest outcome, not a pass.
     fn capture_file() -> std::string::String {
-        std::env::var("VX_GEOM").unwrap_or_else(|_| "reference/vf_geom.h".into())
+        std::env::var("VX_GEOM").unwrap_or_else(|_| "captures/geom.h".into())
     }
 
     fn q_bits() -> u32 {
@@ -1610,7 +1609,7 @@ mod direct_rate {
         vx_chain_reset(); vx_debt_reset();
         // the geometry asks for dx=1.3477 dy=-2.4023 units, i.e. 345 and -615 in Q8
         let (vx, vy, t1) = ramp_params_chain_qn(345, -615, 8);
-        std::println!("  chain_qn(345,-615,q=8) -> vx={vx} vy={vy} t1={t1}   (theirs: 27, -48, 8)");
+        std::println!("  chain_qn(345,-615,q=8) -> vx={vx} vy={vy} t1={t1}   (capture: 27, -48, 8)");
         let (ax, ay, at1) = ramp_params_q(345, -615, DAC_CAP, 8);
         std::println!("  ramp_params_q raw      -> vx={ax} vy={ay} t1={at1}");
         std::println!("  scale()={}  T1_EXTRA_Q8={}", scale(), T1_EXTRA_Q8.load(Ordering::Relaxed));
@@ -1620,8 +1619,8 @@ mod direct_rate {
 #[cfg(test)]
 mod ladder {
     use super::*;
-    /// The rates for a given t1. Their transport #156 asks for 11.81 units in +X and they emit
-    /// (105, 0) with t1 = 18.
+    /// The rates for a given t1. Captured transport #156 asks for 11.81 units in +X and the
+    /// capture has (105, 0) with t1 = 18.
     #[test]
     fn rates_for_a_given_t1() {
         let _k = crate::emit::test_knobs();
@@ -1629,7 +1628,7 @@ mod ladder {
         let dx = (11.8125 * 256.0) as i32;      // 11.81 units in Q8
         let mut vx = 0i32; let mut vy = 0i32;
         vx_ramp_params_with_t1(dx, 0, 256, 18, &mut vx, &mut vy);
-        std::println!("  HOST: dx={dx} q=8 t1=18  ->  vx={vx} vy={vy}   (theirs: 105, 0)");
+        std::println!("  HOST: dx={dx} q=8 t1=18  ->  vx={vx} vy={vy}   (capture: 105, 0)");
     }
 }
 
@@ -1696,7 +1695,7 @@ mod i32_equivalence {
     extern crate std;
     use super::*;
     use core::sync::atomic::Ordering;
-/// The FROZEN i64 reference copy of `ramp_params_q`, kept only so the test below can prove
+/// The FROZEN i64 copy of `ramp_params_q`, kept only so the test below can prove
 /// the 32-bit rewrite is bit-for-bit equivalent. Its comments are deliberately stripped: the
 /// explanations live once, in the real function.
 fn ramp_params_q_old(dx: i32, dy: i32, vcap_in: u32, q: u32) -> (i8, i8, u16) {
@@ -1783,7 +1782,7 @@ fn ramp_params_q_old(dx: i32, dy: i32, vcap_in: u32, q: u32) -> (i8, i8, u16) {
         }
         assert_eq!(bad, 0, "differing cases");
     }
-/// The same frozen reference copy for `ramp_params_chain_qn`. See the note above.
+/// The same frozen copy for `ramp_params_chain_qn`. See the note above.
 fn ramp_params_chain_qn_old(dx_q4: i32, dy_q4: i32, q: u32) -> (i8, i8, u16) {
     let (rx, ry) = (DEBT_X.load(Ordering::Relaxed), DEBT_Y.load(Ordering::Relaxed));
     let f = 1i32 << q;

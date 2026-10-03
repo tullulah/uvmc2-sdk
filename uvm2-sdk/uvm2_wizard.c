@@ -11,8 +11,8 @@
  *     both open in proportion                  -> it is the SCALE                 (scale)
  *
  * A closed polygon that opens accumulates the fixed loss N times; a scale error would make it
- * smaller but it would still be closed. That is why the reference cartridge has one screen for
- * vectors and another for text: they are these same two terms.
+ * smaller but it would still be closed. That is why vectors and text need separate checks: they
+ * are these same two terms.
  *
  * WITH ZERO SELECTED THE PATTERN IS TEXT INSTEAD: see zero_pattern.
  *
@@ -97,8 +97,8 @@ UVM2_COLD static void wheel(int cx, int cy)
  * Shown while ZERO is the selected field. A zero reference that is wrong for this console adds
  * the same velocity to every ramp, and nothing makes that more obvious than rows of short
  * strokes run without a re-zero: each row leans into a diagonal and the glyphs slant. That is
- * what a tester's console showed with the AAE ports on 2026-09-28 (and the VecFever writes 0x07
- * where the SDK's default is 0x23 — see UVM2_ZERO_OFFSET).
+ * what a tester's console showed with the AAE ports on 2026-09-28 (the SDK's default is 0x23 —
+ * see UVM2_ZERO_OFFSET).
  *
  * The two long strokes are the reference: one ramp each, so they barely carry the offset.
  * Adjust ZERO until every row runs parallel to the top line and every column stands parallel
@@ -409,8 +409,7 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
          * texto. tendriamos que tener un boton que cambia de texto a los circulos, asi
          * podemos ver que hace la calibracion en ambos."
          *
-         * That is not a convenience. ONE ZERO CANNOT SERVE TWO SCALES: the reference
-         * cartridge keeps six values of it, one per drawing scale, and the text and the
+         * That is not a convenience. ONE ZERO CANNOT SERVE TWO SCALES: the text and the
          * rings are two scales far apart -- the rings alone run from 180 to 1668. A setting
          * judged on one of them is a setting judged on a third of the picture, which is
          * exactly what "se centra el del test, luego en el juego la cosa cambia" is. Button
@@ -567,8 +566,8 @@ input:
             if (step) sel = (sel + n + step) % n;
         }
 
-        /* LEFT/RIGHT ADJUSTS, CONTINUOUSLY WHILE HELD — like the reference game, which moves
-         * +-1 every two frames (`Vec_Loop_Count+1 & 1`). On edges it was useless: the zero
+        /* LEFT/RIGHT ADJUSTS, CONTINUOUSLY WHILE HELD, +-1 every two frames
+         * (`Vec_Loop_Count+1 & 1`). On edges it was useless: the zero
          * reference's useful range runs from 0 to 255, and at one step per press it takes a
          * hundred taps to reach where it starts to show. */
         tick++;

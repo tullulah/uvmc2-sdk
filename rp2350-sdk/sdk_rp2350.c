@@ -175,8 +175,8 @@ unsigned uvm2_input_count;   /* DIAGNOSTIC, see uvm2_frame_end */
  *
  * It is what the .um2 does and what our own cartridge does, with the same functions and the
  * same integers; only how you reach them changes (directly, or through the table). The SDK is
- * what splits by the REAL ramp limit, what decides the re-zeros (uvm2_zero_every, measured
- * against the reference capture) and what knows the console's calibration. None of that is
+ * what splits by the REAL ramp limit, what decides the re-zeros (uvm2_zero_every, measured)
+ * and what knows the console's calibration. None of that is
  * decided here. */
 void uvm2_draw_move_abs_q4(int x_q4, int y_q4);
 void uvm2_draw_delta_q4(int dx_q4, int dy_q4);

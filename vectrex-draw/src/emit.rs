@@ -8,8 +8,8 @@
 //!
 //! ── AND THE TWO ARE THE SAME THING, which is more than I thought ────────────
 //!
-//! I used to talk about "their list" as if it were a foreign shape to be adapted to. It is
-//! not: WE DO THE SAME. The PIO path is a command list too — `ring_push` ->
+//! I used to talk about "the other board's list" as if it were a foreign shape to be adapted
+//! to. It is not: WE DO THE SAME. The PIO path is a command list too — `ring_push` ->
 //! `BATCH_BUF[2][64]` -> DMA -> PIO — and the finishing touch is in `stream_park`: with
 //! `USE_PARK_REPEAT` it emits ONE word with a repeat counter instead of n words. That is
 //! literally `(command, delay)`, the same representation as the other board. What changes is
@@ -101,7 +101,7 @@ pub const E: u32 = 256;
  * panel can touch them hot like the others.
  *
  * They are GAPS (what separates one write from the next). 0 = the long-standing value, which
- * is the cadence measured from the reference's asterock. */
+ * is the cadence measured from a bus capture of Asteroids. */
 #[used] #[no_mangle]
 pub static MT_ORA_Y: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 #[used] #[no_mangle]
@@ -133,7 +133,7 @@ pub trait BusSink {
     ///
     /// It exists because the one that blanks the beam is the NEXT call, not the one that
     /// emitted the ramp: without this there is no way to give the last lit ramp time to
-    /// finish. MEASURED in their Major Havoc frame — gap 11 if the micro-segment continues, 16
+    /// finish. MEASURED in a captured Major Havoc frame — gap 11 if the micro-segment continues, 16
     /// if what follows blanks, and the separation is 175 of 175.
     fn extend_last(&mut self, _extra_q8: u32) {}
 
@@ -296,22 +296,22 @@ fn y_hold_is(vy: i8) {
 
 /* THE GAP AFTER `T1CH`, ACCORDING TO WHAT COMES NEXT.
  *
- * MEASURED in their frame 120 of Major Havoc, over its 623 ramps of t1 = 8: it leaves 11 E
+ * MEASURED in captured frame 120 of Major Havoc, over its 623 ramps of t1 = 8: it leaves 11 E
  * cycles when the micro-segment CONTINUES (424 cases) and 16 when what follows BLANKS the beam
  * (175), without a single crossed case — classified by whether there is an SR write before the
- * next T1CH. It is physical and not a quirk of theirs: the last ramp of a lit stroke has to
+ * next T1CH. It is physical and not a quirk of that frame: the last ramp of a lit stroke has to
  * finish BEFORE the beam is closed, and cutting it gives a short stroke.
  *
  * It is applied by lengthening the gap ALREADY emitted (`extend_last`), because the one that
  * blanks is the next call and the stroke's emitter cannot know when it emits. */
 
-/// 1 = a lit stroke is emitted as ONE ramp with its whole t1, like the reference cartridge.
+/// 1 = a lit stroke is emitted as ONE ramp with its whole t1.
 /// **IT IS THE DEFAULT since 2026-09-04**, confirmed on the console: with micro-segments Major
 /// Havoc came out dotted and with the whole stroke it comes out CLEAN. 0 goes back to the
 /// series of T1=8 micro-segments (`-DUVM2_MICROSEGMENTS`).
 ///
-/// MEASURED in their Major Havoc capture (8 frames spread over the 20 s): **it does not split a
-/// lit stroke ONCE** — zero runs of identical consecutive micro-segments — and it uses t1 from
+/// MEASURED in a Major Havoc bus capture (8 frames spread over the 20 s): **no lit stroke is
+/// split, not ONCE** — zero runs of identical consecutive micro-segments — and it uses t1 from
 /// 8 up to 252, with strokes of up to 200 units in ONE ramp. We emitted t1 = 8 on all of them,
 /// without exception (427 of 427 on the bench, 754 of 754 in mhavoc), so a stroke that does not
 /// fit in a ramp of 8 gets split — and every joint is 22-24 cycles with the beam LIT AND
@@ -330,15 +330,15 @@ const H_T1CH_CLOSE: u32 = 16;
  * it is set by HOW LONG it takes to get there. */
 const H_T1CH_BLANK:  u32 = 29;
 /* AND 21 WHEN WHAT FOLLOWS IS THE LONG UNIT THAT BLANKS INSIDE ITS WINDOW. A fourth value of
- * the same rule, measured like the other three: with t1 = 8 their T1CH gaps are 11 (the
+ * the same rule, measured like the other three: with t1 = 8 the captured T1CH gaps are 11 (the
  * micro-segment continues, x424), 16 (x175), 21 (x3) and 29 (blanks now, x21). The 3 of 21 are
  * exactly the ones followed by `ORA ORB=00+3 SR=00+8`, i.e. the long in-window form. */
 const H_T1CH_CLOSE_LONG: u32 = 21;
 /* The grid of the gap after a lit stroke's T1CH, and its base. See draw_line_seq. */
 const T1CH_STEP: u32 = 7;
 const T1CH_BASE: u32 = 13;
-/* The gap AFTER SR=00: 3 if ORB follows (175 of their cases, and we already did it) and 15 if
- * ORA follows (13 of theirs; we used 0 in 24). */
+/* The gap AFTER SR=00: 3 if ORB follows (175 captured cases, and we already did it) and 15 if
+ * ORA follows (13 captured cases; we used 0 in 24). */
 const H_SR_OFF_A_ORA: u32 = 15;
 
 /// 1 = permits skipping the recharge of Y's sample-and-hold when it already holds the value.
@@ -348,8 +348,8 @@ pub static SKIP_Y: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32
 
 /// 1 = ANOTHER blanked unit follows this one before the next lit stroke.
 ///
-/// IT DECIDES WHERE THE BEAM IS BLANKED, and the rule is theirs, measured in their frame 120.
-/// Of their 199 blanks (one per stroke, exactly):
+/// IT DECIDES WHERE THE BEAM IS BLANKED, and the rule was measured in captured frame 120.
+/// Of its 199 blanks (one per stroke, exactly):
 ///
 ///   * 178 fall INSIDE the blanked unit's mux window — and in all 178 that unit is the ONLY one
 ///     before the next stroke.
@@ -375,7 +375,7 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
     let lit = sink.beam_is_lit();
     let only_this_one = UNITS_CONTINUE.load(Ordering::Relaxed) == 0;
     /* t1 IS NOT PART OF THE RULE: only the count is. We had it as `t1 <= 8` and it failed in
-     * both directions — we blanked outside on their 3 lone units of t1 = 18, and inside on the
+     * both directions — we blanked outside on the capture's 3 lone units of t1 = 18, and inside on the
      * 21 priming+jump ones. See UNITS_CONTINUE. */
     let blank_now = lit && !(sr && only_this_one);
     if lit {
@@ -386,15 +386,15 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
     }
     // BLANK FIRST (SR=0x00). With keep-lit the beam arrives at the jump LIT; if Y/mux is
     // touched before blanking, the traverse to the destination is drawn lit. The SR dialect's
-    // SHORT jump is the exception: its pen-up unit blanks INSIDE the mux window, like the
-    // reference, so there the blanking is not brought forward.
+    // SHORT jump is the exception: its pen-up unit blanks INSIDE the mux window, so there the
+    // blanking is not brought forward.
     if blank_now {
         sink.emit(REG_SHIFT, 0x00, H_SR_OFF_A_ORA * E);
         sink.beam_blanked();
     }
     if sr {
         if t1 <= 8 {
-            // SHORT JUMP = the reference's PEN-UP unit, verbatim: with the beam lit it blanks
+            // SHORT JUMP = the captured PEN-UP unit, verbatim: with the beam lit it blanks
             // INSIDE the mux window (x18.1/frame: ORA+4 ORB=00+9 SR=00+4 ORB=01+1 ORA+4 T1CL+1
             // T1CH+12); already blanked, the unit without the SR (x27.9/frame: ORA+6 ORB=00+11
             // ORB=01+1 ORA+4 T1CL+1 T1CH+12).
@@ -404,8 +404,8 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
                 sink.emit(REG_SHIFT, 0x00, 3 * E);       // beam OFF inside the window; gap 4
                 sink.beam_blanked();
             } else {
-                /* THE ORA(Y) GAP IS 3, EVEN WITH THE BEAM ALREADY BLANKED. Measured in their
-                 * frame 120: of their 270 units with no SR inside, all 270 carry gap 3 —
+                /* THE ORA(Y) GAP IS 3, EVEN WITH THE BEAM ALREADY BLANKED. Measured in captured
+                 * frame 120: of its 270 units with no SR inside, all 270 carry gap 3 —
                  * (3,9) x228 and (3,10) x42, i.e. what changes with the beam's state is the MUX
                  * WINDOW, not the ORA. The 5 came from the asterock capture, which does not say
                  * the same thing. */
@@ -419,19 +419,19 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
             sink.emit(REG_T1_HI, 0x00, H_T1CH_CONT * E);          // T1CH arms; gap 12
             return;
         }
-        // The reference's LONG JUMP, VERBATIM from the capture (its "long vectors" class,
+        // The LONG JUMP, VERBATIM from the capture (its "long vectors" class,
         // x2475: ORA+4 ORB=00+11 ORB=01+1 ORA+9 T1CL+1 T1CH+t1+17). No PCR, no SR inside the
         // unit (the blanking already went out above), T1 with the real count.
         // RAW E CYCLES, like the micro-segment: k.e() scales by e6809_q8 (64 on the UVM2) and
         // halves the gaps — measured: the cadence came out 1/3/1/3.
         /* IF Y'S S&H ALREADY HOLDS THIS VALUE, THE WHOLE SAMPLING IS REDUNDANT — and one
-         * capture suggested the reference skips it. That would be its MOST COMMON jump class:
+         * capture suggested it can be skipped. That would be the MOST COMMON jump class:
          * `ORA+7 T1CL+1 T1CH+42`, three writes, 70 of its 96 jumps in that frame. We always did
          * all six.
          *
-         * MEASURED AGAIN, AND IT COMES OUT THE OPPOSITE WAY. In their frame 120 of Major Havoc
-         * the reference loads Y on **647 of 647** units, jumps included, and 98 of those loads
-         * are REDUNDANT (the same value it already held). It never skips it.
+         * MEASURED AGAIN, AND IT COMES OUT THE OPPOSITE WAY. In captured frame 120 of Major Havoc
+         * Y is loaded on **647 of 647** units, jumps included, and 98 of those loads are
+         * REDUNDANT (the same value it already held). It is never skipped.
          *
          * The "70 of its 96 jumps" above came from the ASTEROCK capture, and the two captures do
          * not say the same thing. Between them, physics wins: channel 0 is C304, 10 nF, and a
@@ -442,7 +442,7 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
          * The mechanism stays behind a knob in case some console needs the cycles, but off:
          * `SKIP_Y=1` brings it back. */
         /* A LONG UNIT THAT IS THE ONLY BLANKED ONE: the blanking goes INSIDE its mux window,
-         * exactly as in the short form but with the SR at the other end of the window. Theirs,
+         * exactly as in the short form but with the SR at the other end of the window. Captured,
          * verbatim (x3 in frame 120, all t1 = 18):
          *
          *     ORA(y)+3  ORB=00+3  SR=00+8  ORB=01+0  ORA(x)+6  T1CL+0  T1CH+34
@@ -461,7 +461,7 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
             emit_t1cl(sink, t1, 0);
             sink.emit(REG_T1_HI, (t1 >> 8) as u8, 0);
             // AND THE RAMP WAIT, which I had left at zero here: the T1CH came out with gap 0
-            // against their 34 (t1 = 18), i.e. the unit never travelled what it asked for.
+            // against the captured 34 (t1 = 18), i.e. the unit never travelled what it asked for.
             // Same arithmetic as the long jump below: t1 + 16.
             sink.wait_ramp(t1, k.moveto_settle_q8 as i32 + 16 * E as i32);
             return;
@@ -477,15 +477,15 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
                   (if skip_y { 6 * E } else { 8 * E }) + k.x_settle_q8); // X; gap 7 or 9
         emit_t1cl(sink, t1, 0);                 // T1CL; gap 1
         sink.emit(REG_T1_HI, (t1 >> 8) as u8, 0);
-        // The reference's wait after arming: t1 + 16 (measured: +141 for t1=124, +78 for
+        // The captured wait after arming: t1 + 16 (measured: +141 for t1=124, +78 for
         // t1=64 — i.e. t1 + 14..17; 16 is taken and it is sweepable).
         /* THE GAP AFTER T1CH IS A MULTIPLE OF 7.
          *
-         * In their frame 120 the ones of this class are 35, 42, 49, 56, 70 and 77 — all 7*n,
+         * In captured frame 120 the ones of this class are 35, 42, 49, 56, 70 and 77 — all 7*n,
          * without exception — and with `gap = 7 * ceil((t1 + 13) / 7)` all NINE distinct t1
          * values come out exactly (22, 26, 28, 29, 31, 37, 41, 52, 56, 60). It is a law and not
          * an adjustment: 13 is the ONLY integer that satisfies all nine inequalities at once.
-         * The 7 is presumably their polling loop.
+         * The 7 is presumably a polling loop.
          *
          * We used `t1 + 16`, which is the mean of that and is wrong by +-3 half the time: every
          * error is a ramp too long or too short, i.e. a vector that overshoots or falls short.
@@ -548,19 +548,19 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
 /// anything on this hardware at the time; the CNTL one is proven.
 pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings) {
     let (vx, vy) = crate::ramp::trim_dac(vx, vy);   /* see trim_dac: here, not in the ramp */
-    // ── THE REFERENCE'S PLOTTER, VERBATIM ($CA51) ────────────────────────────────
+    // ── THE MICRO-SEGMENT PLOTTER ────────────────────────────────────────────────
     //
     // Each vector is a series of T1=8 micro-segments at the same rate (vx,vy). The beam is
-    // lit ONCE (SR=0x01, their exact value) when it was not already, and it is NOT blanked
+    // lit ONCE (SR=0x01, the captured value) when it was not already, and it is NOT blanked
     // between chained strokes — only a jump (moveto) or the re-zero blank. The cadence is in
-    // RAW E CYCLES, measured from their asterock bus capture (not through k.e(), which
+    // RAW E CYCLES, measured from a bus capture of Asteroids (not through k.e(), which
     // scales by the 6809 and halved the gaps):
     //   ORA(Y) -6-> ORB=0 -8-> ORB=1 -1-> ORA(X) -4-> T1CL=8 -1-> T1CH=0 -12-> next
     // The gap of 12 after T1CH lets the ramp of 8 finish before the next micro-segment.
     // t1 IS ROUNDED TO MULTIPLES OF 8: no remainder micro-segment.
     //
     // I once emitted the tail here with whatever count was left (T1CL = t1 % 8), justifying
-    // it with the reference having T1CL=4/6/7 in its capture. I MEASURED IT WRONG: those are
+    // it with T1CL=4/6/7 appearing in the capture. I MEASURED IT WRONG: those are
     // 1.11 per FRAME against its 230.2 of T1=8, i.e. 0.5%. With the tail, we emitted 71 of
     // 308 units per frame with T1 between 1 and 6 — 23%.
     //
@@ -581,10 +581,10 @@ pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timi
      * distance is `v*t1/s`, so changing the time without touching the speed changes what gets
      * drawn.
      *
-     * MEASURED with the reference geometry as input, its first segment asks for 2.5 units:
+     * MEASURED with a captured frame's geometry as input, its first segment asks for 2.5 units:
      * `ramp_params` gave `t1=10, vy=40` (correct: 40*10/160 = 2.5), this ran it at `t1=8` with
-     * the same rate and it came out **2.0 units — 20% short**. The reference draws that same
-     * segment with `t1=8, vy=50`: it chooses the rate FOR the time, which is what was missing
+     * the same rate and it came out **2.0 units — 20% short**. The capture draws that same
+     * segment with `t1=8, vy=50`: the rate chosen FOR the time, which is what was missing
      * here.
      *
      * The error is not random: it depends on where t1 falls relative to the multiple of 8, so
@@ -600,8 +600,8 @@ pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timi
     use core::sync::atomic::Ordering as O;
     /* THE FOUR DEFAULT GAPS ARE THE MEASURED ONES, SINCE 2026-09-04. They were 6/8/4/9, from
      * the asterock capture, and the tuned ports overrode them by hand with 4/10/9/4 — which are
-     * the ones validated all day against their Major Havoc capture (the bench matches 99.8% of
-     * their strokes with them). A measured value you have to remember to set in every game is
+     * the ones validated all day against a Major Havoc capture (the bench matches 99.8% of its
+     * strokes with them). A measured value you have to remember to set in every game is
      * not a default, it is a trap. */
     let h_ora_y    = gap(MT_ORA_Y.load(O::Relaxed), 4);
     let h_orb_keep = gap(MT_ORB_KEEP.load(O::Relaxed), 10);
@@ -615,7 +615,7 @@ pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timi
      *
      * It is kept for the INTEGER path (no sub-units), where the ramp does not round to multiples
      * of 8 and this adjustment is still needed: without it, a stroke that asks for 2.5 units
-     * comes out at 2.0 (measured with the reference geometry). */
+     * comes out at 2.0 (measured with a captured frame's geometry). */
     let integer = INTEGER_STROKE.load(O::Relaxed) != 0;
     let (n, t1u) = if integer { (1u32, t1) } else { (n, T1M) };
     let runs = if integer { t1 as i32 } else { (n as i32) * (T1M as i32) };
@@ -642,7 +642,7 @@ pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timi
             sink.emit(REG_PORT_B, 0x00, h_orb_keep); // ORB=0 mux opens, latches Y
         }
         sink.emit(REG_PORT_B, 0x01, 0);         // ORB=1 mux closes ; gap 1
-        // On the unit that LIGHTS, the reference leaves gap 9 after X (its most common SR=01
+        // On the unit that LIGHTS, the capture leaves gap 9 after X (its most common SR=01
         // pattern: ORA+6 ORB+6 SR=01+4 ORB+1 ORA+9 T1CL+1 T1CH+12): the 0x01 pattern takes 7
         // cycles to reach the lit bit and that gap has the ramp already running when the beam
         // appears. On chained ones, gap 4.
@@ -654,7 +654,7 @@ pub fn draw_line_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timi
         sink.emit(REG_T1_HI, 0x00, (H_T1CH_CONT - T1M as u32 + t1u as u32) * E);
     }
     sink.y_held(vy);
-    // WITHOUT blanking: keep-lit between chained strokes, like the reference. moveto_seq (the
+    // WITHOUT blanking: keep-lit between chained strokes. moveto_seq (the
     // jump) and the re-zero do the blanking.
 }
 
@@ -884,7 +884,7 @@ mod test {
         let _dialect = Dialect::via_pcr();
         /* THE CADENCE THIS TEST ASSERTS IS ASTEROCK'S (6/8/4/9). Since 2026-09-04 the defaults
          * are MAJOR HAVOC's (4/10/9/4), which are the ones validated against that capture; both
-         * are theirs and both are real. They are pinned here so the test exercises ONE concrete
+         * were measured and both are real. They are pinned here so the test exercises ONE concrete
          * cadence and not whatever today's default happens to be. */
         MT_ORA_Y.store(6, core::sync::atomic::Ordering::Relaxed);
         MT_ORB_KEEP.store(8, core::sync::atomic::Ordering::Relaxed);
@@ -927,9 +927,9 @@ mod test {
         }
     }
 
-    /// THE REFERENCE'S PLOTTER, which has been the specification since 2026-09-03: the stroke
+    /// THE MICRO-SEGMENT PLOTTER, which has been the specification since 2026-09-03: the stroke
     /// is a series of T1=8 micro-segments at the SAME rate, raw cadence 6/8/1/4/1/12 (E cycles,
-    /// measured from their asterock bus capture), the beam is lit ONCE through SR=0x01 (the
+    /// measured from a bus capture of Asteroids), the beam is lit ONCE through SR=0x01 (the
     /// pattern takes 7 cycles to reach the lit bit: the ramp is already running when the beam
     /// appears) and it is NOT blanked at the end — keep-lit; the jump and the re-zero blank.
     #[test]
@@ -937,7 +937,7 @@ mod test {
         let _k = crate::emit::test_knobs();
         /* THE CADENCE THIS TEST ASSERTS IS ASTEROCK'S (6/8/4/9). Since 2026-09-04 the defaults
          * are MAJOR HAVOC's (4/10/9/4), which are the ones validated against that capture; both
-         * are theirs and both are real. They are pinned here so the test exercises ONE concrete
+         * were measured and both are real. They are pinned here so the test exercises ONE concrete
          * cadence and not whatever today's default happens to be. */
         MT_ORA_Y.store(6, core::sync::atomic::Ordering::Relaxed);
         MT_ORB_KEEP.store(8, core::sync::atomic::Ordering::Relaxed);
@@ -1045,8 +1045,8 @@ mod test {
         assert_eq!(gaps[1], 10 * E, "blanked for 10 counts");
     }
 
-    /// The Y sampling is NEVER skipped in the micro-segment dialect: the reference re-latches
-    /// Y on EVERY unit (measured in the capture: ORB=00/01 on all 187,850 micro-segments),
+    /// The Y sampling is NEVER skipped in the micro-segment dialect: Y is re-latched on EVERY
+    /// unit (measured in the capture: ORB=00/01 on all 187,850 micro-segments),
     /// because the S&H capacitor leaks and the unit is what refreshes it. The optimisation of
     /// skipping the sampling belonged to the one-ramp-per-vector model.
     #[test]
@@ -1054,7 +1054,7 @@ mod test {
         let _k = crate::emit::test_knobs();
         /* THE CADENCE THIS TEST ASSERTS IS ASTEROCK'S (6/8/4/9). Since 2026-09-04 the defaults
          * are MAJOR HAVOC's (4/10/9/4), which are the ones validated against that capture; both
-         * are theirs and both are real. They are pinned here so the test exercises ONE concrete
+         * were measured and both are real. They are pinned here so the test exercises ONE concrete
          * cadence and not whatever today's default happens to be. */
         MT_ORA_Y.store(6, core::sync::atomic::Ordering::Relaxed);
         MT_ORB_KEEP.store(8, core::sync::atomic::Ordering::Relaxed);
@@ -1071,7 +1071,7 @@ mod test {
         assert_eq!(p.v[0], (REG_PORT_A, (-10i8) as u8, 5 * E),
                    "it starts with Y even though the S&H says it already holds it");
         let windows = p.v.iter().filter(|c| c.0 == REG_PORT_B && c.1 == 0x00).count();
-        assert_eq!(windows, 8, "one mux window per micro-segment, like the reference");
+        assert_eq!(windows, 8, "one mux window per micro-segment");
     }
 
     /// T1's high byte has to TRAVEL. It was hard-coded to 0 and that capped the ramp at 255
@@ -1089,10 +1089,10 @@ mod test {
         assert_eq!(p.v[7].1, 0x01, "the high byte is being lost again");
     }
 
-    /// A LIT STROKE IS A SINGLE RAMP, with its whole t1 — like the reference.
+    /// A LIT STROKE IS A SINGLE RAMP, with its whole t1.
     ///
-    /// MEASURED over 8 frames of their Major Havoc capture: it does not split a stroke ONCE,
-    /// and its lit t1 values run from 8 to 252. We emitted t1 = 8 ALWAYS and split the rest;
+    /// MEASURED over 8 frames of a Major Havoc bus capture: no stroke is split, not ONCE, and
+    /// the lit t1 values run from 8 to 252. We emitted t1 = 8 ALWAYS and split the rest;
     /// every joint leaves the beam lit and still for 22-24 cycles, i.e. a dot. Confirmed on the
     /// console: with micro-segments Major Havoc dots, with the whole stroke it does not.
     #[test]
@@ -1313,11 +1313,11 @@ mod comparison {
     use crate::ramp::ramp_params;
     use std::println;
 
-    /// The reference's `fixup`, transcribed from uvm2_draw.c: while both deltas fit in half the
+    /// The `fixup` model, transcribed from uvm2_draw.c: while both deltas fit in half the
     /// DAC and there is ramp left, it DOUBLES the delta and HALVES the duration. It preserves
     /// the distance (delta x time) and uses more of the DAC's range, which is its way of
     /// shortening the stroke.
-    fn reference(dx: i32, dy: i32) -> (i32, i32, u32) {
+    fn fixup_model(dx: i32, dy: i32) -> (i32, i32, u32) {
         let (mut x, mut y, mut s) = (dx, dy, 160u32);
         while x.abs() < 64 && y.abs() < 64 && s > 32 {
             x *= 2;
@@ -1340,7 +1340,7 @@ mod comparison {
         let mut worst = 0i64;
         for &(dx, dy) in &[(1, 0), (2, 0), (3, 1), (5, 0), (8, 3), (12, 0), (20, 7),
                            (32, 0), (48, 16), (64, 0), (100, 40), (127, 0)] {
-            let (rx, _ry, rs) = reference(dx, dy);
+            let (rx, _ry, rs) = fixup_model(dx, dy);
             let dr = rx as i64 * rs as i64;
             let (vx, _vy, t1) = ramp_params(dx as i8, dy as i8);
             let dt = vx as i64 * t1 as i64;
@@ -1546,14 +1546,14 @@ mod velocity {
     use core::sync::atomic::Ordering;
     use std::println;
 
-    fn reference(dx: i32, dy: i32) -> (i32, u32) {
+    fn fixup_model(dx: i32, dy: i32) -> (i32, u32) {
         let (mut x, mut y, mut s) = (dx, dy, 160u32);
         while x.abs() < 64 && y.abs() < 64 && s > 32 { x *= 2; y *= 2; s /= 2; }
         (x.abs().max(y.abs()), s)
     }
 
-    /* THE "WHICH CAP MATCHES THE REFERENCE" TEST WAS WITHDRAWN (2026-09-09). It swept the
-     * speed cap looking for the value that matched the reference's velocities, and that cap no
+    /* THE "WHICH CAP MATCHES THE FIXUP MODEL" TEST WAS WITHDRAWN (2026-09-09). It swept the
+     * speed cap looking for the value that matched that model's velocities, and that cap no
      * longer exists: the cap is the DAC's. A test of a knob goes with the knob.
      *
      * What it was for, kept because it is still true: both models preserve the distance, but

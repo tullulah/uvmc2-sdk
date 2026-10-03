@@ -8,7 +8,7 @@
  *                         Vectrex bus cycle.  This is the hot loop.
  *   3. single accesses  — one-off writes and the read cycle used for input.
  *
- * Bus phase (VectrexCart::WriteVia, proven on hardware):
+ * Bus phase (proven on hardware):
  *      wait CLK HIGH → drive address+data+R/W → wait CLK LOW
  * i.e. the bus is updated just after the rising edge and held across the falling
  * edge, where the VIA latches.  Doing it the other way round — driving during
@@ -68,7 +68,7 @@ static inline void uvm2_put_masked(uint32_t value, uint32_t mask)
 
 /* GPIO0-27, 29, 31 — 28 and 30 belong to the cartridge (30 = WS2812 LED). */
 #define UVM2_CART_PINS      0xAFFFFFFFu
-/* PB6, /IRQ, /HALT, /NMI, CLK get pull-ups, as the reference does. */
+/* PB6, /IRQ, /HALT, /NMI, CLK get pull-ups. */
 #define UVM2_PULLUP_PINS    0xA8C00000u
 /* SCHMITT | DRIVE=8mA | IE.  OD and ISO clear — RP2350 pads power up isolated,
  * so writing the whole register is what actually connects the pad. */
@@ -173,8 +173,8 @@ void uvm2_bus_halt(void)
     UVM2_GPIO_OUT_CLR = UVM2_OUT_MASK & ~UVM2_PARK_BITS;   /* includes /HALT low */
     UVM2_GPIO_OE_SET  = UVM2_OUT_MASK;
 
-    /* Let the 6809 finish its instruction and tri-state.  The reference sleeps
-     * 20 ms; counting bus cycles instead keeps this independent of whatever
+    /* Let the 6809 finish its instruction and tri-state: 20 ms. Counting bus
+     * cycles instead of sleeping keeps this independent of whatever
      * core clock the firmware left configured — 30000 cycles is 20 ms exactly. */
     uvm2_bus_delay(UVM2_CYCLES_20MS);
 }
@@ -230,7 +230,7 @@ void uvm2_bus_init(void)
 }
 
 /* ── Command stream executor ──────────────────────────────────────────────────
- * Mirrors VectrexCart::ExecuteHaltCommands: R/W is dropped once for the whole
+ * R/W is dropped once for the whole
  * batch and the address' high bits stay at $D000 throughout, so each command is
  * a single 12-bit update landing on GPIO0-11.  One command = one bus cycle. */
 
@@ -314,13 +314,10 @@ UVM2_RAMFUNC uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count)
      * release — because it happened before any of them, even with an empty
      * command stream (s_count = 0, verified over SWD 2026-08-04).
      *
-     * The reference executor does `... | c_ReadWriteMask` here for exactly this
-     * reason, which is why its game never showed it.
+     * The fix is to present the VIA with R/W high AND register 0xC (PCR):
      *
-     * BUT ONLY HALF OF IT WAS COPIED. Theirs is:
-     *
-     *     gpio_put_masked (c_HaltModeOutputs, c_VIABase | 0xC00 | c_ReadWriteMask);
-     *                                                     ^^^^^ register 0xC = PCR
+     *     VIA base | 0xC00 | R/W
+     *                ^^^^^ register 0xC = PCR
      *
      * R/W high and the register are TWO defences, not one. R/W high says "this is a
      * read"; the register picks WHAT breaks if that read is not honoured. With the
@@ -368,8 +365,8 @@ UVM2_RAMFUNC uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count)
          * It used to go high here, "so the idle cycles do not re-execute the same
          * write". They do not need protecting from that: every register we write
          * (PORTA, PORTB, PCR, ACR, DDRx) takes the same value idempotently, which
-         * is why the reference executor holds R/W low for the whole command and
-         * only raises it once, after the last one.
+         * is why R/W can stay low for the whole command and be raised only once,
+         * after the last one.
          *
          * Raising it costs us something real. In halt mode the data bus is an
          * OUTPUT (UVM2_OUT_MASK), and the address still selects $D000 — so R/W
@@ -388,10 +385,9 @@ UVM2_RAMFUNC uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count)
         }
     }
 
-    /* Park at $0000, R/W high — their `gpio_put_masked(c_HaltModeOutputs,
-     * c_ReadWriteMask)`, which drives every halt-mode output low except R/W.
-     * We parked at $8000; both are unmapped and neither drives the data bus
-     * back at us, but there is no reason to differ from the reference here. */
+    /* Park at $0000, R/W high: every halt-mode output low except R/W.
+     * We used to park at $8000; both are unmapped and neither drives the data
+     * bus back at us. */
     UVM2_WAIT_CLK_HIGH();
     UVM2_GPIO_OUT_SET = UVM2_RW_MASK;
     uvm2_put_masked(UVM2_RW_MASK, UVM2_BUS_MASK);
@@ -576,9 +572,8 @@ UVM2_RAMFUNC void uvm2_via_write(uint32_t reg, uint32_t data)
     /* Parking goes with CLK HIGH, not here. It used to sit right after the WAIT_CLK_LOW,
      * i.e. it changed the address and R/W with E HIGH — the same phase error the
      * executor's preamble had, and on the most-travelled path: every PSG write and
-     * every step of a controller read goes through here. The reference does not even
-     * park per write: its WriteVia ends on the edge and the parking happens once, in
-     * EndDirectViaMode, with a WaitForBusCycleEnd() in front. */
+     * every step of a controller read goes through here. Parking only needs to happen
+     * once, after the last write, and only after the bus cycle has ended. */
     UVM2_WAIT_CLK_HIGH();
     uvm2_put_masked(UVM2_PARK_BITS, UVM2_BUS_MASK & ~UVM2_DATA_MASK);
     uvm2_single_cycles += 2;
@@ -606,7 +601,7 @@ UVM2_RAMFUNC uint8_t uvm2_via_read(uint32_t reg)
     UVM2_WAIT_CLK_LOW();
 
     /* Sample on the next rising edge — the address has had a whole cycle by
-     * then.  Edge-for-edge the same as VectrexCart::ReadVia. */
+     * then. */
     do { state = UVM2_GPIO_IN; } while ((state & UVM2_CLK_MASK) == 0);
 
     /* THE STATE AT THE INSTANT OF SAMPLING, which is the one thing that cannot be deduced

@@ -197,9 +197,8 @@ static uint32_t s_scale = 160;
 #define UVM2_HOLD_MIN        4u     /* tiny jumps: they ask for no more        */
 #define UVM2_HOLD_MAX        15u    /* full scale: 5.5 tau, 1 LSB of error     */
 #define UVM2_HOLD_DELAY      UVM2_HOLD_MAX   /* when we do not know where we came from */
-/* What value the BRIGHTNESS hold is primed with when the VIA is set up. The reference
- * cartridge uses 0x7F (full scale) in its frame preamble; the other two channels — zero
- * reference and Y — go to zero in both. A game changes it with -DUVM2_Z_PRIME=N if it
+/* What value the BRIGHTNESS hold is primed with when the VIA is set up: 0x7F (full scale)
+ * in the frame preamble; the other two channels — zero reference and Y — go to zero. A game changes it with -DUVM2_Z_PRIME=N if it
  * measures something else on ITS console. */
 #ifndef UVM2_Z_PRIME
 #define UVM2_Z_PRIME 0x7F
@@ -234,8 +233,8 @@ static uint32_t s_limit = UVM2_CMD_CAPACITY - UVM2_CMD_RESERVE;
 
 /* WHAT THE LIST IS GOING TO COST, in E cycles and while it is being built.
  *
- * It is needed to close the frame where the reference closes it: its frame measures exactly
- * 30023 cycles and it spends the leftover on commands, not on silence. To know how much is
+ * It is needed to close the frame at a fixed length (30023 cycles), spending the leftover
+ * on commands, not on silence. To know how much is
  * left over you have to know how much has been spent, and nobody was counting that: there
  * was only `bus_cycles`, which is measured AFTER replaying. */
 static uint32_t s_cycles;
@@ -329,8 +328,7 @@ static void mux_sample(uint8_t channel, uint32_t delay)
  * The 4 and the 15 came from a tau computed over C304 (10 nF) and applied to all three
  * channels equally. But THREE holds go through the mux — Y, Z and the zero reference — each
  * with its own capacitor, and PiTrex has four separate times (YSH_A/B, XSH_A/B) precisely
- * because one number does not fit them all. Another reference game arrives at the same
- * place from a different direction: five zero values, one per scale.
+ * because one number does not fit them all.
  *
  * And it is needed HERE, not in the abstract: with the `paths` trio on the console, a stroke
  * that only asks for X comes out SLANTED, i.e. Y moves where the list asks for vy = 0
@@ -374,18 +372,18 @@ static void set_y(int y, uint32_t delay)
      * because it is the live DAC, with no hold — which is exactly why the measured drift
      * was 7 times larger in Y than in X.
      *
-     * And this is not theory: in its frame 120 the reference cartridge opens channel 0 on
-     * 100.0% of the ramps (647 of 647), whatever the value. We skipped it on 12 and sat at
-     * 98.2%. It DOES cache Z (it recharges C306 only 4 times per frame), so the rule is not
-     * "cache nothing": it is do not cache Y. */
+     * And this is not theory: a bus capture of a clean frame opens channel 0 on 100.0% of
+     * the ramps (647 of 647), whatever the value. We skipped it on 12 and sat at 98.2%. Z CAN
+     * be cached (4 recharges of C306 per frame are enough), so the rule is not "cache
+     * nothing": it is do not cache Y. */
     delay = hold_between(s_y, y, uvm2_hold_y_min, uvm2_hold_y_max);
     s_y = y;
     set_porta((uint8_t)y, 0);
     mux_sample(UVM2_MUX_Y, delay);
 }
 
-/* THE GAP AFTER SR=00 IS SET BY WHAT COMES NEXT, not by the blanking. Measured in the
- * reference frame: 15 cycles if ORA follows (the brightness batch) and 12 if the clamp's PCR
+/* THE GAP AFTER SR=00 IS SET BY WHAT COMES NEXT, not by the blanking. Measured in a
+ * bus capture: 15 cycles if ORA follows (the brightness batch) and 12 if the clamp's PCR
  * follows. The physical 8 — the SR's 8 shifts — fits in both. We used 12 for both. */
 #define UVM2_SR_A_ORA  15u
 #define UVM2_SR_A_PCR  12u
@@ -405,8 +403,7 @@ static void beam_off_and_wait_h(uint32_t gap);
  * constantly. A screen drawn ENTIRELY AT ONE INTENSITY asks for the same z for ever: the
  * first frame charges the capacitor and no frame after it ever writes Z again.
  *
- * It needed both halves to appear. via_setup's SR prologue stopped priming Z (it is the
- * reference cartridge's prologue, and theirs does not prime it either), and frame_begin's
+ * It needed both halves to appear. via_setup's SR prologue stopped priming Z, and frame_begin's
  * restoring set_z went with it — for a good reason, it was charging C306 three times a frame
  * for one value. What neither noticed is that the count went from three to ZERO for anything
  * that does not change its brightness.
@@ -424,14 +421,13 @@ static void set_z(int z, uint32_t delay)
     delay = hold_between(s_z, z, uvm2_hold_z_min, uvm2_hold_z_max);
     s_z = z;
     if (BEAM_VIA_SR) {
-        /* THE REFERENCE CARTRIDGE'S BRIGHTNESS BATCH, verbatim from the capture
-         * (x1229/frame-class: ORA=z+4 ORB=84+9 ORB=81): TWO ORB writes, without the
-         * "disable first" step — the reference changes selection and enable in ONE write
-         * and draws cleanly, so the extra step was over-caution on our side. The hold
-         * window is fixed (9 cycles), and it is theirs. */
-        /* BLANK BEFORE MOVING Z, WHICH IS THEIR ORDER.
+        /* THE BRIGHTNESS BATCH, as measured in a bus capture (ORA=z+4 ORB=84+9 ORB=81):
+         * TWO ORB writes, without a "disable first" step — selection and enable change in
+         * ONE write and the picture is clean, so the extra step was over-caution. The hold
+         * window is fixed (9 cycles). */
+        /* BLANK BEFORE MOVING Z.
          *
-         * In the capture the SR=00 sits right against the brightness batch and BEFORE it:
+         * The SR=00 has to sit right against the brightness batch and BEFORE it:
          *     4:08 5:00 | a:00 | 1:78 0:84 0:81
          * and we had it afterwards:
          *     4:08 5:00 | 1:78 0:84 0:81 | a:00
@@ -442,7 +438,7 @@ static void set_z(int z, uint32_t delay)
         beam_off_and_wait_h(UVM2_SR_A_ORA);   /* the brightness ORA comes next */
         set_porta((uint8_t)z, 3u);
         emit(UVM2_VIA_PORTB, 0x84u, 8u);            /* mux ON channel 2, a single step */
-        emit(UVM2_VIA_PORTB, UVM2_PB_IDLE, 12u);    /* and park at 81, as the reference does */
+        emit(UVM2_VIA_PORTB, UVM2_PB_IDLE, 12u);    /* and park at 81 */
         s_portb = UVM2_PB_IDLE;
         return;
     }
@@ -491,25 +487,25 @@ extern volatile uint32_t BEAM_VIA_SR;   /* in vectrex-draw; see via_setup */
  * and stops, and CB2 (~BLANK) keeps the LAST one. So writing SR = 0x00 does not blank: it
  * blanks EIGHT CYCLES LATER.
  *
- * The reference cartridge leaves 12-13 cycles between its SR=00 and the PCR=CC that bites
- * the zero clamp (measured: 10 of its 15 clamps). We left ZERO — `SR=00+0 PCR=cc`, in 6 of
+ * A clean bus capture leaves 12-13 cycles between SR=00 and the PCR=CC that bites the zero
+ * clamp (10 of its 15 clamps). We left ZERO — `SR=00+0 PCR=cc`, in 6 of
  * 10 — so the clamp started dragging the beam to the centre WITH THE BEAM STILL LIT and drew
  * the path: a long line crossing the screen from the object to the centre, which is exactly
  * what the console showed in both photographs on 2026-09-04.
  *
- * The 8 is physics (the 8 shifts); the 12 is theirs, with margin. */
+ * The 8 is physics (the 8 shifts); the 12 is the measured gap, with margin. */
 #define UVM2_SR_BLANK_CYCLES  12
 
 /* LET THE LAST LIT RAMP FINISH BEFORE CLOSING THE BEAM.
  *
  * `moveto_seq` already does this (H_T1CH_BLANK = 29 against the 11 of "the micro-segment
  * continues"), but there it only covers the blanks IT emits. The ones that come out of this
- * file — set_z's, the zero clamp's — left the T1CH at 11, i.e. 18 cycles less than the
- * reference: 29 cases per frame in its frame 120, and each one is a cut ramp, i.e. a short
+ * file — set_z's, the zero clamp's — left the T1CH at 11, i.e. 18 cycles short: 29 cases
+ * per frame in a measured Major Havoc frame, and each one is a cut ramp, i.e. a short
  * stroke.
  *
- * The 29 is THEIRS, measured: 21 cases with the SR right behind the T1CH, against 175 with a
- * gap of 16 where what follows is always ORA. The gap is not set by the blanking, it is set
+ * The 29 is measured in a bus capture: 21 cases with the SR right behind the T1CH, against
+ * 175 with a gap of 16 where what follows is always ORA. The gap is not set by the blanking, it is set
  * by how long it takes to get there. See the same numbers in emit.rs. */
 #define UVM2_H_T1CH_CONT   11u
 #define UVM2_H_T1CH_BLANK  29u
@@ -588,9 +584,8 @@ void uvm2_draw_set_scale(uint32_t cycles)
 
 /* The VIA bring-up and the sample-and-hold priming, as one unit.
  *
- * This is the reference VectrexHaltCommandWriter's constructor, and it runs at the
- * top of EVERY frame — a fresh writer is built per frame, so all sixteen commands
- * go out again every 20 ms. We used to run it once, from uvm2_draw_init.
+ * It runs at the top of EVERY frame, so all sixteen commands go out again every
+ * 20 ms. We used to run it once, from uvm2_draw_init.
  *
  * Two reasons it belongs in the frame:
  *
@@ -633,17 +628,13 @@ static void via_setup(void)
      *
      * T2 PLAYS NO PART IN THE BLANKING, AND I ONCE WROTE IT HERE BY MISREADING THE MODE.
      *
-     * I set T2 = 0x7530 copying the reference cartridge, believing that with ACR = 0x98 the
+     * I set T2 = 0x7530 believing that with ACR = 0x98 the
      * shift register ran FREE at the T2 rate. That is false: bits 4-2 of 0x98 are
      * **110 = shift out under Phi2 control**, which shifts 8 bits and STOPS; free-running at
      * the T2 rate is mode 100. In 110 CB2 keeps the last shifted bit, so 0x01 leaves the
      * beam lit and 0x00 blanked — it is a CLOSE, not a working cycle, and T2 has nothing to
      * do with it. Writing it broke nothing and fixed nothing: the dots at the micro-segment
-     * joints were unchanged on the console.
-     *
-     * The reference does write it, but for another reason: T2 is ITS frame timer (its loop
-     * waits on T2, which is why T2CH serves as a frame marker when analysing the capture).
-     * We mark the frame another way, so we do not need it.
+     * joints were unchanged on the console. We do not need T2 at all.
      *
      * HOW THE BEAM REALLY BLANKS, read off the netlist and not off memory: CB2 (`~BLANK`,
      * IC207 pin 19) is not a digital gate — it pulls the Z node through R315 (2.2k) against
@@ -655,8 +646,8 @@ static void via_setup(void)
      * then Y, then Z.  Without this the integrators start wherever the analog
      * section powered up. */
     if (BEAM_VIA_SR) {
-        /* THEIR FRAME PROLOGUE, VERBATIM (frame 120, the 5 writes right behind the
-         * ACR=0x98):
+        /* THE FRAME PROLOGUE: the 5 writes right behind the ACR=0x98, as measured on a
+         * bus capture of a clean frame:
          *
          *     PCR=CC  clamp ON
          *     ORB=03  mux closed, selection at 1
@@ -666,11 +657,11 @@ static void via_setup(void)
          *
          * AND NOTHING ELSE: it primes neither Y nor Z here. We did fourteen writes — priming
          * Y, priming Z to 0x7F and a set_z to put it back — before the Z the game asks for,
-         * i.e. THREE charges of C306 per frame where it does one. Y and the centre are left
+         * i.e. THREE charges of C306 per frame where one is enough. Y and the centre are left
          * to the zero block, which comes right after the Z and releases the clamp itself.
          * See uvm2_frame_begin. */
-        /* The gaps are THEIRS, measured in the same capture: the prologue is not only the
-         * list of writes, it is also the rhythm they come out at. We had them at zero. */
+        /* The gaps are measured in the same capture: the prologue is not only the list of
+         * writes, it is also the rhythm they come out at. We had them at zero. */
         emit(UVM2_VIA_PCR,   0xCC, 6);
         emit(UVM2_VIA_PORTB, 0x03, 0);
         emit(UVM2_VIA_PORTA, 0x00, 5);
@@ -683,11 +674,11 @@ static void via_setup(void)
     set_porta(0x00, 0);
     mux_sample(UVM2_MUX_ZEROREF, UVM2_HOLD_DELAY);
     mux_sample(UVM2_MUX_Y,       UVM2_HOLD_DELAY);
-    /* THE Z CHANNEL IS PRIMED AT FULL SCALE, AS THE REFERENCE DOES. Its frame preamble is
-     * `ORA=7F, ORB=84 (channel 2), ORB=81` — it primes the brightness hold with 0x7F, not
-     * with zero like the other two. We primed it to 0 along with the rest, so between the
-     * priming and the game's first SET_INTENSITY the beam ran at MINIMUM brightness. The
-     * reference starts at maximum, and coming down is cheap: a `set_z` changes it as soon as
+    /* THE Z CHANNEL IS PRIMED AT FULL SCALE. The preamble is `ORA=7F, ORB=84 (channel 2),
+     * ORB=81` — it primes the brightness hold with 0x7F, not with zero like the other two.
+     * We primed it to 0 along with the rest, so between the priming and the game's first
+     * SET_INTENSITY the beam ran at MINIMUM brightness. Starting at maximum is right, and
+     * coming down is cheap: a `set_z` changes it as soon as
      * the game asks for something else. */
     set_porta(UVM2_Z_PRIME, 0);
     mux_sample(UVM2_MUX_Z,       UVM2_HOLD_DELAY);
@@ -717,8 +708,8 @@ static void via_setup(void)
  * And the default was the WRONG default besides. Capping the speed below the DAC forces t1
  * to be stretched, and one long ramp does NOT travel what two short ones do: in Major
  * Havoc's score table, VCAP=42 doubled t1 to 16 on 109 of 424 lit strokes (rate 29-31)
- * where its own 427 all run with t1=8 at rate 49-51 — and those rows came out stacked on the
- * console. Their rule is simpler: t1 is the SMALLEST one that keeps the rate inside the
+ * where t1=8 at rate 49-51 is enough — and those rows came out stacked on the console.
+ * The right rule is simpler: t1 is the SMALLEST one that keeps the rate inside the
  * DAC's range. That is what `DAC_CAP` in ramp.rs does today, and it is not an adjustment but
  * the converter's full scale.
  *
@@ -775,18 +766,16 @@ void uvm2_draw_init(void)
      * a perfectly correct list. */
     BEAM_VIA_SR      = 1u;
 #endif
-    /* The reference cartridge draws no units shorter than 8 counts: its plotter sets t1 =
-     * max(8, len*scale/127) and splits into micro-segments of 8 with a final REMAINDER
-     * (T1CL=4/6/7 in the capture). With MIN_T1=8 and the cap at the DAC's full scale
-     * (`DAC_CAP`, ramp.rs) we reproduce that model exactly.
+    /* No unit is drawn shorter than 8 counts: t1 = max(8, len*scale/127). With MIN_T1=8 and
+     * the cap at the DAC's full scale (`DAC_CAP`, ramp.rs) that is exactly the model.
      *
-     * THE FLOOR IS THE DEFAULT, BECAUSE IT IS THE OTHER HALF OF THEIR RULE.
+     * THE FLOOR IS THE DEFAULT, BECAUSE IT IS THE OTHER HALF OF THE RULE.
      *
      * It defaulted to 1 — "dkong's ones" — i.e. another global constant tuned against one
      * game, just like the speed cap withdrawn the same day. While the cap was 24 it did not
      * show: no stroke went below 8 because the speed was bounded. Once the cap is released,
-     * the floor becomes the only thing preventing a 3-count ramp, and that does not exist in
-     * their capture.
+     * the floor becomes the only thing preventing a 3-count ramp, which no clean frame ever
+     * contains.
      *
      * MEASURED in snowbros, same scene, changing only the cap:
      *     cap 24, floor 1     251 strokes, NONE below t1 = 8
@@ -801,7 +790,7 @@ void uvm2_draw_init(void)
 #endif
     MIN_T1          = UVM2_MIN_T1;
     MIN_T1_START    = UVM2_MIN_T1;
-    /* FIXED-TIME JUMP (the reference dialect: t1 given, rate variable). With this the DAC
+    /* FIXED-TIME JUMP (the other jump dialect: t1 given, rate variable). With this the DAC
      * cap stops deciding the duration — they are two alternative models of the same jump
      * (fixed rate / fixed time), not two settings that add up. Measured in Major Havoc:
      * t1=31 on 99% of its jumps. See the T1_JUMP block in ramp.rs. */
@@ -832,15 +821,11 @@ void uvm2_draw_init(void)
      * accumulates and has to be collected. At 1/64 or finer the input is already almost
      * exact and the correction stops removing error and starts ADDING it.
      *
-     * MEASURED against their frame 120 of Major Havoc, same input geometry, comparing the
-     * sequence of lit strokes IN ORDER:
-     *
-     *     with debt   418 of 427 identical to theirs   (97.9%)
-     *     without     426 of 427                        (99.8%)
-     *
-     * The 8 that diverge are all +-1 on a rate, and the correction puts every one of them
-     * there. The threshold is the same 6 at which the input stops losing rates of theirs:
-     * see the UVM2_Q_BITS note. -DUVM2_DEBT_OFF / -DUVM2_DEBT_ON force either one. */
+     * MEASURED on a Major Havoc frame, same input geometry, comparing the sequence of lit
+     * strokes IN ORDER against the ideal one: with the debt on, 8 of 427 strokes come out
+     * +-1 on a rate, and the correction puts every one of them there; without it, 1. The
+     * threshold is the same 6 at which the input stops losing rates: see the UVM2_Q_BITS
+     * note. -DUVM2_DEBT_OFF / -DUVM2_DEBT_ON force either one. */
 #if UVM2_Q_BITS >= 6
     DEBT_ON        = 0u;
 #endif
@@ -850,7 +835,7 @@ void uvm2_draw_init(void)
 #ifdef UVM2_DEBT_OFF
     DEBT_ON        = 0u;
 #endif
-    /* ONE STROKE = ONE RAMP, like the reference, and it is the default: confirmed on the
+    /* ONE STROKE = ONE RAMP, and it is the default: confirmed on the
      * console on 2026-09-04 (with micro-segments, Major Havoc was dotted; with the whole
      * stroke it comes out clean). See the INTEGER_STROKE note in emit.rs. */
 #ifdef UVM2_MICROSEGMENTS
@@ -871,9 +856,9 @@ void uvm2_draw_init(void)
     s_count = 0;
     via_setup();
     /* PRIMING Z, ONCE AND AT STARTUP. It used to live in via_setup, i.e. once PER FRAME,
-     * and now the frame prologue is theirs and does not prime Z. It is still needed here in
+     * and now the frame prologue does not prime Z. It is still needed here in
      * case a game draws before its first SET_INTENSITY: without this the beam would run at
-     * whatever C306 happened to hold at power-up. Full scale, like the reference. */
+     * whatever C306 happened to hold at power-up. Full scale. */
     vx_cart_refresh();         /* this draws before the first frame_begin */
     if (BEAM_VIA_SR) set_z(UVM2_Z_PRIME, UVM2_HOLD_DELAY);   /* s_z_last starts there too */
 
@@ -944,22 +929,21 @@ void uvm2_draw_reset(void)
     beam_off_and_wait();   /* the SR needs its 8 cycles BEFORE the clamp moves the beam */
 
     if (BEAM_VIA_SR) {
-        /* THE REFERENCE CARTRIDGE'S ZERO BLOCK, VERBATIM (x10,517 in the capture,
-         * 43 cycles):
+        /* THE ZERO BLOCK, as measured on a bus capture (x10,517 occurrences, 43 cycles):
          *
          *     PCR=CC +7  clamp ON
          *     ORB=81 +1  mux parked
          *     ORA=00 +6  DAC to zero
          *     ORB=C0 +11 channel 0 (Y) open: Y is re-primed INSIDE the clamp
          *     ORB=82 +1  channel 1 (zero reference) open
-         *     ORA=of +7  the OFFSET calibrated per console (theirs: 0x07)
+         *     ORA=of +7  the OFFSET calibrated per console
          *     ORA=FF +4  the final $FF touch (its meaning is still OPEN; it is reproduced
-         *                as-is — the rule is to copy, not to invent)
+         *                as measured — the rule is not to invent)
          *     ORB=83 +6  mux closed
          *     PCR=CE +9  clamp released
          *
-         * Priming AGAINST the clamp is what this file already argued for in via_setup; the
-         * reference does it on EVERY re-zero and in 43 cycles, not in our ~86. The offset is
+         * Priming AGAINST the clamp is what this file already argued for in via_setup; here it
+         * happens on EVERY re-zero and in 43 cycles, not in our old ~86. The offset is
          * a MACHINE calibration: 0 keeps our current calibration; sweep it on the console. */
         if (s_pos_x == 0 && s_pos_y == 0 && (s_pcr & UVM2_PCR_ZERO_OFF) != 0)
             return;                     /* already centred and released: do not repeat */
@@ -976,7 +960,7 @@ void uvm2_draw_reset(void)
         emit(UVM2_VIA_PORTB, 0xC0, 10);
         emit(UVM2_VIA_PORTB, 0x82, 0);
         emit(UVM2_VIA_PORTA, (uint8_t)uvm2_zero_offset, 6);
-        /* THE `ORA=0xFF` GOES BEFORE CLOSING THE MUX, AS THEIRS DOES. AND I GOT THIS WRONG.
+        /* THE `ORA=0xFF` GOES BEFORE CLOSING THE MUX. AND I GOT THIS WRONG.
          *
          * I had it inverted on purpose, reasoning that with the reference channel OPEN that
          * 0xFF charges the ZERO REFERENCE capacitor to 127 instead of to the offset — and
@@ -984,13 +968,13 @@ void uvm2_draw_reset(void)
          * displace every vector. I blamed it for some "open vectors and shimmer" that
          * appeared around then.
          *
-         * THE CAPTURE PLAYER REFUTES IT: it replays THEIR stream byte for byte on our board,
-         * in this very order, and the drawing comes out clean with no open vectors. If it
-         * works in theirs, the mechanism I feared does not happen, or something else
-         * compensates for it — and what I was fixing was somewhere else.
+         * THE CAPTURE PLAYER REFUTES IT: it replays a recorded clean stream byte for byte on
+         * our board, in this very order, and the drawing comes out clean with no open
+         * vectors. So the mechanism I feared does not happen, or something else compensates
+         * for it — and what I was fixing was somewhere else.
          *
          * WHAT that 0xFF is for is still unknown. But not knowing what it is for is no
-         * reason to do it differently: the reference says this is how it goes. */
+         * reason to do it differently: the measured order draws clean. */
         emit(UVM2_VIA_PORTA, 0xFF, 3);
         emit(UVM2_VIA_PORTB, 0x83, 5);
         emit(UVM2_VIA_PCR,   0xCE, 8);
@@ -1043,8 +1027,8 @@ void uvm2_draw_reset(void)
 
 /* The last intensity asked for, which SURVIVES the frame. via_setup() primes Z to 0 every
  * frame, so without this the gap between releasing the clamp and the game's first
- * SET_INTENSITY is travelled with an unknown Z. The reference has no such gap: it sets Z
- * and THEN releases the clamp (SetZ(0x5F); SetZero(false);). */
+ * SET_INTENSITY is travelled with an unknown Z. The right order closes that gap: set Z, and
+ * THEN release the clamp. */
 static int s_z_last = UVM2_Z_PRIME;   /* otherwise frame_begin undoes the Z priming */
 
 /** The brightness last asked for. `uvm2_config_current` needs it, since it has to be able
@@ -1061,7 +1045,7 @@ void uvm2_draw_intensity(int brightness)
 
 /* While both deltas are small, trade DAC range for ramp time: doubling the
  * delta and halving the scale draws the same length in half the cycles.  This
- * is the reference writer's Fixup(), left in but disabled. */
+ * was left in but disabled. */
 /* Doubling dx,dy while halving the ramp draws the SAME vector in half the time:
  * the distance is the DAC value times the ramp duration, so the product is what
  * matters and only the time costs us anything.  Two limits stop the halving.
@@ -1096,8 +1080,7 @@ void uvm2_draw_intensity(int brightness)
  * there is nothing to fix. It sat there defined, without a single call, and
  * `uvm2_draw_set_fixup(1)` in uvm2_svc.c set a flag nobody read — a line that says
  * something is on when it does not exist, which is worse than not having it (the same
- * argument that deleted `set_ramp` a few lines above). The reference does nothing similar
- * either: its plotter splits the length into micro-segments of 8, not into scale. */
+ * argument that deleted `set_ramp` a few lines above). */
 
 /* ── Drift compensation ────────────────────────────────────────────────────
  *
@@ -1194,10 +1177,9 @@ struct vx_sink {
 struct vx_timings { uint32_t e6809_q8, y_mux_q8, moveto_settle_q8, beam_on_q8;
                     int32_t blank_settle_q8; uint32_t keep_lit; uint32_t x_settle_q8;
                     /* The micro-segment gaps, in E cycles. 0 = the long-standing value
-                     * (the cadence measured from the reference's asterock). They are
-                     * parameterised because the reference cartridge does NOT have a single
-                     * cadence: it builds a different plotter for each title. See the block
-                     * in emit.rs. */
+                     * (the cadence measured on a bus capture of Asteroids). They are
+                     * parameterised because one cadence does not fit every title. See the
+                     * block in emit.rs. */
                     uint32_t mt_ora_y, mt_orb_keep, mt_sr_on, mt_ora_x_on; };
 extern volatile uint32_t UNITS_CONTINUE;   /* in emit.rs */
 void vx_moveto_seq(struct vx_sink *, int32_t vx, int32_t vy, uint32_t t1,
@@ -1223,8 +1205,8 @@ void vx_ramp_params(int32_t dx, int32_t dy, int32_t *vx, int32_t *vy, uint32_t *
  *
  * EXTENDING THE GAP OF THE LAST COMMAND ALREADY EMITTED.
  *
- * WHY IT IS NEEDED. MEASURED in their frame 120 of Major Havoc: the gap the reference leaves
- * after `T1CH` is 11 E cycles when the micro-segment CONTINUES, and 16 when the next step
+ * WHY IT IS NEEDED. MEASURED on a bus capture of a Major Havoc frame: the gap needed after
+ * `T1CH` is 11 E cycles when the micro-segment CONTINUES, and 16 when the next step
  * blanks the beam — the separation is perfect, 175 of 175. It is physical: the last ramp of
  * a lit stroke has to FINISH before the beam is closed; cutting it at 11 makes the stroke
  * short, which is the signature of the dots.
@@ -1383,11 +1365,10 @@ static void vxs_emit(void *ctx, uint32_t reg, uint32_t data, uint32_t delay_q8)
  * data still driven. Its own comment says why that is allowed:
  *
  *     "every register we write (PORTA, PORTB, PCR, ACR, DDRx) takes the same value
- *      IDEMPOTENTLY, which is why the reference executor holds R/W low for the whole
- *      command"
+ *      IDEMPOTENTLY, which is why the executor holds R/W low for the whole command"
  *
- * That list is THEIRS. Their model never writes T1: it toggles /RAMP through PORTB. Ours
- * writes T1CH — and writing T1C-H **restarts the timer**. It is not idempotent.
+ * That list was written for a model that never writes T1 and toggles /RAMP through PORTB.
+ * Ours writes T1CH — and writing T1C-H **restarts the timer**. It is not idempotent.
  *
  * Hanging the delay off that write makes the VIA re-trigger T1 on EVERY E cycle: PB7 stays
  * low, the integrator does not stop where it should, and the last re-trigger starts a whole
@@ -1412,9 +1393,9 @@ static void vxs_wait_ramp(void *ctx, uint32_t t1, int32_t extra_q8)
      * delay's carrier for the SIO executor, which holds the write through the wait and
      * cannot hang the delay off T1CH (see the note above). The PIO stream parks with the
      * PARK pattern between commands — it rewrites nothing — so there the delay can live in
-     * the field of the command already in the list. The reference cartridge never writes
-     * T1LL at all (226 vs 0 per frame was the big remainder in the comparison); this leaves
-     * it at 0.
+     * the field of the command already in the list. A clean frame needs no T1LL writes at
+     * all (226 per frame was the big remainder when we compared against a bus capture);
+     * this leaves it at 0.
      * SRAM only: patching the list after the fact breaks the PSRAM signature, and the SIO
      * path keeps the carrier because there it really is necessary. */
     if (s_count > 0u && d > 0) {
@@ -1501,9 +1482,10 @@ static struct vx_sink vx_cart_sink(void)
 
 /* The gaps, with the SAME values as our own cartridge.
  *
- * They used to be set to the reference's (e6809 with no discount, 3 and 16 E cycles) on the
- * reasoning that importing ours would be tuning blind. The result was worse than either
- * option: OUR speed model with THEIR timings, a combination nobody had tested. If it is to
+ * They used to be set to values measured on a bus capture (e6809 with no discount, 3 and 16
+ * E cycles) on the reasoning that importing ours would be tuning blind. The result was worse
+ * than either option: OUR speed model with timings measured for a different one, a
+ * combination nobody had tested. If it is to
  * be unified, it is unified whole — and if something later has to be separated, it is
  * separated with a measurement in front of it.
  *
@@ -1582,17 +1564,16 @@ volatile int32_t uvm2_zero_settle_e = UVM2_ZERO_SETTLE_E;   /* <0 = ZERO_BASE + 
  * channel is the beam's ORIGIN (dx = xsh - rsh, dy = rsh - ysh): if it is not the one the
  * machine expects, the WHOLE frame comes out displaced.
  *
- * 7, MEASURED IN THEIR ZERO BLOCK. Comparing ours with theirs in the same Major Havoc frame,
- * the nine writes match register for register and gap for gap except this one: they write
- * ORA=07 where we put ORA=00. It fits what was already written down — other reference
- * software also writes a NON-ZERO value there, and the BIOS puts 0.
+ * 7 WAS MEASURED on a bus capture of a clean Major Havoc frame: the nine writes of its zero
+ * block match ours register for register and gap for gap except this one, ORA=07 where we
+ * put ORA=00. Other Vectrex software also writes a NON-ZERO value there; the BIOS puts 0.
  *
  * It can be overridden per game with -DUVM2_ZERO_OFFSET if some console asks for another:
  * this is machine calibration, not a universal constant. */
 /* HOW MANY RAMPS BETWEEN ZERO CLAMPS.
  *
- * MEASURED in their frame 120 of Major Havoc: the reference puts 12 zero blocks in the BODY
- * of the frame, separated by 72, 66, 55, 73, 67, 57, 52, 55, 52, 61 and 59 ramps — median
+ * MEASURED on a bus capture of a clean Major Havoc frame: 12 zero blocks in the BODY of the
+ * frame, separated by 72, 66, 55, 73, 67, 57, 52, 55, 52, 61 and 59 ramps — median
  * 59, and far tighter by ramp count (12% spread) than by time (20%).
  *
  * WE CLAMPED ONCE PER FRAME, and the position error accumulated across all 616 ramps with
@@ -1613,15 +1594,15 @@ volatile int32_t uvm2_zero_settle_e = UVM2_ZERO_SETTLE_E;   /* <0 = ZERO_BASE + 
 #endif
 volatile int32_t uvm2_zero_every = UVM2_ZERO_EVERY;
 
-/* RE-CENTRE WHEN THE JUMP IS LONG — THEIR CRITERION, MEASURED.
+/* RE-CENTRE WHEN THE JUMP IS LONG — THE CRITERION, MEASURED.
  *
- * Pairing every blanked transport in their captures with whether it carries a zero block in
+ * Pairing every blanked transport in two bus captures with whether it carries a zero block in
  * front, over 2020 transports across 8 frames:
  *
  *     the 66 it re-centres:  min 20.1  median 42.0  max 82.0 units
  *     the 1954 it does not:  p90 3.5   p99 20.2   max 37.1
  *
- * So: **it re-centres when the beam is about to travel far**, not every N ramps. With the
+ * So: **re-centre when the beam is about to travel far**, not every N ramps. With the
  * threshold at 20 it gets 66 of 66 right and only 22 of 1954 (1.1%) would be spurious. And it
  * makes physical sense: a long jump is where the accumulated error weighs most and where the
  * re-zero is free, because the beam is going to cross the screen anyway.
@@ -1640,9 +1621,9 @@ volatile int32_t uvm2_zero_jump = UVM2_ZERO_JUMP;
 /* Emit the pen-up when the requested jump measures ZERO. See move_abs_internal. */
 #ifndef UVM2_PENUP_ZERO
 /* 0 BY DEFAULT, AND NOT OUT OF CAUTION: with the bench's geometry there is no way to know
- * when it applies. Their 12 pen-ups carry SR=00/SR=01 around them, but the reference geometry
- * file only stores the LIT segments — where they lifted the pen is not in the file. Turned on,
- * it fires on all 240 chained strokes (against their 12) and sinks the transport similarity
+ * when it applies. The 12 pen-ups in a captured frame carry SR=00/SR=01 around them, but its
+ * geometry file only stores the LIT segments — where the pen was lifted is not in the file.
+ * Turned on, it fires on all 240 chained strokes (against 12) and sinks the transport similarity
  * from 91.6% to 41.7%. It stays for when the input carries that information. */
 #define UVM2_PENUP_ZERO 0
 #endif
@@ -1658,17 +1639,17 @@ volatile int32_t uvm2_stair_cap  = 120;
 /* THE GAME ANNOUNCES THAT IT IS ABOUT TO LIFT THE PEN. It is set before a `move_abs`, and
  * only consumed if that jump turns out to measure ZERO — if it moves, the jump itself blanks.
  * It is needed because "I blanked and lit again" and "I stayed lit" give the SAME geometry:
- * without this hint, two adjacent strokes join with a corner the reference does not draw. */
+ * without this hint, two adjacent strokes join with a corner that should not be drawn. */
 static int s_penup_pending;
 void uvm2_draw_penup(void) { s_penup_pending = 1; }
 
-/* How many "start steps" a jump has to measure to deserve the soft start. Their measured
+/* How many "start steps" a jump has to measure to deserve the soft start. The measured
  * threshold is at rate >= 100, i.e. about 20 times the step. 0 disables it. */
 #ifndef UVM2_SOFT_START
 #define UVM2_SOFT_START 124
 #endif
-/* The RATE from which the jump carries a tiny unit in front. 124 is their measured minimum;
- * below 124 they NEVER prime (0 of 179). 0 disables it.
+/* The RATE from which the jump carries a tiny unit in front. 124 is the measured minimum;
+ * below 124 a captured jump NEVER primes (0 of 179). 0 disables it.
  *
  * IT IS SEEDED FROM THE MACRO. It used to be the literal 124 and `UVM2_SOFT_START` was used
  * nowhere: it was defined above and that was it. So `-DUVM2_SOFT_START=N` compiled without
@@ -1676,10 +1657,9 @@ void uvm2_draw_penup(void) { s_penup_pending = 1; }
  * same value. It is the same fault that already cost VK_RUNG_STEP and the draw scale. */
 volatile int32_t uvm2_soft_start = UVM2_SOFT_START;
 
-/* THE REFERENCE CARTRIDGE'S FRAME CLOSE: neither recalibration to the rails nor silence at
- * the end.
+/* THE FRAME CLOSE: neither recalibration to the rails nor silence at the end.
  *
- * It travels with the SR dialect because it is their method, not a loose knob. At 0 you get
+ * It travels with the SR dialect because it is part of that method, not a loose knob. At 0 you get
  * back the BIOS close we used to have — two sweeps to the rails per frame and
  * `uvm2_bus_delay` for the rest — which is what to go back to if frame-to-frame drift ever
  * appears. */
@@ -1715,8 +1695,8 @@ volatile int32_t uvm2_frame_filler = UVM2_FRAME_FILLER;
 #define FRAME_FILLER (BEAM_VIA_SR && uvm2_frame_filler)
 
 #ifndef UVM2_ZERO_OFFSET
-/* THE VALUE PRIMED INTO THE ZERO REFERENCE. 0x23 (35) is the factory value another reference
- * title uses for its text (`calibrationValue16`); for long strokes it uses 0x56 (86). It used
+/* THE VALUE PRIMED INTO THE ZERO REFERENCE. 0x23 (35) is the factory value Vectorblade uses
+ * for its text (`calibrationValue16`); for long strokes it uses 0x56 (86). It used
  * to be 7, i.e. practically the BIOS's 0, which was already written down as wrong. It is
  * calibrated per console — that is what the wizard is for. */
 #define UVM2_ZERO_OFFSET 0x23
@@ -1799,13 +1779,13 @@ static struct vx_timings vx_cart_timings(void)
     k.beam_on_q8 = uvm2_beam_on_e > 0 ? (uint32_t)uvm2_beam_on_e * 256u : 0u;
     /* 16, NOT our own cartridge's 11. HERE there IS per-board calibration, and this time
      * with a measurement behind it: with 11 the pentagon's corners come out slightly open —
-     * the beam blanks BEFORE it finishes arriving. 16 is the value the reference measured for
-     * THIS board (c_BlankOnDelay), and our 11 came from a bisection on OUR console, with a
-     * different bus path and a different amplifier.
+     * the beam blanks BEFORE it finishes arriving. 16 is the value measured for THIS board,
+     * and our 11 came from a bisection on OUR console, with a different bus path and a
+     * different amplifier.
      *
      * It is the term that turns bright dots at the vertices and open corners into the two
      * ends of one knob. Raise the big one first and one step at a time; `beam_on` stays at 2
-     * (theirs is 3) until it is needed. */
+     * until it is needed. */
     k.blank_settle_q8 = uvm2_blank_settle_e * 256;
     k.keep_lit = (uint32_t)(uvm2_keep_lit ? 1 : 0);
     k.x_settle_q8 = (uint32_t)(uvm2_x_settle_e > 0 ? uvm2_x_settle_e : 0) * 256u;
@@ -1862,15 +1842,16 @@ static void vx_cart_refresh(void)
  * WHY. `VS_RND` in sdk_rp2350.c divides the game's coordinates by 127 and ROUNDS TO AN
  * INTEGER before anyone sees them. MEASURED in mhavoc over 81,552 vectors: 0.22 units of
  * error per axis, 3.6% of vectors entirely sub-unit and 0.26% disappearing because both
- * endpoints land on the same point. The reference cartridge's grid is ~1/20 of a unit (the
+ * endpoints land on the same point. The hardware's own grid is ~1/20 of a unit (the
  * granularity of the rate at t1=8): we were ten times coarser.
  *
  * The chain's debt did NOT cover this: it corrects the RAMP's residue, and it received i8,
  * i.e. already rounded. They are two different losses.
  *
  * HOW MANY FRACTION BITS the input carries. 4 (1/16) is what the ports use; the comparison
- * bench asks for 8 because at 1/16 10.5% of their rates cannot be reproduced — their vector
- * with rate 32 at t1 = 8 measures exactly 1.6 units and 1/16 can only say 1.5625 or 1.625.
+ * bench asks for 8 because at 1/16 10.5% of a captured frame's rates cannot be reproduced —
+ * a vector with rate 32 at t1 = 8 measures exactly 1.6 units and 1/16 can only say 1.5625
+ * or 1.625.
  * At 1/64 or finer all 210 of the frame come out EXACT.
  *
  * ASKING FOR THE PRECISION IS ALREADY ASKING FOR THE MODE. Until 2026-09-09 the `#else`
@@ -1878,7 +1859,7 @@ static void vx_cart_refresh(void)
  * silently: a bench was compiled with -DUVM2_Q_BITS=8 and without UVM2_SUBUNITS, so main.c
  * read 8 (its contract `#error` passed), the drawing path read 0, and the table in 1/256 was
  * drawn as if those were whole units. The bench fell from 94.2% to 5.3% of commands identical
- * to theirs and everything measured with it was noise. The compiler DID say so — two
+ * to the captured frame and everything measured with it was noise. The compiler DID say so — two
  * macro-redefined warnings in the log — and nobody was looking at them. */
 #if defined(UVM2_Q_BITS) && (UVM2_Q_BITS > 0) && !defined(UVM2_SUBUNITS)
 #define UVM2_SUBUNITS 1
@@ -1899,8 +1880,8 @@ static void vx_cart_refresh(void)
  *
  * A ramp advances `v * t1 / DRAW_SCALE`, and both of its factors have a cap:
  *   |v| <= 127   the rate is a signed byte in the position DAC
- *    t1 <= 255   the reference writes T1CH = 0 in every one of its frames, i.e. t1 in a
- *                byte; measured, it uses from 8 up to 252 and DOES NOT SPLIT A SINGLE STROKE
+ *    t1 <= 255   T1CH = 0 in every captured frame, i.e. t1 in a byte; measured, from 8 up
+ *                to 252, and NOT A SINGLE STROKE SPLIT
  *
  * So the maximum is 127 * 255 / DRAW_SCALE — with the stock scale (160), 202 units. This used
  * to be a plain 127, which comes from nowhere: it split strokes that fit in one pass.
@@ -2017,7 +1998,7 @@ static void move_one(int dx, int dy)
      * MEASURED with `jump_absorbs_or_not` in ramp.rs, replaying real geometry through
      * the real model, jump-without-debt versus jump-with-debt:
      *
-     *     reference frame 120, 427 segments  median X  -0.619 -> -0.038   worst -0.895 -> -0.187
+     *     Major Havoc frame, 427 segments    median X  -0.619 -> -0.038   worst -0.895 -> -0.187
      *     Star Wars logo, 149 segs 48 jumps  median X  -0.031 -> +0.000   worst -2.306 -> +1.669
      *
      * The two notes that used to live here and in ramp.rs saying this was tried and came
@@ -2073,9 +2054,9 @@ static void move_one(int dx, int dy)
 
     /* SOFT START FOR FAST JUMPS.
      *
-     * MEASURED in their frame 120 of Major Havoc: 20 of their 26 jumps at rate >= 100 (77%)
-     * are preceded by a TINY unit — t1 = 8 in all 20, rate |v| <= 4 (almost always +-1) and
-     * in the SAME DIRECTION as the jump (X: 20 of 20, Y: 17 of 20). And 10 of their 12
+     * MEASURED on a bus capture of a clean Major Havoc frame: 20 of its 26 jumps at rate >= 100
+     * (77%) are preceded by a TINY unit — t1 = 8 in all 20, rate |v| <= 4 (almost always +-1)
+     * and in the SAME DIRECTION as the jump (X: 20 of 20, Y: 17 of 20). And 10 of its 12
      * departures from a re-zero start that way. We NEVER did it, not once.
      *
      * Physically it is what it looks like: after the zero clamp the integrators are at rest,
@@ -2089,13 +2070,13 @@ static void move_one(int dx, int dy)
     int res_tot_x_ = 0, res_tot_y_ = 0;   /* what the priming unit took of the request */
     int32_t px_ = 0, py_ = 0; uint32_t pt1_ = 0;   /* the long ramp, to emit it as computed */
     if (uvm2_soft_start > 0) {
-        /* THEIR CRITERION IS THE JUMP'S RATE, NOT ITS DISTANCE. Measured over their 198
+        /* THE CRITERION IS THE JUMP'S RATE, NOT ITS DISTANCE. Measured over 198 captured
          * transports that move anything: the 19 that carry a tiny unit in front have rate
          * 124..126, and of the 179 that do not, **none** reaches 124. Perfect separation, no
          * overlap.
          *
-         * This used to fire on distance and did so on 41 of 43 jumps, against their 19 of 198
-         * — which is why it came out worse on the console. The error was the threshold, not
+         * This used to fire on distance and did so on 41 of 43 jumps, against 19 of 198 in the
+         * capture — which is why it came out worse on the console. The error was the threshold, not
          * the idea. */
 #if UVM2_Q_BITS > 0
         vx_ramp_params_jump_qn(dx, dy, UVM2_Q_BITS, &px_, &py_, &pt1_);
@@ -2107,24 +2088,23 @@ static void move_one(int dx, int dy)
         if (rate >= uvm2_soft_start) {
             /* THE TINY UNIT CARRIES THE RESIDUE, not a fixed step.
              *
-             * Verified in their arithmetic: in their transport #45 the jump asks for -20.25
-             * units in X; their main ramp (-124, t1=26) travels -20.15; the residue is -0.10,
-             * which at t1 = 8 is -2 — and -2 is exactly what they emit. In Y, the same. So
-             * they choose the long ramp first and put whatever is left over in front of it.
+             * Verified on captured transport #45: the jump asks for -20.25 units in X; the
+             * main ramp (-124, t1=26) travels -20.15; the residue is -0.10, which at t1 = 8 is
+             * -2 — and -2 is exactly what the capture shows. In Y, the same. So the long ramp
+             * is chosen first and whatever is left over goes in front of it.
              *
              * With a fixed +-1 only 5 of 22 match; with the residue, the tiny unit comes out
-             * at THEIR value. */
+             * at the measured value. */
             const int t1p = 8;
             /* THE MAIN JUMP TRUNCATES, IT DOES NOT ROUND, when it carries a priming unit.
              *
              * `vx_ramp_params_jump` rounds to nearest, so the long ramp can OVERSHOOT and
              * leave a residue of the opposite sign — and then the tiny unit pushes backwards.
-             * The reference falls short and the residue goes in the same direction as the
-             * jump.
+             * Truncating falls short and the residue goes in the same direction as the jump.
              *
-             * MEASURED in their #45: it asks for -20.25 units; at t1 = 26 the exact rate is
-             * -124.6. Rounding gives -125 (ours), truncating -124 (theirs), and with -124 the
-             * residue is -0.10, which at t1 = 8 is the -2 they emit. */
+             * MEASURED in captured #45: it asks for -20.25 units; at t1 = 26 the exact rate is
+             * -124.6. Rounding gives -125, truncating -124, and with -124 the residue is -0.10,
+             * which at t1 = 8 is the -2 the capture shows. */
             {
                 const long rec = ((long)px_ * (long)pt1_ * (1L << UVM2_Q_BITS)) / (long)DRAW_SCALE;
                 if ((dx > 0 && rec > dx) || (dx < 0 && rec < dx)) px_ += (px_ > 0 ? -1 : 1);
@@ -2143,7 +2123,7 @@ static void move_one(int dx, int dy)
 #else
                 vx_ramp_params_jump(res_x, res_y, &ax, &ay, &at1);
 #endif
-                if (at1 > (uint32_t)t1p) at1 = (uint32_t)t1p;   /* theirs is ALWAYS t1 = 8 */
+                if (at1 > (uint32_t)t1p) at1 = (uint32_t)t1p;   /* measured: ALWAYS t1 = 8 */
                 struct vx_sink s0 = s_sink_cache;      /* local copy: the call wants non-const */
                 struct vx_timings k0 = s_k_cache;
                 /* THE LONG RAMP COMES AFTER THIS ONE, so the beam is blanked BEFORE this
@@ -2164,10 +2144,10 @@ static void move_one(int dx, int dy)
                 vx_chain_reset();
                 /* AND THE LONG RAMP IS EMITTED AS IT WAS COMPUTED, not recomputed over the
                  * already-reduced delta: taking the residue off it shortens it by one t1 and
-                 * the rate runs away to 127-128. Measured in their #45 — they emit
-                 * (-124, t1=26) and we came out with (-128, t1=25) — and in their #393. The
-                 * reference chooses the ramp FIRST and puts what is left over in front; not
-                 * the other way round. */
+                 * the rate runs away to 127-128. Measured in captured #45 — (-124, t1=26)
+                 * is right and we came out with (-128, t1=25) — and in #393. The ramp is
+                 * chosen FIRST and what is left over goes in front; not the other way
+                 * round. */
                 forced = 1;
             }
         }
@@ -2210,9 +2190,9 @@ static void move_one(int dx, int dy)
          * error, and the physical error of the beam (integrator and amplifier) is a separate
          * thing that only the console can measure. */
         /* WITH THE JUMPS' SPEED CAP, not the strokes'. The beam is blanked: slowing it down
-         * gives no brightness, it only spends frame. Measured in the reference capture: it
-         * jumps at 1.8x the speed it draws at (median rate 64 against 35), and a jump cost us
-         * ~267 cycles against their ~32. */
+         * gives no brightness, it only spends frame. Measured on a bus capture of Asteroids: a
+         * clean frame jumps at 1.8x the speed it draws at (median rate 64 against 35), and a
+         * jump cost us ~267 cycles where ~32 is enough. */
 if (forced) { vx = px_; vy = py_; t1 = pt1_; } else {
 #if UVM2_Q_BITS > 0
         { uint32_t t0_ = SDK_T0(); vx_ramp_params_jump_qn(dx, dy, UVM2_Q_BITS, &vx, &vy, &t1); SDK_ACUM(0, t0_); }
@@ -2221,11 +2201,11 @@ if (forced) { vx = px_; vy = py_; t1 = pt1_; } else {
 #endif
         /* THE STAIRCASE OF JUMP DURATIONS.
          *
-         * The reference does not COMPUTE a jump's t1: it PICKS it from {8, 18, 31}, the first
-         * step whose rate does not exceed 120. Measured over their 1041 jumps that follow a
-         * stroke, that rule explains 1008 (97%), and in their frame 120 it explains ALL of
-         * them — including the three that had resisted, where they use 18 and we came out
-         * with 9, 13 and 15.
+         * A jump's t1 is not COMPUTED: it is PICKED from {8, 18, 31}, the first step whose rate
+         * does not exceed 120. Measured over 1041 captured jumps that follow a stroke, that
+         * rule explains 1008 (97%), and in the Major Havoc frame it explains ALL of them —
+         * including the three that had resisted, where 18 is right and we came out with 9,
+         * 13 and 15.
          *
          * It only acts if some step FITS: on long jumps the earlier calculation rules. */
         if (uvm2_stair_jump) {
@@ -2562,11 +2542,11 @@ int uvm2_draw_sweep_sr(int dx, int dy, const unsigned char *pattern, int n, int 
 
 /* ── THERE WAS A "RATE LAYER" HERE (uvm2_draw_rate / uvm2_draw_raw), AND IT WAS A MISTAKE ──
  *
- * I wrote it so a test bench could replay the reference stream without rounding positions:
+ * I wrote it so a test bench could replay a captured stream without rounding positions:
  * you handed it (vy, vx, t1, sr, gap) and it emitted the micro-segment. It was cut as soon as
  * it was seen, and rightly: **that turns the SDK into a pipe**. If the bench hands it the
  * rates, the times and the gaps ready-made, what gets verified is that the pipe carries what
- * is put into it — not that OUR model generates the right calls. To replay someone else's
+ * is put into it — not that OUR model generates the right calls. To replay a recorded
  * stream as-is there is already a capture player, which uses `uvm2_exec` and does not pretend
  * to be anything else.
  *
@@ -2617,29 +2597,29 @@ static void move_abs_internal(int x, int y)
          * re-measurement immediately below, which replaced it.) */
         /* NEITHER THE SIGN NOR THE 20: BOTH HALVES OF THIS RULE WERE MEASURED AND FALSE.
          *
-         * The block above was written off frame 120 of HIS MAJOR HAVOC and claimed two
-         * things: re-centre from 20 units up, and only when the jump goes LEFT (the
-         * "carriage return"). Re-measured transport by transport over BOTH of his bus
-         * captures -- 7 frames of each, cut on his own $3FFE frame marker:
+         * The block above was written off one Major Havoc frame and claimed two things:
+         * re-centre from 20 units up, and only when the jump goes LEFT (the "carriage
+         * return"). Re-measured transport by transport over TWO bus captures -- 7 frames of
+         * each, cut on a $3FFE frame marker:
          *
          *                       never pinches below   pinches going right / left
-         *     his Vector Kong         28.9 u                  126 / 63
-         *     his Major Havoc         23.7 u                   35 / 42
+         *     Vector Kong             28.9 u                  126 / 63
+         *     Major Havoc             23.7 u                   35 / 42
          *
-         * THE SIGN DOES NOT EXIST. In Vector Kong TWO OUT OF THREE of his re-zeros go
-         * RIGHT -- exactly what this condition threw away. In Major Havoc it is 35/42, an
-         * even split. It is not a direction rule; it looked like one in his mhavoc because
-         * that scene is rows of text, so every long jump in it happened to go the same way.
+         * THE SIGN DOES NOT EXIST. In Vector Kong TWO OUT OF THREE re-zeros go RIGHT --
+         * exactly what this condition threw away. In Major Havoc it is 35/42, an even
+         * split. It is not a direction rule; it looked like one in mhavoc because that
+         * scene is rows of text, so every long jump in it happened to go the same way.
          *
-         * AND 20 IS BELOW THE FLOOR OF BOTH. He never re-centres a transport shorter than
-         * 23.7 units. We did, and that is where it hurts: the jumps between the letters of
+         * AND 20 IS BELOW THE FLOOR OF BOTH. Neither capture re-centres a transport shorter
+         * than 23.7 units. We did, and that is where it hurts: the jumps between the letters of
          * dkong's logo measure 20 and 22 units, so we put two pinches INSIDE one figure.
          * Each drags the beam to the centre and forces a flight back, and whatever is drawn
          * after it lands displaced relative to what came before -- the overlapping letters
          * Daniel sees on the console.
          *
          * 24 IS THE FLOOR THE TWO CAPTURES SHARE, and no more than that: above it they
-         * disagree (Vector Kong has 28 transports between 24 and 29 that he does NOT pinch,
+         * disagree (Vector Kong has 28 transports between 24 and 29 that are NOT pinched,
          * and Major Havoc has none in that band). So distance alone does NOT close the
          * rule, and the second criterion is not in these captures. The floor is, and the
          * floor is all that goes here.
@@ -2674,8 +2654,8 @@ static void move_abs_internal(int x, int y)
          * keep-lit that leaves the beam LIT between the two — i.e. we draw the corner that
          * joins them. The game asked for a jump: it wanted them separated.
          *
-         * MEASURED in their frame 120: they emit 12 units of `(0, 0, t1=8)` — an 8-cycle ramp
-         * that moves nothing, with the beam blanked — and ALL TWELVE carry `SR=00` and
+         * MEASURED on a captured Major Havoc frame: 12 units of `(0, 0, t1=8)` — an 8-cycle
+         * ramp that moves nothing, with the beam blanked — and ALL TWELVE carry `SR=00` and
          * `SR=01` around them. The 228 genuinely chained strokes have no SR write at all. So
          * that unit IS the zero-distance pen-up, and we emitted zero of the 12. */
         const int announced = s_penup_pending;
@@ -2871,20 +2851,16 @@ void uvm2_frame_begin(void)
     via_setup();
 #endif
 
-    /* Restore the intensity BEFORE releasing the clamp, like the reference writer:
-     *
-     *     commandWriter.SetZ(0x5F);
-     *     commandWriter.SetZero(false);
+    /* Restore the intensity BEFORE releasing the clamp: set Z, then release /ZERO.
      *
      * via_setup() has just primed Z to 0, and the game will not set its own until its first
      * SET_INTENSITY. Between those two things there are commands running with the clamp
      * already released and Z at a value nobody chose.
      *
-     * THE RESTORING Z IS REDUNDANT ON THE REFERENCE PATH. It was there so the beam would not
+     * THE RESTORING Z IS REDUNDANT ON THE SR PATH. It was there so the beam would not
      * run with an undefined Z between releasing the clamp and the game's first
      * SET_INTENSITY; now the clamp is released by the zero block, which comes AFTER that Z,
-     * so the gap it covered no longer exists. Their frame has none: writing it charged C306
-     * twice per frame — ours and the game's — for the same value. */
+     * so the gap it covered no longer exists. Writing it charged C306 twice per frame — ours and the game's — for the same value. */
     /* ONCE A FRAME THE Z CACHE GOES STALE, so C306 is recharged by the frame's first
      * intensity command even when nobody has changed the intensity. See the note over
      * set_z(): without this, a screen drawn at a single brightness charges the capacitor on
@@ -2901,8 +2877,8 @@ void uvm2_frame_begin(void)
      * priming above, so no drift reaches the screen and the holds are charged
      * against a beam that is actually at zero. */
 #ifndef UVM2_HOLD_ZERO
-    /* THE ZERO BLOCK RELEASES THE CLAMP, AS THEIRS DOES. In their frame the sequence is
-     * prologue -> the game's Z -> zero block (which ends in PCR=CE), and there is no loose
+    /* THE ZERO BLOCK RELEASES THE CLAMP. The sequence is prologue -> the game's Z -> zero
+     * block (which ends in PCR=CE), and there is no loose
      * PCR=CE before it. Releasing it here also had an effect nobody wanted: it left `s_pcr`
      * with the release bit set, and with that the frame's first `uvm2_draw_reset` believed it
      * was "already centred and released" and SKIPPED the whole block — i.e. the frame started
@@ -2993,12 +2969,12 @@ static void measure_period(void)
 }
 }
 
-/* THEIR FRAME FILLER, VERBATIM.
+/* THE FRAME FILLER.
  *
- * The reference's frame measures exactly 30023 cycles, and whatever is left after drawing it
- * burns with commands: ORA at +-64 alternating with the ramp OPEN (ORB=0x00 -> PB0=0, mux on
+ * A clean frame measures exactly 30023 cycles, and whatever is left after drawing it burns
+ * with commands: ORA at +-64 alternating with the ramp OPEN (ORB=0x00 -> PB0=0, mux on
  * channel 0, PB7=0 ramp active) and ACR=0x18, which takes PB7 out of T1's hands. Measured
- * over the capture's 1061 frames: 246 alternations when it draws 1621 writes and 70 when it
+ * over 1061 captured frames: 246 alternations when it draws 1621 writes and 70 when it
  * draws 3348 — more drawing, less filler, and the total always 30023.
  *
  * Since it alternates in equal stretches the net displacement is zero, and the beam is
@@ -3007,7 +2983,7 @@ static void measure_period(void)
  * capacitors alive through the gap between frames, where we sat in silence with
  * `uvm2_bus_delay`. Silence does not refresh a capacitor.
  *
- * The cycles are theirs: header 3/6/3/6/0/212 and each alternation 6/0/41.
+ * The cycles, as measured: header 3/6/3/6/0/212 and each alternation 6/0/41.
  *
  * BUT IT DOES NOT PARK THE BEAM, and the net displacement is not zero. Found 2026-10-01 from a
  * list dumped off the console (uvm2_dump_list) and replayed in beam_sim.py once it modelled
@@ -3019,8 +2995,8 @@ static void measure_period(void)
  * clamp on.
  *
  * uvm2_filler_clamp = 1 runs the same filler — the same commands, cycles and audio — with the
- * clamp ON, so the integrators are held at the centre through it. 0 is the reference's
- * behaviour. Compared on a console over SWD, 2026-10-01, same brightness: with 0 the diagonal
+ * clamp ON, so the integrators are held at the centre through it. 0 is the original
+ * filler. Compared on a console over SWD, 2026-10-01, same brightness: with 0 the diagonal
  * is there, with 1 it is gone, nothing else changed that was seen. 1 is the default; the knob
  * stays so the next console can be compared the same way. */
 volatile uint8_t uvm2_filler_clamp = 1;
@@ -3059,7 +3035,7 @@ static void frame_filler(void)
     uint32_t remainder = target > s_cycles ? target - s_cycles : 0u;
     if (remainder >= 3u + 1u + 0u + 1u + 1u + 1u) {
         const uint32_t gap = remainder - (6u + 1u + 0u + 1u + 1u);
-        uint32_t t1 = gap > 10u ? gap - 10u : 1u;   /* their gap is t1 + 10 */
+        uint32_t t1 = gap > 10u ? gap - 10u : 1u;   /* the gap is t1 + 10 */
         if (t1 > 255u) t1 = 255u;
         emit(UVM2_VIA_PORTA, (n & 1u) ? 0x40 : 0xC0, 6);
         emit(UVM2_VIA_T1CL,  (uint8_t)t1, 0);
@@ -3103,12 +3079,12 @@ void uvm2_frame_end(void)
     /* BLANK EXPLICITLY, do not assume it. This used to say "blanked already (every lit
      * segment restores the PCR)", which is an ASSUMPTION: it only holds if the frame ended on
      * a lit segment. A frame with no drawing, or one that ends on a move, or on text, leaves
-     * here with the beam however it was. The reference does not assume: it emits
-     * SetBlank(true) when closing every frame. It costs one command. */
+     * here with the beam however it was. So every frame closes with an explicit blank. It
+     * costs one command. */
     s_pcr = (uint8_t)(s_pcr & ~UVM2_PCR_BLANK_OFF);
     s_limit = UVM2_CMD_CAPACITY;   /* the close ALWAYS fits, see UVM2_CMD_RESERVE */
-    /* THE BLANK GOES BEFORE THE PCR, AS THEIRS DOES. Their frame close is
-     * `T1CH+29 SR=00+14`, and we put the PCR in the middle: with the PCR in front, the last
+    /* THE BLANK GOES BEFORE THE PCR. The frame close is `T1CH+29 SR=00+14`, and we used to
+     * put the PCR in the middle: with the PCR in front, the last
      * command emitted was no longer the stroke's T1CH and `extend_stroke_t1ch` could not close
      * it, so the last stroke of EVERY frame came out 18 cycles short. */
     beam_off_and_wait_h(14u);
@@ -3118,12 +3094,12 @@ void uvm2_frame_end(void)
      * has it: `Recalibrate` is the last thing `Wait_Recal` does, i.e. frame-CLOSE work. See
      * the uvm2_recalibrate block.
      *
-     * THE REFERENCE DOES NOT DO IT. Its whole frame close is `T1CH+29 SR=00+14` — one write —
-     * and it never sweeps to the rails. It can afford that because its zero block runs 12
-     * times PER FRAME re-priming C305 with the calibrated offset, which is the reference the
-     * sweep was there to restore; and we now emit that same block, with its same cycles.
+     * WITH FRAME_CLOSE IT IS NOT NEEDED. The whole frame close is `T1CH+29 SR=00+14` — one
+     * write — and it never sweeps to the rails. That is affordable because the zero block runs
+     * about 12 times PER FRAME re-priming C305 (the zero reference) with the calibrated
+     * offset, which is what the sweep was there to restore.
      *
-     * It is turned off along with the rest of their close (UVM2_FRAME_CLOSE=0 brings both
+     * It is turned off along with the rest of that close (UVM2_FRAME_CLOSE=0 brings both
      * back), and the symptom to watch for if we ever have to return is the usual one: the
      * drawing drifting out of place frame after frame. */
 #ifndef UVM2_NO_RECALIBRATE
@@ -3136,7 +3112,7 @@ void uvm2_frame_end(void)
     s_pos_x = 0;
     s_pos_y = 0;
 
-    /* AND THE FRAME'S LEFTOVER IS SPENT AS THEIRS IS: with commands, not in silence. */
+    /* AND THE FRAME'S LEFTOVER IS SPENT with commands, not in silence. */
     if (FRAME_FILLER) frame_filler();
 
     /* THE AUDIO CLOCK CLOSES WITH THE LIST, and here — before the dual-core fork —

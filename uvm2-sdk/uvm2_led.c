@@ -7,7 +7,7 @@
  * phase".  The cartridge's WS2812 on GPIO30 gives us that, and costs nothing
  * once bring-up is done.
  *
- * The reference drives it from a PIO state machine; we bit-bang it instead, so
+ * A PIO state machine could drive it; we bit-bang it instead, so
  * the SDK stays free of PIO programs and of the Pico SDK entirely.  Timing
  * comes from DWT's cycle counter, calibrated against the one clock whose
  * frequency we actually know — the Vectrex's own 1.5 MHz CLK.  When that clock

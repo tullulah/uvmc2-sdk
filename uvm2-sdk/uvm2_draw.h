@@ -42,8 +42,8 @@ int  uvm2_draw_rotated(void);
 void uvm2_draw_move(int dx, int dy);
 void uvm2_draw_delta(int dx, int dy);
 
-/* THE SAME ONES IN 1/16 OF A DEVICE UNIT. The integer grid is ~10 times coarser than the
- * reference cartridge's, and that deforms glyphs: 0.22 units of error per axis measured in
+/* THE SAME ONES IN 1/16 OF A DEVICE UNIT. The integer grid is too coarse, and that deforms
+ * glyphs: 0.22 units of error per axis measured in
  * mhavoc, with 3.6% of the vectors entirely sub-unit. They need -DUVM2_SUBUNITS to have any
  * effect; without it they round and behave exactly like the integer ones. */
 void uvm2_draw_delta_q4(int dx_q4, int dy_q4);
@@ -94,7 +94,7 @@ void     uvm2_hud_frame(void);       /* called by uvm2_frame_end; not for games 
 extern char uvm2_hud_text[2][32];    /* the lines last drawn, as text */
 uint32_t uvm2_list_room(void);       /* commands the game may still add this frame */
 /* 1 (default): the inter-frame filler runs with the zero clamp on (the beam held at the
- * centre); 0: the reference's filler, ramp free — which sweeps a dark diagonal that shows with
+ * centre); 0: the old filler, ramp free — which sweeps a dark diagonal that shows with
  * the brightness up. See frame_filler. */
 extern volatile uint8_t  uvm2_filler_clamp;
 

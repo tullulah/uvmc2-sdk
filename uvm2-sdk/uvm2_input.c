@@ -5,13 +5,13 @@
  * turned around mid-cycle, so these run as direct accesses.  They must run
  * BETWEEN frames, while /ZERO holds the beam clamped at centre — the sequences
  * below drive Port B for the PSG and the mux, which disturbs the ramp state.
- * That is exactly where the reference calls them, right after replaying a frame.
+ * So they run right after replaying a frame.
  *
- * The byte sequences are ported literally from VectrexCart::ReadButtonsHaltMode
- * and ReadJoystickHaltMode.  Deliberately literal: the Vectrex documentation
+ * The byte sequences are kept exactly as they were proven on hardware.
+ * Deliberately literal: the Vectrex documentation
  * disagrees with itself about the polarity of Port B bit 0 (the VIA register
  * map calls 0 "enable mux", the BIOS Joy_Digital listing treats 1 as enable),
- * and the reference is the version that demonstrably works on hardware.  Do not
+ * and these sequences are the version that demonstrably works.  Do not
  * "clean these up" without a Vectrex in front of you.
  */
 

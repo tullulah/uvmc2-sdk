@@ -326,8 +326,7 @@ void uvm2_svc_dispatch(uint32_t *frame)
          *
          * frame_begin() ends by releasing the clamp, so this call primed the three
          * sample-and-holds — the zero reference included — against integrators that were
-         * ALREADY FREE. It is exactly the divergence we diagnosed against the reference
-         * writer on 2026-08-04: "priming against a free-running integrator measures the
+         * ALREADY FREE. It is exactly the divergence we diagnosed on 2026-08-04: "priming against a free-running integrator measures the
          * drift instead of a reference — this is the square that starts the right size and
          * then shrinks and skews". Observed on the console the same day: "it comes out big
          * first and then the scale shrinks".

@@ -37,8 +37,7 @@
  * false conclusions.
  *
  * WHY IT IS AN #error AND NOT A DEFAULT. A default can be stepped on without anyone
- * noticing, and it was: on 2026-09-09, with the whole SDK tuned against the reference
- * capture, dkong, asteroids and the VPy Snow Bros — the three games tested daily — were
+ * noticing, and it was: on 2026-09-09, with the whole SDK tuned and measured, dkong, asteroids and the VPy Snow Bros — the three games tested daily — were
  * compiling with NEITHER of the two. Snow Bros was running on SIO and a single core, and
  * nobody knew because the build said nothing. Measured in dkong that same day, on the
  * console: 51 ms drawing and 46 ms of game logic IN SERIES, i.e. 13 Hz for not having
@@ -205,7 +204,7 @@ void uvm2_bus_init(void);
 #endif
 
 /* Replay `count` commands back-to-back, one bus cycle each plus their delays.
- * R/W is held low for the whole batch (as in the reference executor) and the
+ * R/W is held low for the whole batch and the
  * bus is parked at $8000 on exit.  Returns the bus cycles consumed. */
 UVM2_RAMFUNC uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count);
 
@@ -238,8 +237,7 @@ UVM2_RAMFUNC void uvm2_bus_delay(uint32_t cycles);
 
 /* ── Single accesses (outside the command stream) ───────────────────────────
  * Reads cannot be recorded — they need the data bus turned around mid-cycle —
- * so input polling runs directly, exactly as the reference does after replaying
- * its frame.  uvm2_via_write is the one-off equivalent of a single command. */
+ * so input polling runs directly, right after replaying the frame.  uvm2_via_write is the one-off equivalent of a single command. */
 UVM2_RAMFUNC void    uvm2_via_write(uint32_t reg, uint32_t data);
 UVM2_RAMFUNC uint8_t uvm2_via_read(uint32_t reg);
 #ifndef UVM2_BIOS
