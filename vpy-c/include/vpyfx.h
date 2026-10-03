@@ -76,6 +76,24 @@ int vpyfx_shatter(const vpy_mesh *m, const vpy_xf *place,
                   int32_t cx, int32_t cy, int32_t cz,
                   int32_t speed, int32_t spin, int life, int br);
 
+/* DISINTEGRATION: the mesh comes apart from where it was hit. Every edge is cut into
+ * `per_edge` pieces, each a short spinning stick, and each waits in its place until a
+ * wave spreading from (cx,cy,cz) at `wave` units/s reaches it — so until then the object
+ * still looks whole — then flies off from the blow at up to `speed`. wave 0: all at
+ * once, like vpyfx_shatter but finer. A cube at 8 per edge is 96 pieces (and strokes). */
+int vpyfx_disintegrate(const vpy_mesh *m, const vpy_xf *place, int32_t cx, int32_t cy, int32_t cz,
+                       int per_edge, int32_t speed, int32_t spin, int32_t wave, int life, int br);
+/* ASSEMBLY, the other way: pieces start scattered up to `scatter` units round their slots,
+ * turned any way, and fly in over `frames` steps, easing to a stop exactly on the mesh's
+ * edges as `place` puts them. The edges are sewn one after another across `stagger` steps.
+ * Returns a group id (0 if nothing was made). vpyfx_assembled(group) is 1 once every piece
+ * is in place — then draw the mesh and vpyfx_release(group) in the same frame, and the
+ * pieces give way to it without a flicker. Arrived pieces stay until released. */
+int  vpyfx_assemble(const vpy_mesh *m, const vpy_xf *place, int per_edge, int32_t scatter,
+                    int frames, int stagger, int br);
+int  vpyfx_assembled(int group);
+void vpyfx_release(int group);
+
 /* A RING in the plane with normal (nx,ny,nz) round (cx,cy,cz), starting at
  * radius r0 and growing at `speed` units/s: a shockwave to see (vpyp_blast is
  * the one that pushes). `segments` strokes, 3..32, all counted in the budget —

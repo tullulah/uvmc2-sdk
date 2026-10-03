@@ -19,20 +19,27 @@
 #define SCRAPE_NUM   3            /* what a bounce leaves of the sliding and the spin */
 #define SCRAPE_DEN   4
 
-enum { K_SPARK = 0, K_STICK = 1, K_RING = 2, K_LINE = 3 };
+enum { K_SPARK = 0, K_STICK = 1, K_RING = 2, K_LINE = 3, K_GATHER = 4 };
 
 /* A ring keeps its centre in p, its plane's normal (Q14) in h, its radius (Q8)
  * in hl, its growth per step (Q8) in v[0] and its number of segments in w[0].
  * A line keeps a stick's ends and never moves. */
+/* A GATHER piece (vpyfx_assemble) flies from where it starts to its slot on an edge:
+ * it keeps its start in v (the centre) and w (the half), its slot in t and th, and
+ * counts life down to its arrival; then it stays, at full brightness, until its group
+ * is released. `delay` holds a piece still before it starts (both a disintegration's
+ * wave and an assembly's stagger); `group` ties an assembly's pieces together. */
 typedef struct {
-    uint8_t  alive, kind;
+    uint8_t  alive, kind, group, arrived;
     int16_t  br0;
+    int16_t  delay;               /* steps before it starts to move */
     int32_t  life, life0;
     int32_t  p[3];                /* Q8: a spark's point, a stick's centre */
     int32_t  v[3];                /* Q8 per step */
     int32_t  h[3];                /* Q8: half of a stick, centre to one end */
     int32_t  hl;                  /* |h|, kept as it turns */
     int32_t  w[3];                /* Q20 rad per step */
+    int32_t  t[3], th[3];         /* GATHER: the slot's centre and half, Q8 */
 } piece_t;
 
 static piece_t       s_p[VPYFX_MAX];
@@ -140,7 +147,7 @@ static piece_t *new_piece(int life, int br)
 {
     if (life <= 0 || br <= 0) return 0;
     piece_t *p = slot();
-    p->alive = 1; p->kind = K_SPARK;
+    p->alive = 1; p->kind = K_SPARK; p->group = 0; p->arrived = 0; p->delay = 0;
     p->life = p->life0 = life;
     p->br0 = (int16_t)(br > 127 ? 127 : br);
     p->h[0] = p->h[1] = p->h[2] = 0; p->hl = 0;
@@ -240,6 +247,112 @@ int vpyfx_shatter(const vpy_mesh *m, const vpy_xf *place,
     return n;
 }
 
+/* An edge of `m` placed by `place`, in world units Q8, split into n equal pieces: piece i
+ * runs from a + (b-a)·i/n to a + (b-a)·(i+1)/n. Returns 0 for an edge that is not there. */
+static int edge_piece(const vpy_mesh *m, const vpy_xf *place, int e, int i, int n, int64_t a[3], int64_t b[3])
+{
+    int32_t ma[3], mb[3];
+    if (!vpy3d_mesh_edge(m, e, ma, mb)) return 0;
+    for (int r = 0; r < 3; r++) {
+        const int64_t wa = ((((int64_t)place->m[r*3] * ma[0] + (int64_t)place->m[r*3+1] * ma[1] +
+                              (int64_t)place->m[r*3+2] * ma[2]) >> 14) + place->t[r]) * ONE;
+        const int64_t wb = ((((int64_t)place->m[r*3] * mb[0] + (int64_t)place->m[r*3+1] * mb[1] +
+                              (int64_t)place->m[r*3+2] * mb[2]) >> 14) + place->t[r]) * ONE;
+        a[r] = wa + (wb - wa) * i / n;
+        b[r] = wa + (wb - wa) * (i + 1) / n;
+    }
+    return 1;
+}
+
+int vpyfx_disintegrate(const vpy_mesh *m, const vpy_xf *place, int32_t cx, int32_t cy, int32_t cz,
+                       int per_edge, int32_t speed, int32_t spin, int32_t wave, int life, int br)
+{
+    if (per_edge < 1) per_edge = 1;
+    const int ne = vpy3d_mesh_edge_count(m);
+    const int64_t c[3] = { (int64_t)cx * ONE, (int64_t)cy * ONE, (int64_t)cz * ONE };
+    /* the wave's speed in Q8 per step: a piece this far from the blow waits this long */
+    const int64_t wave_q8 = wave > 0 ? (int64_t)speed_in(wave) : 0;
+    int n = 0;
+    for (int e = 0; e < ne; e++)
+        for (int i = 0; i < per_edge; i++) {
+            int64_t a[3], b[3];
+            if (!edge_piece(m, place, e, i, per_edge, a, b)) continue;
+            int64_t d[3], l2 = 0;
+            for (int k = 0; k < 3; k++) { d[k] = (a[k] + b[k]) / 2 - c[k]; l2 += d[k] * d[k]; }
+            const int64_t l = isqrt64(l2);
+            int32_t jit[3]; rnd_dir(jit);
+            const int32_t sp = rnd_range(speed / 2, speed);
+            int32_t v[3];
+            for (int k = 0; k < 3; k++)
+                v[k] = speed_in((int32_t)(l ? d[k] * sp / l : 0) + (int32_t)((int64_t)jit[k] * (sp / 3) / N1));
+            piece_t *p = stick_q8(a, b, v, spin, rnd_range(life * 3 / 4, life * 5 / 4), br);
+            if (!p) continue;
+            if (wave_q8 > 0) {
+                const int64_t dl = l / wave_q8;
+                p->delay = (int16_t)(dl > 32000 ? 32000 : dl);
+            }
+            n++;
+        }
+    return n;
+}
+
+static uint8_t s_group;
+int vpyfx_assemble(const vpy_mesh *m, const vpy_xf *place, int per_edge, int32_t scatter,
+                   int frames, int stagger, int br)
+{
+    if (per_edge < 1) per_edge = 1;
+    if (frames < 1) frames = 1;
+    if (++s_group == 0) s_group = 1;                 /* 0 is "no group" */
+    const int ne = vpy3d_mesh_edge_count(m);
+    int made = 0;
+    for (int e = 0; e < ne; e++)
+        for (int i = 0; i < per_edge; i++) {
+            int64_t a[3], b[3];
+            if (!edge_piece(m, place, e, i, per_edge, a, b)) continue;
+            piece_t *p = new_piece(frames, br);
+            if (!p) continue;
+            p->kind = K_GATHER; p->group = s_group;
+            int64_t l2 = 0;
+            for (int k = 0; k < 3; k++) {
+                p->t[k] = (int32_t)((a[k] + b[k]) / 2);
+                p->th[k] = (int32_t)((b[k] - a[k]) / 2);
+                l2 += (int64_t)p->th[k] * p->th[k];
+            }
+            /* it starts out somewhere round its slot, turned any way, the same length */
+            int32_t d[3], r[3]; rnd_dir(d); rnd_dir(r);
+            const int64_t far = (int64_t)rnd_range(scatter / 2, scatter) * ONE, hl = isqrt64(l2);
+            for (int k = 0; k < 3; k++) {
+                p->v[k] = p->t[k] + (int32_t)(d[k] * far / N1);
+                p->w[k] = (int32_t)(r[k] * hl / N1);
+                p->p[k] = p->v[k]; p->h[k] = p->w[k];
+            }
+            p->hl = (int32_t)hl;
+            /* SEWN EDGE BY EDGE: an edge's pieces leave together, the edges one after
+             * another across `stagger` steps, with a little spread inside an edge */
+            p->delay = (int16_t)(ne > 1 ? (int64_t)stagger * e / ne : 0) + (int16_t)rnd_range(0, stagger / (ne + 1) + 1);
+            made++;
+        }
+    return made ? s_group : 0;
+}
+
+int vpyfx_assembled(int group)
+{
+    int any = 0;
+    for (int i = 0; i < VPYFX_MAX; i++) {
+        const piece_t *p = &s_p[i];
+        if (!p->alive || p->kind != K_GATHER || p->group != group) continue;
+        any = 1;
+        if (!p->arrived) return 0;
+    }
+    return any;
+}
+
+void vpyfx_release(int group)
+{
+    for (int i = 0; i < VPYFX_MAX; i++)
+        if (s_p[i].alive && s_p[i].kind == K_GATHER && s_p[i].group == group) s_p[i].alive = 0;
+}
+
 int vpyfx_line(int32_t ax, int32_t ay, int32_t az, int32_t bx, int32_t by, int32_t bz, int life, int br)
 {
     const int64_t a[3] = { (int64_t)ax * ONE, (int64_t)ay * ONE, (int64_t)az * ONE };
@@ -274,8 +387,25 @@ void vpyfx_step(void)
     for (int i = 0; i < VPYFX_MAX; i++) {
         piece_t *p = &s_p[i];
         if (!p->alive) continue;
-        if (--p->life <= 0) { p->alive = 0; continue; }
         alive++;
+        if (p->delay > 0) { p->delay--; continue; }     /* still waiting: neither moves nor ages */
+        if (p->kind == K_GATHER) {
+            if (p->arrived) continue;
+            if (--p->life <= 0) {                        /* there: exactly on its slot */
+                for (int k = 0; k < 3; k++) { p->p[k] = p->t[k]; p->h[k] = p->th[k]; }
+                p->arrived = 1;
+                continue;
+            }
+            /* EASE OUT: 1 - (1 - u)^3, so it comes in fast and settles on its slot */
+            const int64_t u = (int64_t)(p->life0 - p->life) * N1 / p->life0, r = N1 - u;
+            const int64_t e = N1 - ((r * r >> 14) * r >> 14);
+            for (int k = 0; k < 3; k++) {
+                p->p[k] = (int32_t)(p->v[k] + (((int64_t)p->t[k] - p->v[k]) * e >> 14));
+                p->h[k] = (int32_t)(p->w[k] + (((int64_t)p->th[k] - p->w[k]) * e >> 14));
+            }
+            continue;
+        }
+        if (--p->life <= 0) { p->alive = 0; alive--; continue; }
         if (p->kind == K_RING) { p->hl += p->v[0]; continue; }
         if (p->kind == K_LINE) continue;
         for (int k = 0; k < 3; k++) { p->v[k] += s_g[k]; p->p[k] += p->v[k]; }
@@ -311,13 +441,15 @@ void vpyfx_step(void)
 
 static int brightness(const piece_t *p)
 {
+    /* waiting or gathering: whole — it is still, or about to be, part of the object */
+    if (p->delay > 0 || p->kind == K_GATHER) return p->br0;
     return (int)((int64_t)p->br0 * p->life / p->life0);
 }
 
 /* the two ends of a piece, Q8 */
 static void ends(const piece_t *p, int64_t a[3], int64_t b[3])
 {
-    if (p->kind == K_STICK || p->kind == K_LINE) {
+    if (p->kind == K_STICK || p->kind == K_LINE || p->kind == K_GATHER) {
         for (int k = 0; k < 3; k++) { a[k] = (int64_t)p->p[k] - p->h[k]; b[k] = (int64_t)p->p[k] + p->h[k]; }
         return;
     }

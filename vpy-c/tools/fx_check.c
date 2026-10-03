@@ -142,6 +142,51 @@ int main(void)
     frame();
     CHECK(NS == 1 && S[0].y0 == 500 && S[0].y1 == 500 && S[0].br < 120, "a line does not fall, and fades (br %d)", NS ? S[0].br : -1);
 
+    /* 11. DISINTEGRATION: whole until the wave from the blow reaches a piece */
+#define ON_CUBE(x, y) (abs(abs((x)) - 100) <= 1 ? abs((y) - 1000) <= 101 : \
+                       abs(abs((y) - 1000) - 100) <= 1 && abs((x)) <= 101)
+    vpyfx_reset(); vpyfx_seed(3); vpyfx_set_gravity(0, -9800, 0);
+    const int nd = vpyfx_disintegrate(&cube, &at, 100, 1100, 0, 4, 1000, 2048, 1000, 100, 120);
+    frame();
+    int whole = NS == nd;
+    for (int i = 0; i < NS; i++) if (!ON_CUBE(S[i].x0, S[i].y0) || !ON_CUBE(S[i].x1, S[i].y1) || S[i].br != 120) whole = 0;
+    CHECK(nd == 48 && whole, "a cube at 4 per edge is %d pieces, drawn whole and bright before the wave", nd);
+    /* hit at the corner (100,1100,0): after 0.2 s at 1000 u/s the wave is 200 out;
+     * the far corner's pieces (more than 300 away) have not moved, the near ones have */
+    for (int i = 0; i < 10; i++) vpyfx_step();
+    frame();
+    int near_gone = 0, far_kept = 1, nfar = 0;
+    for (int i = 0; i < NS; i++) {
+        const double cx = (S[i].x0 + S[i].x1) / 2.0, cy = (S[i].y0 + S[i].y1) / 2.0;
+        const int on = ON_CUBE(S[i].x0, S[i].y0) && ON_CUBE(S[i].x1, S[i].y1);
+        if (cx < -60 && cy < 940) { nfar++; if (!on || S[i].br != 120) far_kept = 0; }
+        if (!on) near_gone++;
+    }
+    CHECK(far_kept && nfar > 0 && near_gone > 0,
+          "the wave: %d pieces near the blow are off, %d at the far corner still in place", near_gone, nfar);
+    for (int i = 0; i < 200; i++) vpyfx_step();
+    frame();
+    CHECK(NS == 0 && vpyfx_stats()->alive == 0, "and all of it is gone after its life (%d left)", NS);
+
+    /* 12. ASSEMBLY: scattered, then exactly on the edges, then given way to the mesh */
+    vpyfx_reset(); vpyfx_seed(5); vpyfx_set_gravity(0, -9800, 0);
+    const int g = vpyfx_assemble(&cube, &at, 4, 600, 30, 20, 120);
+    frame();
+    int off = 0;
+    for (int i = 0; i < NS; i++) if (!ON_CUBE(S[i].x0, S[i].y0) || !ON_CUBE(S[i].x1, S[i].y1)) off++;
+    CHECK(g != 0 && NS == 48 && off > 40 && !vpyfx_assembled(g), "assembly starts scattered: %d of %d pieces off the cube", off, NS);
+    int steps = 0;
+    while (!vpyfx_assembled(g) && steps < 200) { vpyfx_step(); steps++; }
+    frame();
+    int on_all = NS == 48;
+    for (int i = 0; i < NS; i++) if (!ON_CUBE(S[i].x0, S[i].y0) || !ON_CUBE(S[i].x1, S[i].y1)) on_all = 0;
+    CHECK(steps <= 30 + 20 + 1 && on_all, "assembled in %d steps (frames 30 + stagger 20), every piece on an edge, gravity or not", steps);
+    for (int i = 0; i < 100; i++) vpyfx_step();
+    frame();
+    CHECK(NS == 48, "arrived pieces stay until released (%d drawn)", NS);
+    vpyfx_release(g); frame();
+    CHECK(NS == 0 && !vpyfx_assembled(g), "released: they give way to the mesh");
+
     printf("%s (%d failed)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails;
 }
