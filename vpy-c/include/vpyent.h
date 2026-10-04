@@ -69,6 +69,22 @@ void vpyent_set_material(int e, int material);       /* a VPYI_* value; default 
 void vpyent_set_kind(int e, int kind);
 int  vpyent_kind(int e);
 void vpyent_set_user(int e, void *user);
+/* WHAT A MESH IS NOT: a figure's legs drawn as lines, a face, a shadow under it, a
+ * cage round it. Drawn after vpyent_draw() they are in the wrong place in the order:
+ * the occluder has no depth test, so every solid added before them — the platform the
+ * figure stands on included — cuts them wherever it is on screen, and a figure on a
+ * box loses its legs into it (Spike 3D, 2026-10-04). An entity's EXTRA is called by
+ * vpyent_draw right after the entity (and its marks), before its own occluder: what
+ * it draws with vpy3d_occl_line, or as meshes, is cut by what is nearer and by
+ * nothing else. `place` is where the entity is; `user` what vpyent_set_user gave. */
+typedef void (*vpyent_extra_fn)(int e, const vpy_xf *place, void *user);
+void vpyent_set_extra(int e, vpyent_extra_fn fn);     /* 0: none (the default) */
+/* THE ORDER IS BY CENTRES, and a big flat solid's centre can be nearer the eye than
+ * something standing on its far half — which is then drawn after the solid's occluder
+ * went in, and is cut by it (Spike on a platform, 2026-10-04). An entity with a sort
+ * bias sorts as if it were `nearer` world units nearer the eye: for what stands on
+ * solids, about the half size of the largest it stands on. 0 is the default. */
+void vpyent_set_sort_bias(int e, int32_t nearer);
 void *vpyent_user(int e);
 
 /* A dent at a world point, pushed along a world direction (vpy3d_mesh_dent). The

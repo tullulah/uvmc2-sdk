@@ -46,6 +46,16 @@ static void box(vpy_mesh *m, int h, int centres)
     vpy3d_mesh_end(15826);
 }
 
+/* an extra: two "legs" hanging from the entity, down to just above what is under it */
+static int s_legs_drawn;
+static void extra_legs(int e, const vpy_xf *at, void *user)
+{
+    (void)e; (void)user;
+    s_legs_drawn++;
+    vpy3d_occl_line(at->t[0] - 80, at->t[1] - 200, at->t[2], at->t[0] - 80, at->t[1] - 390, at->t[2], 100);
+    vpy3d_occl_line(at->t[0] + 80, at->t[1] - 200, at->t[2], at->t[0] + 80, at->t[1] - 390, at->t[2], 100);
+}
+
 /* one frame of the scene: reset the occluder, draw, flush; the strokes it made */
 static int frame(void) { vpy3d_occl_reset(); NS = 0; vpyent_draw(); vpy_flush(); return NS; }
 static int place_ent(const vpy_mesh *m, int32_t x, int32_t y, int32_t z)
@@ -102,6 +112,48 @@ int main(void)
     CHECK(s_mark == s_dent + 6, "a mark on the other adds its ring: %d strokes (%d + 6)", s_mark, s_dent);
     vpyent_set_mesh(a, &crate);
     CHECK(frame() == s_same + 6, "giving the dented one its shared mesh back undoes the dent only");
+
+    /* 3b. an extra is drawn in the entity's place in the order: a line on top of a box
+     * the entity stands on is NOT cut by that box (it is drawn before the box's
+     * occluder goes in, the box being farther), and IS cut by a nearer box */
+    vpyent_reset();
+    int floor_e = place_ent(&big, 0, -400, 400);           /* a big box below and behind */
+    int fig = place_ent(&cube, 0, 300, -200);              /* a figure on it, nearer the eye */
+    vpyent_set_occluder(fig, VPYENT_OCC_NONE, 0, 0, 0);
+    vpyent_set_extra(fig, extra_legs);
+    const int s_on = frame();
+    vpyent_set_extra(fig, 0);
+    const int s_none = frame();
+    s_legs_drawn = 0;
+    vpyent_set_extra(fig, extra_legs);
+    int wall = place_ent(&big, 0, 0, -1500);               /* and a wall in front of it all */
+    frame();
+    CHECK(s_on == s_none + 2, "an extra on a box behind it keeps both its strokes (%d, %d without)", s_on, s_none);
+    CHECK(s_legs_drawn == 1 && NS < s_on, "a nearer wall cuts the extra with the rest (%d strokes, %d without the wall)", NS, s_on);
+    (void)floor_e; (void)wall;
+
+    /* 3c. a figure on the far half of a big flat box: by centres the box comes first
+     * and cuts it; with a sort bias the figure comes first and keeps every stroke */
+    vpyent_reset();
+    vpy_mesh slab;
+    vpy3d_mesh_begin(&slab);
+    { int v[8];
+      for (int k = 0; k < 8; k++) v[k] = vpy3d_vertex((k & 1) ? 1200 : -1200, (k & 2) ? 0 : -300, (k & 4) ? 1200 : -1200);
+      vpy3d_quad(v[0], v[4], v[6], v[2]);  vpy3d_quad(v[1], v[3], v[7], v[5]);
+      vpy3d_quad(v[0], v[1], v[5], v[4]);  vpy3d_quad(v[2], v[6], v[7], v[3]);
+      vpy3d_quad(v[0], v[2], v[3], v[1]);  vpy3d_quad(v[4], v[5], v[7], v[6]); }
+    vpy3d_mesh_end(VPY3D_HARD_45);
+    vpy3d_look_at(0, 2500, -3500, 0, 0, 0, 0, 1, 0);
+    place_ent(&slab, 0, 0, 0);
+    int on = place_ent(&cube, 0, 200, 600);                /* on its far half */
+    const int s_cut = frame();
+    vpyent_set_sort_bias(on, 1200);
+    const int s_kept = frame();
+    vpyent_destroy(on);
+    const int s_slab = frame();
+    CHECK(s_kept >= s_cut + 4 && s_kept - s_slab >= 8, "a box on a slab's far half: %d strokes by centres, %d with a bias (the slab alone %d, partly behind it)",
+          s_cut, s_kept, s_slab);
+    vpy3d_look_at(0, 0, -3000, 0, 0, 0, 0, 1, 0);
 
     /* 4. destroy: the body goes with it and the slot is free again */
     vpyent_reset(); vpyp_reset();

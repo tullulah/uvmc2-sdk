@@ -24,6 +24,8 @@ typedef struct {
     int32_t  mark_r;
     const vpy_mesh *mesh;          /* what it is drawn with: `own` once dented */
     void    *user;
+    vpyent_extra_fn extra;         /* drawn after it, before its occluder */
+    int32_t  bias;                 /* sorts as if this much nearer the eye */
     vpy_xf   place;                /* for an entity with no body */
 } ent_t;
 
@@ -57,7 +59,7 @@ int vpyent_create(const vpy_mesh *mesh, int body)
         t->body = (int16_t)(body >= 0 && body < VPYP_MAX_BODIES ? body : VPYENT_NONE);
         t->br = BR_DEFAULT; t->mark_br = MARK_BR_DEFAULT; t->mark_r = MARK_R_DEFAULT;
         t->occ_h[0] = t->occ_h[1] = t->occ_h[2] = 0;
-        t->mesh = mesh; t->user = 0;
+        t->mesh = mesh; t->user = 0; t->extra = 0; t->bias = 0;
         t->place = vpy3d_identity();
         vpy3d_marks_clear(&s_marks[e]);
         if (t->body >= 0) s_mat_of_body[t->body] = VPYI_NONE;
@@ -124,6 +126,14 @@ void vpyent_set_material(int e, int m)
 void vpyent_set_kind(int e, int k) { ent_t *t = get(e); if (t) t->kind = (uint8_t)k; }
 int  vpyent_kind(int e) { ent_t *t = get(e); return t ? t->kind : -1; }
 void vpyent_set_user(int e, void *u) { ent_t *t = get(e); if (t) t->user = u; }
+void vpyent_set_extra(int e, vpyent_extra_fn fn)
+{
+    if (e >= 0 && e < VPYENT_MAX && s_e[e].used) s_e[e].extra = fn;
+}
+void vpyent_set_sort_bias(int e, int32_t nearer)
+{
+    if (e >= 0 && e < VPYENT_MAX && s_e[e].used) s_e[e].bias = nearer;
+}
 void *vpyent_user(int e) { ent_t *t = get(e); return t ? t->user : 0; }
 
 int vpyent_dent(int e, int32_t px, int32_t py, int32_t pz,
@@ -208,7 +218,14 @@ int vpyent_draw(void)
         if (!s_e[e].used) continue;
         vpy_xf at; vpyent_place(e, &at);
         const int64_t dx = at.t[0] - eye[0], dy = at.t[1] - eye[1], dz = at.t[2] - eye[2];
-        const int64_t d = dx * dx + dy * dy + dz * dz;
+        int64_t d = dx * dx + dy * dy + dz * dz;
+        if (s_e[e].bias) {                   /* the distance itself, less the bias: sqrt once */
+            int64_t r = 0, bit = (int64_t)1 << 62;
+            while (bit > d) bit >>= 2;
+            while (bit) { if (d >= r + bit) { d -= r + bit; r = (r >> 1) + bit; } else r >>= 1; bit >>= 2; }
+            r -= s_e[e].bias;
+            d = r > 0 ? r * r : -(r * r);
+        }
         int j = n++;
         while (j > 0 && s_dist[j - 1] > d) { s_order[j] = s_order[j - 1]; s_dist[j] = s_dist[j - 1]; j--; }
         s_order[j] = e; s_dist[j] = d;
@@ -224,6 +241,9 @@ int vpyent_draw(void)
         if (t->mesh) vpy3d_draw_mesh(t->mesh, &at, t->br);
         /* marks after the solid, before its own occluder: they sit on its faces */
         if (s_marks[e].n) vpy3d_marks_draw(&s_marks[e], &at, t->mark_r, t->mark_br, t->mark_style);
+        /* and what the game draws with it — at its place in the order, cut by what is
+         * nearer and never by itself or by what is farther */
+        if (t->extra) t->extra(e, &at, t->user);
         if (t->occ == VPYENT_OCC_NONE) continue;
         const int k = corners_of(t, &at, c);
         if (k > 0) { if (!vpy3d_occl_add((const int32_t (*)[3])c, k)) missing++; }
