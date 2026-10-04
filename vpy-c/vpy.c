@@ -414,12 +414,29 @@ static const signed char F_ABC_38[] = {-1,120,0,-1,0,60,-1,-120,0,-1,0,-60,0,0,9
 static const signed char F_ABC_39[] = {0,30,15,-1,30,-15,-1,30,15,0,-30,45,-1,0,-60,0,-60,90,1};
 static const signed char F_ABC_40[] = {0,60,0,-1,0,60,-1,30,-15,0,-60,0,-1,30,15,0,-60,30,1};
 
-/* ASCII(0x20..)->glyph pointer, exactly as the SDK ABC[] index. */
+/* PUNCTUATION FOR DIALOGUE, added 2026-10-04: the PiTrex table drew a comma, a
+ * question mark, a hyphen, a colon, quotes, a slash and brackets as spaces, which a
+ * game with sentences cannot live with (the kit's playroom wrote "3 OF 8" for want
+ * of a slash). Same grid, same 90 advance, drawn in the table's own style; and the
+ * Spanish openers, which a UTF-8 source string reaches through vpy_font_next. */
+static const signed char F_COMMA[]  = {0,30,30,-1,-45,-15,0,15,75,1};
+static const signed char F_QUEST[]  = {0,90,0,-1,30,15,-1,0,30,-1,-30,15,-1,-30,-30,-1,-30,0,0,-15,0,-1,-15,0,0,0,60,1};
+static const signed char F_IQUEST[] = {0,120,30,-1,-15,0,0,-15,0,-1,-30,0,-1,-30,-30,-1,-30,15,-1,0,30,-1,30,15,0,-30,30,1};
+static const signed char F_IEXCL[]  = {0,90,0,-1,0,30,-1,30,0,-1,0,-30,-1,-30,0,0,-15,15,-1,-75,0,0,0,75,1};
+static const signed char F_HYPHEN[] = {0,60,0,-1,0,60,0,-60,30,1};
+static const signed char F_COLON[]  = {0,0,15,-1,15,0,0,60,0,-1,15,0,0,-90,75,1};
+static const signed char F_APOS[]   = {0,90,15,-1,30,0,0,-120,75,1};
+static const signed char F_QUOTE[]  = {0,90,15,-1,30,0,0,-30,30,-1,30,0,0,-120,45,1};
+static const signed char F_SLASH[]  = {-1,120,60,0,-120,30,1};
+static const signed char F_LPAREN[] = {0,120,45,-1,-30,-30,-1,-60,0,-1,-30,30,0,0,45,1};
+static const signed char F_RPAREN[] = {0,120,15,-1,-30,30,-1,-60,0,-1,-30,-30,0,0,75,1};
+
+/* ASCII(0x20..)->glyph pointer, exactly as the SDK ABC[] index, with the punctuation above. */
 static const signed char *const FONT_ABC[143] = {
-    F_ABC_27,F_ABC_28,F_ABC_27,F_ABC_27,F_Folder,F_ABC_27,F_ABC_27,F_ABC_27,
-    F_ABC_27,F_ABC_27,F_ABC_27,F_ABC_27,F_ABC_27,F_ABC_27,F_ABC_26,F_ABC_27,
+    F_ABC_27,F_ABC_28,F_QUOTE,F_ABC_27,F_Folder,F_ABC_27,F_ABC_27,F_APOS,
+    F_LPAREN,F_RPAREN,F_ABC_27,F_ABC_27,F_COMMA,F_HYPHEN,F_ABC_26,F_SLASH,
     F_ABC_38,F_ABC_29,F_ABC_30,F_ABC_31,F_ABC_32,F_ABC_33,F_ABC_34,F_ABC_35,
-    F_ABC_36,F_ABC_37,F_ABC_27,F_ABC_27,F_ABC_39,F_ABC_27,F_ABC_40,F_ABC_27,
+    F_ABC_36,F_ABC_37,F_COLON,F_ABC_27,F_ABC_39,F_ABC_27,F_ABC_40,F_QUEST,
     F_ABC_27,F_ABC_0,F_ABC_1,F_ABC_2,F_ABC_3,F_ABC_4,F_ABC_5,F_ABC_6,
     F_ABC_7,F_ABC_8,F_ABC_9,F_ABC_10,F_ABC_11,F_ABC_12,F_ABC_13,F_ABC_14,
     F_ABC_15,F_ABC_16,F_ABC_17,F_ABC_18,F_ABC_19,F_ABC_20,F_ABC_21,F_ABC_22,
@@ -441,10 +458,37 @@ static const signed char *const FONT_ABC[143] = {
  * (`ABC[toupper(*string)-0x20]`); out-of-range chars fall back to space. */
 static const signed char *font_glyph(unsigned char c)
 {
+    if (c == 0xA1) return F_IEXCL;               /* Latin-1, as vpy_font_next gives them */
+    if (c == 0xBF) return F_IQUEST;
+    if (c >= 0x80) return F_ABC_27;
     if (c >= 'a' && c <= 'z') c -= 32;
     int idx = (int)c - 0x20;
     if (idx < 0 || idx >= FONT_ABC_N) idx = 0;   /* -> space (F_ABC_27) */
     return FONT_ABC[idx];
+}
+
+/* The next character of a string as a font code, and past it. Plain ASCII as it is;
+ * UTF-8 two-byte sequences of the Latin-1 range as their Latin-1 code (so "\u00BF"
+ * and "\u00A1", the Spanish openers, have glyphs), with the accented capitals and
+ * small letters folded to the bare letter — the font is capitals with no accents, the
+ * way the Vectrex wrote — and N with a tilde to N. Anything else is a space. */
+int vpy_font_next(const char **sp)
+{
+    const unsigned char *s = (const unsigned char *)*sp;
+    unsigned c = *s++;
+    if ((c == 0xC2 || c == 0xC3) && (*s & 0xC0) == 0x80) {
+        unsigned l1 = ((c & 0x03) << 6) | (*s++ & 0x3F);                 /* the Latin-1 code */
+        if (l1 >= 0xC0) {
+            static const char FOLD[64] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+            l1 = (unsigned char)FOLD[l1 - 0xC0];
+        }
+        c = l1;
+    } else if (c >= 0x80) {
+        while ((*s & 0xC0) == 0x80) s++;                                  /* a longer sequence: skipped */
+        c = ' ';
+    }
+    *sp = (const char *)s;
+    return (int)c;
 }
 
 /* textSize used by the print routines: SET_TEXT_SIZE value, or 8 by default
@@ -468,8 +512,8 @@ static void font_draw_string(int x, int y, const char *s)
     int yb = y - 8;
     int startX = ((x  * 127) >> 7) * 128;
     int startY = ((yb * 127) >> 7) * 128;
-    for (; *s; s++) {
-        const signed char *list = font_glyph((unsigned char)*s);
+    while (*s) {
+        const signed char *list = font_glyph((unsigned char)vpy_font_next(&s));
         do {
             int pat = list[0];
             int nx = (startX * 2 + (int)list[2] * ts * 3) / 2;

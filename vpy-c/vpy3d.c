@@ -1439,8 +1439,8 @@ int vpy3d_draw_lod(const vpy_mesh *const *meshes, const int32_t *min_size, int n
 static int glyph_width(const char *s)
 {
     int x = 0;
-    for (; *s; s++) {
-        const signed char *g = vpy_font_glyph((unsigned char)*s);
+    while (*s) {
+        const signed char *g = vpy_font_glyph(vpy_font_next(&s));
         do { x += g[2]; g += 3; } while ((int)g[0] <= 0);
     }
     return x;
@@ -1459,8 +1459,8 @@ int vpy3d_text(const char *s, const vpy_xf *place, int32_t height, int br, int f
     int32_t gx = (flags & VPY3D_TEXT_CENTRE) ? -glyph_width(s) / 2 : 0, gy = 0;
     int n = 0;
     int32_t pw[3] = { 0, 0, 0 };
-    for (; *s; s++) {
-        const signed char *g = vpy_font_glyph((unsigned char)*s);
+    while (*s) {
+        const signed char *g = vpy_font_glyph(vpy_font_next(&s));
         do {
             const int32_t nx = gx + g[2], ny = gy + g[1];
             if (g[0] != 0) {

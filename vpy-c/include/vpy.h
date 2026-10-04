@@ -116,6 +116,10 @@ void vpy_print_text(int x, int y, const char *s);
  * ending before the next positive pattern byte (see vpy.c). For drawing the same
  * letters elsewhere — vpy3d_text puts them on a plane in the world. */
 const signed char *vpy_font_glyph(int c);
+/* The next character of a string as a font code, advancing past it: UTF-8 Latin-1
+ * letters as their code (accents folded away, the openers \u00A1 \u00BF kept), so
+ * Spanish text can be written as it is. vpy_print_text and vpy3d_text use it. */
+int vpy_font_next(const char **s);
 void vpy_print_number(int x, int y, long n);
 
 /* ---- input ----
