@@ -175,6 +175,16 @@ volatile uint8_t  uvm2_cached_buttons = 0xFFu;
 #define UVM2_RESET_HOLD_US  3000000u    /* held this long: back to the UVMC2's menu */
 #define UVM2_RESTART_US     1000000u    /* held this long and let go: the game starts again */
 volatile uint32_t uvm2_reset_seen, uvm2_reset_held_us;
+/* WHAT A "PRESS" LOOKED LIKE, so a false one can be told from a real one. Reported on the
+ * UVMC2 2026-10-04: a game reset itself with nobody near the button (dkong, then the
+ * playroom as soon as its hub drew), so the watch saw T1 standing still where it was not.
+ * `uvm2_reset_held_max_us` is the longest "press", `uvm2_reset_last_t1` the high byte the
+ * two reads agreed on (a VIA in reset reads 0x00; anything else is a timer that moved
+ * between reads we did not make where we think), and `uvm2_reset_polls` proves the watch
+ * runs at all. With UVM2_RESET_WATCH_ONLY the watch counts and acts on nothing — a
+ * diagnostic build, to read these with the game running. */
+volatile uint32_t uvm2_reset_held_max_us, uvm2_reset_polls;
+volatile uint8_t  uvm2_reset_last_t1;
 /* THE CONTROLLERS ARE NOT READ WHILE THE VIA IS IN RESET, nor for UVM2_RESET_SETTLE frames
  * after: a VIA in reset reads back zeros, which on the active-low buttons is "all pressed".
  * Reported on the UVMC2 2026-10-03: a short press of the reset button dropped a crate and
@@ -227,21 +237,30 @@ static void restart_game(void)
 #define VEC_COLD_FLAG_WARM 0x7321u
 static void reset_poll(void)
 {
+#ifdef UVM2_NO_RESET_BUTTON
+    return;     /* diagnostic build: the reset button is not watched at all */
+#endif
     static uint32_t since;
     static int down;
     const uint8_t a = uvm2_via_read(UVM2_VIA_T1CH);
     uvm2_bus_delay(UVM2_RESET_GAP);
     const uint8_t b = uvm2_via_read(UVM2_VIA_T1CH);
+    uvm2_reset_polls++;
     if (a == b) {
         s_input_hold = UVM2_RESET_SETTLE;
-        if (!down) { down = 1; uvm2_reset_seen++; since = time_us_32(); }
+        if (!down) { down = 1; uvm2_reset_seen++; since = time_us_32(); uvm2_reset_last_t1 = a; }
         uvm2_reset_held_us = time_us_32() - since;
+        if (uvm2_reset_held_us > uvm2_reset_held_max_us) uvm2_reset_held_max_us = uvm2_reset_held_us;
+#ifndef UVM2_RESET_WATCH_ONLY
         if (uvm2_reset_held_us >= UVM2_RESET_HOLD_US)
             rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
+#endif
     } else {
         if (s_input_hold) s_input_hold--;
         /* let go: between one and three seconds is a restart (three is the menu, above) */
+#ifndef UVM2_RESET_WATCH_ONLY
         if (down && uvm2_reset_held_us >= UVM2_RESTART_US) restart_game();
+#endif
         down = 0; uvm2_reset_held_us = 0;
     }
 }

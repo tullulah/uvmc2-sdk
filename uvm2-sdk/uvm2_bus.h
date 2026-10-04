@@ -245,6 +245,12 @@ UVM2_RAMFUNC uint8_t uvm2_via_read(uint32_t reg);
  * timing as uvm2_via_write. Core 1, between frames, like every single access. UVMC2 pin map
  * only: the debug cartridge's BIOS has its own. */
 UVM2_RAMFUNC void    uvm2_mem_write(uint32_t addr, uint32_t data);
+
+/* The console's reset button, as core 1 watches it (uvm2_core1.c, reset_poll): presses
+ * noticed, how long the current one has lasted, the longest, the T1 high byte the two reads
+ * agreed on when the last one began (0x00 is a VIA in reset), and the polls made. */
+extern volatile uint32_t uvm2_reset_seen, uvm2_reset_held_us, uvm2_reset_held_max_us, uvm2_reset_polls;
+extern volatile uint8_t  uvm2_reset_last_t1;
 #endif
 
 /* ── Instrumentation ───────────────────────────────────────────────────────
