@@ -3033,7 +3033,12 @@ static void frame_filler(void)
      * whose gap is exactly what is missing. Without this the frame stopped at 29985 of
      * 30000 — not much, but it is the same class of mismatch we had been chasing all night. */
     uint32_t remainder = target > s_cycles ? target - s_cycles : 0u;
-    if (remainder >= 3u + 1u + 0u + 1u + 1u + 1u) {
+    /* The unit costs ORA 6+1, T1CL 0+1 and T1CH gap+1, i.e. gap + 9: the guard and the
+     * subtraction are the same number. The guard used to be 7, so a remainder of 7 or 8
+     * wrapped `gap` below zero and the T1CH went out saturated at 4095 — a frame ~2.7 ms
+     * long. Found on the host (2026-10-05) when a closing-gap sweep moved a Star Wars
+     * frame's remainder onto 8. */
+    if (remainder >= 6u + 1u + 0u + 1u + 1u) {
         const uint32_t gap = remainder - (6u + 1u + 0u + 1u + 1u);
         uint32_t t1 = gap > 10u ? gap - 10u : 1u;   /* the gap is t1 + 10 */
         if (t1 > 255u) t1 = 255u;
