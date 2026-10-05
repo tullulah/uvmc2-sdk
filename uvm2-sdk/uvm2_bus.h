@@ -186,6 +186,7 @@ enum {
  *   uvm2_bus_halt()  park the bus, enable the drivers, assert /HALT for good.
  * uvm2_bus_init() runs all three for callers that need no diagnostics between. */
 void uvm2_cpu_init(void);
+void uvm2_set_sys_clock(void);   /* -DUVM2_SYS_MHZ: raise the core clock; otherwise nothing */
 void uvm2_bus_pads(void);
 void uvm2_bus_halt(void);
 void uvm2_bus_init(void);

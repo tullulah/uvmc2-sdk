@@ -153,6 +153,13 @@ ifeq ($(UVM2_PSRAM_START),1)
 UVM2_CFLAGS += -DUVM2_PSRAM_START=1
 endif
 
+# THE CORE CLOCK, in MHz, a multiple of 150. Unset = whatever the firmware left (150 on the
+# UVMC2). See uvm2_set_sys_clock in uvm2_bus.c for everything that depends on it.
+#   make uvm2 UVM2_SYS_MHZ=300
+ifneq ($(UVM2_SYS_MHZ),)
+UVM2_CFLAGS += -DUVM2_SYS_MHZ=$(UVM2_SYS_MHZ)
+endif
+
 # THE ROMSET BUFFER IS DERIVED FROM THE ZIP. It is not written by hand in 43 Makefiles.
 #
 # uvm2_romzip.c reads roms/<game>.zip off the SD into a STATIC array in SRAM, and the UVM2

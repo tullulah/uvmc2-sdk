@@ -143,6 +143,14 @@ pub static BATCH_WAITS:    AtomicU32 = AtomicU32::new(0);
 /* Index of the delay loop's `nop` in the PIO's instruction memory, so a bench can sweep its
  * phase calibration. 0xFFFF_FFFF = not found. */
 pub static VBUS_NOP_PARK: AtomicU32 = AtomicU32::new(0xFFFF_FFFF);
+/// The SM's INTEGER clock divider. 1 = one PIO cycle per system cycle, which is what the phase
+/// calibration (`nop [14]`) was measured at, with the system clock at 150 MHz. A build that
+/// raises the clock (UVM2_SYS_MHZ, uvm2_bus.c) sets clock/150 here BEFORE installing, so the PIO
+/// still runs at 150 MHz and the calibration carries over untouched. Integer on purpose: a
+/// fractional divider would add a cycle of jitter to every edge the program waits for.
+#[used]
+#[no_mangle]
+pub static VBUS_CLKDIV: AtomicU32 = AtomicU32::new(1);
 pub static RING_FULL_SEEN: AtomicU32 = AtomicU32::new(0);
 pub static RING_OVERRUNS:  AtomicU32 = AtomicU32::new(0);
 pub static STREAM_PUSHES:  AtomicU32 = AtomicU32::new(0);
@@ -496,10 +504,12 @@ pub unsafe fn install(l: &Layout, program: &[u16], wrap_target: u8, wrap: u8) {
         i += 1;
     }
 
-    // 1 PIO cycle = 1 system cycle. NOTHING here is counted in cycles except the phase
-    // calibration's `nop [14]`, so the divider would only change that — and that calibration
-    // was measured at this divider.
-    w(PIO0_BASE + PIO_SM0_CLKDIV, 1 << 16);
+    // 1 PIO cycle = 1 system cycle AT 150 MHz. NOTHING here is counted in cycles except the
+    // phase calibration's `nop [14]`, so the divider only changes that — and that calibration
+    // was measured with the PIO at 150 MHz. A faster system clock divides back to it: see
+    // VBUS_CLKDIV.
+    let div = VBUS_CLKDIV.load(Ordering::Relaxed).clamp(1, 0xFFFF);
+    w(PIO0_BASE + PIO_SM0_CLKDIV, div << 16);
 
     w(PIO0_BASE + PIO_SM0_EXECCTRL,
         ((wrap_target as u32) << EXECCTRL_WRAP_BOTTOM_LSB)

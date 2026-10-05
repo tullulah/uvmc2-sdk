@@ -159,10 +159,52 @@ static uint32_t read_dirs(void)
 
 void uvm2_stream_start(void)
 {
+#ifdef UVM2_SYS_MHZ
+    {   /* back to 150 MHz for the PIO, so `nop [14]` means what it was measured to mean */
+        extern volatile uint32_t VBUS_CLKDIV;
+        VBUS_CLKDIV = (uint32_t)UVM2_SYS_MHZ / 150u;
+    }
+#endif
     vbus_install(UVM2_STREAM_OUT_BASE, UVM2_STREAM_OUT_COUNT, UVM2_STREAM_OUT_DIRS,
                  UVM2_PARK_BITS | UVM2_RW_MASK);
     uvm2_stream_dirs_after_install = read_dirs();
 }
+#endif
+
+/* THE CORE CLOCK, RAISED ON REQUEST (-DUVM2_SYS_MHZ=300, `make uvm2 UVM2_SYS_MHZ=300`).
+ *
+ * Without it a .um2 runs at whatever the cartridge's firmware left: 150 MHz, read off the
+ * HUD's M on the UVMC2 (2026-10-05). Everything core 0 does — the game, an emulated CPU, the
+ * list builder — scales with this, and in Star Wars that is 25 ms of a 39 ms frame.
+ *
+ * What depends on it, and how each one is kept where it was measured:
+ *   - the PIO stream's phase calibration is in PIO cycles: VBUS_CLKDIV divides back to
+ *     150 MHz, which is why the clock must be a MULTIPLE of 150 (an integer divider);
+ *   - the PSRAM's QMI divider (uvm2_psram.c) is scaled so the chip stays at or under 75 MHz;
+ *   - clk_peri: the pico-sdk moves it to the 48 MHz USB PLL when the system clock changes,
+ *     and spi_set_baudrate recomputes from it — the SD card lands on 12 MHz instead of 12.5;
+ *   - the LED, the jack and every count of E are calibrated against E at boot, AFTER this.
+ * The bus reads (uvm2_via_read) wait for E's edges and count no CPU cycles.
+ *
+ * The core voltage goes up first: 300 MHz is twice the RP2350's rated clock, and 1.30 V is
+ * the most the regulator gives without unlocking it. Untried on a console when written. */
+#ifdef UVM2_SYS_MHZ
+#if (UVM2_SYS_MHZ % 150) != 0
+#error "UVM2_SYS_MHZ must be a multiple of 150: the PIO stream divides it back to 150 MHz with an integer divider"
+#endif
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
+#include "hardware/timer.h"
+void uvm2_set_sys_clock(void)
+{
+#if UVM2_SYS_MHZ > 150
+    vreg_set_voltage(VREG_VOLTAGE_1_30);
+    busy_wait_us(1000);                    /* let the regulator settle before the PLL moves */
+#endif
+    set_sys_clock_khz((uint32_t)UVM2_SYS_MHZ * 1000u, true);
+}
+#else
+void uvm2_set_sys_clock(void) { }
 #endif
 
 void uvm2_bus_halt(void)

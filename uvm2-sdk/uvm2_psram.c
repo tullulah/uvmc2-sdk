@@ -115,7 +115,11 @@ static void direct_end(void)
  * (0xcc).
  *
  * 6 = 25 MHz with a 150 MHz system clock. */
+#if defined(UVM2_SYS_MHZ) && UVM2_SYS_MHZ > 150
+#define DIRECT_CLOCK_DIV (6u * (UVM2_SYS_MHZ) / 150u)    /* still 25 MHz */
+#else
 #define DIRECT_CLOCK_DIV 6u
+#endif
 static void direct_clock(uint32_t div);
 
 int uvm2_tx_oe = 1;
@@ -353,7 +357,13 @@ void uvm2_psram_enable_xip(void)
 #endif
 
 #ifndef UVM2_PSRAM_CLKDIV
-#define UVM2_PSRAM_CLKDIV 2u
+#  if defined(UVM2_SYS_MHZ) && UVM2_SYS_MHZ > 150
+/* The chip has run at 75 MHz (150 / 2) since it was brought up; a faster system clock keeps
+ * it at or under that rather than finding out what the APS6404L tolerates. 300 -> 4. */
+#    define UVM2_PSRAM_CLKDIV ((UVM2_SYS_MHZ + 74u) / 75u)
+#  else
+#    define UVM2_PSRAM_CLKDIV 2u
+#  endif
 #endif
           (UVM2_PSRAM_PAGEBREAK << QMI_M1_TIMING_PAGEBREAK_LSB)
         | (UVM2_PSRAM_CLKDIV << QMI_M1_TIMING_CLKDIV_LSB)

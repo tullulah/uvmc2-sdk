@@ -119,6 +119,8 @@ void uvm2_runtime_init(void)
 {
     /* First, before anything with state: .bss is still whatever was in SRAM. */
     uvm2_cpu_init();
+    /* The clock before anything calibrates against it (the LED, E, the jack). */
+    uvm2_set_sys_clock();
 
     /* Then the pads, so CLK can be read, and only then the LED — it needs a
      * calibrated cycle counter, and the Vectrex clock is what calibrates it. */

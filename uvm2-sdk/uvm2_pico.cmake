@@ -228,7 +228,7 @@ set_source_files_properties(
 # flash_devinfo_set_cs_size() and flash_do_cmd(), which are the only way to ask the BOOTROM for
 # the exit-XIP sequence towards CS1, i.e. towards the PSRAM. See the uvm2_psram_probe_bootrom()
 # block. pico_stdlib does not pull it in.
-target_link_libraries(${UVM2_NAME} pico_stdlib pico_multicore hardware_dma hardware_pio hardware_spi hardware_flash ${UVM2_GAME_LIBS})
+target_link_libraries(${UVM2_NAME} pico_stdlib pico_multicore hardware_dma hardware_pio hardware_spi hardware_flash hardware_vreg ${UVM2_GAME_LIBS})
 
 # ── The drawing layer SHARED by both cartridges ────────────────────────────
 #
