@@ -145,7 +145,8 @@ static int read_axis_analog(int channel)
  *
  * THE REST IS NOT ZERO. Measured on the same console: X 4..12, Y 31..48. The first reading
  * is taken as the stick's centre — unless it is past REST_MAX, which is a stick already
- * pushed at power-on, and then 0 is the centre — and every reading is taken from it.
+ * pushed at power-on, and then 0 is the centre — and every reading is taken from it, each
+ * side of it scaled to the full range (centre_axis).
  *   digital (the default): -127 / 0 / +127, past DIGITAL_AT either way, as before — and a
  *            rest of 40 in Y no longer reads as "up" to `if (J1_Y() > 32)`
  *   analog (uvm2_input_set_analog(1)): the centred value, 0 inside DEADZONE — the rest
@@ -156,6 +157,19 @@ static int read_axis_analog(int channel)
 static int     s_centred;
 static int     s_cx, s_cy;
 static int clamp8(int v) { return v > 127 ? 127 : (v < -128 ? -128 : v); }
+
+/* EACH HALF OF THE TRAVEL SCALED ON ITS OWN. Taking the rest off and nothing more left
+ * the travel short on the side the rest leans to: with Y resting at ~40, up topped out at
+ * 127 - 40 = 87 and down at -168 (clamped to -128), so up was a stick at two thirds in
+ * every analog game — "up is slower than the other ways", on the console 2026-10-05 —
+ * and a digital "up" needed more of a push. From the rest to either end is now the full
+ * range: 0..127 up the one side, 0..-128 down the other. */
+static int centre_axis(int raw, int rest)
+{
+    const int v = raw - rest;
+    if (v >= 0) return rest < 127 ? v * 127 / (127 - rest) : 0;
+    return rest > -128 ? v * 128 / (128 + rest) : 0;
+}
 static int shape(int v)
 {
     if (!s_analog) return v > DIGITAL_AT ? 127 : (v < -DIGITAL_AT ? -127 : 0);
@@ -174,8 +188,8 @@ uint32_t uvm2_read_axes(void)
         s_cy = (jy > -REST_MAX && jy < REST_MAX) ? jy : 0;
         s_centred = 1;
     }
-    jx = shape(clamp8(jx - s_cx));
-    jy = shape(clamp8(jy - s_cy));
+    jx = shape(clamp8(centre_axis(jx, s_cx)));
+    jy = shape(clamp8(centre_axis(jy, s_cy)));
 
     uvm2_via_write(UVM2_VIA_PORTB, UVM2_PB_IDLE);
 

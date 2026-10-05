@@ -28,6 +28,7 @@ static vpy3d_edge  PE[VPY3D_POOL_E];
 static int nPV, nPF, nPFV, nPE;
 
 static vpy_mesh   *B;                        /* the mesh being built */
+static uint32_t    s_build_overflow;         /* the overflow count when it began */
 static vpy3d_stats_t s_stats;
 
 /* per-draw scratch */
@@ -402,11 +403,17 @@ void vpy3d_line_world(int32_t ax, int32_t ay, int32_t az,
 /* ── building a mesh ─────────────────────────────────────────────────────── */
 int vpy3d_mesh_begin(vpy_mesh *m)
 {
-    B = m;
     m->v0 = (uint16_t)nPV; m->nv = 0;
     m->f0 = (uint16_t)nPF; m->nf = 0;
     m->e0 = (uint16_t)nPE; m->ne = 0;
     m->open = 0;
+    s_build_overflow = s_stats.overflow;
+    /* full already: nothing can be built. Said here, as the header always promised
+     * (it returned 1 regardless, and the build went on to fail piece by piece) */
+    if (nPV >= VPY3D_POOL_V || nPF >= VPY3D_POOL_F || nPFV >= VPY3D_POOL_FV || nPE >= VPY3D_POOL_E) {
+        s_stats.overflow++; B = 0; return 0;
+    }
+    B = m;
     return 1;
 }
 
@@ -426,6 +433,12 @@ int vpy3d_face(const int *idx, int n)
            || nPFV + n > VPY3D_POOL_FV) {
         s_stats.overflow++; return -1;
     }
+    /* An index that is not one of this mesh's vertices — most often the -1 of a
+     * vpy3d_vertex that did not fit, passed straight on — is refused: stored, it
+     * became 65535 and mesh_geometry read far outside the pool (a crash on the
+     * host, memory read at random on the cartridge; Spike 3D, 2026-10-05). */
+    for (int i = 0; i < n; i++)
+        if (idx[i] < 0 || idx[i] >= B->nv) { s_stats.overflow++; return -1; }
     PFs[nPF] = (uint16_t)nPFV;
     PFn[nPF] = (uint8_t)n;
     for (int i = 0; i < n; i++) PFV[nPFV++] = (uint16_t)idx[i];
@@ -565,8 +578,11 @@ int vpy3d_mesh_end(int hard_cos_q14)
     if (!B) return 0;
     vpy_mesh *m = B;
     B = 0;
-    uint32_t bad = s_stats.overflow;
     m->hard_cos = (int16_t)hard_cos_q14;
+    /* A BUILD THAT DID NOT FIT is left empty — it draws nothing — rather than half a
+     * mesh with faces missing or pointing at nothing. The pool it took is not given
+     * back (vpy3d_pool_release does that); overflow says it happened. */
+    if (s_stats.overflow != s_build_overflow) { m->nv = 0; m->nf = 0; m->ne = 0; return 0; }
 
     /* --- the edge table, with the face either side ------------------------ */
     for (int f = 0; f < m->nf; f++) {
@@ -577,13 +593,31 @@ int vpy3d_mesh_end(int hard_cos_q14)
             if (edge_of(m, iv[i], iv[(i + 1) % n], f) < 0) break;
     }
 
+    if (s_stats.overflow != s_build_overflow) { m->nv = 0; m->nf = 0; m->ne = 0; return 0; }   /* the edges did not fit */
     mesh_geometry(m);
 
     if (nPV > s_stats.verts)    s_stats.verts    = (uint16_t)nPV;
     if (nPF > s_stats.faces)    s_stats.faces    = (uint16_t)nPF;
     if (nPFV > s_stats.face_idx) s_stats.face_idx = (uint16_t)nPFV;
     if (nPE > s_stats.edges)    s_stats.edges    = (uint16_t)nPE;
-    return s_stats.overflow == bad;
+    return 1;
+}
+
+/* ── giving the pools back ───────────────────────────────────────────────── */
+vpy3d_pool_mark_t vpy3d_pool_mark(void)
+{
+    vpy3d_pool_mark_t k;
+    k.v = (uint16_t)nPV; k.f = (uint16_t)nPF; k.fv = (uint16_t)nPFV; k.e = (uint16_t)nPE;
+    return k;
+}
+
+int vpy3d_pool_release(vpy3d_pool_mark_t k)
+{
+    /* not in the middle of a build, and only backwards: a mark from before an
+     * earlier release would hand out space that is in use again */
+    if (B || k.v > nPV || k.f > nPF || k.fv > nPFV || k.e > nPE) return 0;
+    nPV = k.v; nPF = k.f; nPFV = k.fv; nPE = k.e;
+    return 1;
 }
 
 /* ── a mesh of its own, and dents in it ─────────────────────────────────── */

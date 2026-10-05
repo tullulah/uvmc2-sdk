@@ -190,13 +190,30 @@ typedef struct {
 #define VPY3D_HARD_60   8192   /* cos 60 deg */
 #define VPY3D_HARD_ALL 16384   /* every edge is a crease: a full wireframe */
 
-int  vpy3d_mesh_begin(vpy_mesh *m);           /* 0 if the pools are exhausted */
+int  vpy3d_mesh_begin(vpy_mesh *m);           /* 0 if the pools are exhausted: the mesh stays empty */
 int  vpy3d_vertex(int x, int y, int z);       /* returns its index, or -1 */
-int  vpy3d_face(const int *idx, int n);       /* indices from vpy3d_vertex */
+int  vpy3d_face(const int *idx, int n);       /* indices from vpy3d_vertex; -1 (counted) for one that is not */
 int  vpy3d_quad(int a, int b, int c, int d);
 int  vpy3d_tri(int a, int b, int c);
-int  vpy3d_mesh_end(int hard_cos_q14);        /* 0 on overflow; see vpy3d_error() */
+int  vpy3d_mesh_end(int hard_cos_q14);        /* 0 on overflow: the mesh is left EMPTY (draws nothing) */
 void vpy3d_mesh_open(vpy_mesh *m, int open);  /* mark a plate after building it */
+
+/* GIVING THE POOLS BACK. The pools only grow: a mesh, once built, keeps its space
+ * for good — right for a game that builds everything at start-up, wrong for one
+ * that changes its world (a level's geometry, a cache of shapes built as they are
+ * first drawn). vpy3d_pool_mark() remembers where the pools are; after it, build
+ * what is temporary; vpy3d_pool_release(mark) gives back everything built since —
+ * every mesh built after the mark is INVALID from then on (drawing one draws
+ * whatever is built in its place next), so drop every pointer to them first, and
+ * entities too (vpyent). The usual shape:
+ *     at start-up: build what lasts, then  keep = vpy3d_pool_mark();
+ *     entering a level:  vpy3d_pool_release(keep);  build the level's meshes
+ * Refused (0) in the middle of a build, or for a mark past where the pools are
+ * now (one taken before an earlier release). The stats' high-water marks are
+ * not lowered: they size the pools. */
+typedef struct { uint16_t v, f, fv, e; } vpy3d_pool_mark_t;
+vpy3d_pool_mark_t vpy3d_pool_mark(void);
+int vpy3d_pool_release(vpy3d_pool_mark_t mark);
 
 void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br);
 /* A built mesh's edges in model space, all of them (visible or not). For
