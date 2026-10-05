@@ -46,3 +46,5 @@ WEAK void rust_eh_personality(void) {}
 /* The button cache core 1 fills on the console (uvm2_core1.c). uvm2_hud.c reads it; a tool
  * that tests buttons defines its own, which wins over this weak one. Nothing pressed. */
 __attribute__((weak)) volatile uint8_t uvm2_cached_buttons = 0xFFu;
+/* uvm2_bus.c measures it at boot; 0 on the host: the HUD prints "M--". */
+WEAK uint32_t uvm2_cycles_per_e_q8 = 0;

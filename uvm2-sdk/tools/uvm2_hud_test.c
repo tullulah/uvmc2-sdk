@@ -43,6 +43,7 @@ int main(int argc, char **argv)
     const char *out = argc > 1 ? argv[1] : "/tmp/hud.json";
     uvm2_draw_init();
     uvm2_pacer_cycles = 30000u;                 /* the 50 Hz pace: the filler must still pad */
+    uvm2_hud_window_us = 0u;                    /* refresh every frame: the checks below read one frame */
 
     /* 1. off: nothing added */
     frame(); frame();
@@ -86,7 +87,19 @@ int main(int argc, char **argv)
     frame();
     CHECK(!strncmp(uvm2_hud_text[1], "S2624 812! N", 12), "an overflow shows '!': '%s'", uvm2_hud_text[1]);
     CHECK(strstr(uvm2_hud_text[0], " D3 Z0 !!") != 0, "dropped not zero shows '!!': '%s'", uvm2_hud_text[0]);
-    uvm2_stats.stack_overflow = 0;
+    uvm2_stats.stack_overflow = 0; uvm2_stats.dropped = 0;
+    /* 4b. a window that has not closed keeps showing what it showed: a busier frame does not
+     * change the figures until the window ends (on the console, about a second). */
+    frame();
+    char held[32]; memcpy(held, uvm2_hud_text[1], sizeof held);
+    uvm2_hud_window_us = 0xFFFFFFFFu;
+    uvm2_frame_begin();
+    uvm2_draw_intensity(100);
+    uvm2_draw_move_abs(-60, -40);
+    for (int k = 0; k < 20; k++) uvm2_draw_delta(k & 1 ? 6 : -6, 4);
+    uvm2_frame_end();
+    CHECK(!strcmp(uvm2_hud_text[1], held), "inside a window the figures hold: '%s'", uvm2_hud_text[1]);
+    uvm2_hud_window_us = 0u;
     /* 5. its own frame for beam_sim: no ramp with the clamp on */
     FILE *f = fopen(out, "w");
     fprintf(f, "[");
