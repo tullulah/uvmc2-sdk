@@ -79,8 +79,8 @@ pub struct Layout {
     pub out_count: u32,
     /// WHICH pins of that range we drive, already aligned to `out_base`.
     ///
-    /// It is not always "all of them". On the UVM2, PB6 (GP22) is an INPUT and GP23 does not
-    /// exist: if the preamble sets them to output, the `out pins` drives them and we fight
+    /// It is not always "all of them". On the UVM2, PB6 (GP22) and /IRQ (GP23) are INPUTS — the
+    /// VIA drives both: if the preamble sets them to output, the `out pins` drives them and we fight
     /// the board. With their bit at 0 here, the pad does not drive and the `out pins` over
     /// them is harmless — the same mechanism the preamble already uses, with not a single
     /// branch in the hot path.

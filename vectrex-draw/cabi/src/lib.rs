@@ -57,7 +57,7 @@ mod bus_c {
     /// Pins to the PIO, program loaded, SM running and preamble pushed.
     ///
     /// `out_dirs` is aligned to `out_base` and **does not have to be all ones**: on the UVM2,
-    /// PB6 (GP22) is an input and GP23 does not exist, so their bits are 0 and the `out pins`
+    /// PB6 (GP22) and /IRQ (GP23) are inputs driven by the VIA, so their bits are 0 and the `out pins`
     /// over them is harmless.
     #[no_mangle]
     pub unsafe extern "C" fn vbus_install(out_base: u32, out_count: u32, out_dirs: u32, park: u32) {

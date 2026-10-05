@@ -123,7 +123,7 @@ void uvm2_bus_pads(void)
 #ifdef UVM2_PIO_STREAM
 /* Start the stream with THIS board's field layout.
  *
- * out_dirs leaves out GP22 (PB6, which is an INPUT here) and GP23 (which does not exist).
+ * out_dirs leaves out GP22 (PB6) and GP23 (/IRQ): both are INPUTS here, driven by the VIA.
  * They fall inside the `out` range because the address is split — A14/A15 jump over them —
  * but with their direction bit at 0 the pad does not drive and the `out pins` is harmless.
  * It is the same mechanism as the preamble, with not a single branch in the hot path.
