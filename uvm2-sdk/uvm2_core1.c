@@ -171,6 +171,19 @@ volatile uint8_t  uvm2_cached_buttons = 0xFFu;
  * list programs again at its start.
  * `uvm2_reset_seen` counts the presses noticed and `uvm2_reset_held_us` is how long the
  * current one has lasted, so "it never reboots" can be told from "it never saw the button". */
+/* OFF UNLESS A GAME ASKS FOR IT (-DUVM2_RESET_BUTTON), since 2026-10-05. The watch cannot tell
+ * a held reset from a T1 that merely looks still: on the UVMC2 it restarted dkong, the
+ * playroom and Major Havoc with nobody near the button (Major Havoc: on a press of button 4),
+ * and every false "press" also stops the controllers being read for UVM2_RESET_SETTLE frames,
+ * which in play is controls that respond on and off. Until the false positive is understood,
+ * a feature that misfires costs more than the one it gives. Off, it costs nothing: no bus
+ * reads, no wait, no warm-start mark, and none of the 4 KB .data copy. UVM2_NO_RESET_BUTTON
+ * still turns it off where a build already says so. */
+#if defined(UVM2_RESET_BUTTON) && !defined(UVM2_NO_RESET_BUTTON)
+#define UVM2_RESET_WATCH 1
+#else
+#define UVM2_RESET_WATCH 0
+#endif
 #define UVM2_RESET_GAP      300u        /* bus cycles between the two reads: > 256 */
 #define UVM2_RESET_HOLD_US  3000000u    /* held this long: back to the UVMC2's menu */
 #define UVM2_RESTART_US     1000000u    /* held this long and let go: the game starts again */
@@ -204,6 +217,7 @@ static uint32_t s_input_hold;
  * stacks are cleared by the start-up itself. A .data too big for the copy turns the restart
  * off and counts it in `uvm2_restart_refused` — the button then does nothing short of the
  * menu, rather than restart a game with stale globals. */
+#if UVM2_RESET_WATCH
 #define UVM2_RESTART_SNAP   4096u       /* bytes of .data that can be put back */
 #define UVM2_IMAGE_BASE     0x20000000u /* where the launcher loads a .um2 (uvm2_game.ld) */
 #define UVM2_IMAGE_WINDOW   (496u * 1024u)
@@ -226,6 +240,10 @@ static void restart_game(void)
     for (uint32_t i = 0; i < n; i++) __data_start__[i] = s_data_snap[i];
     rom_reboot(BOOT_TYPE_RAM_IMAGE | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, UVM2_IMAGE_BASE, UVM2_IMAGE_WINDOW);
 }
+#else
+volatile uint32_t uvm2_restart_refused;
+void uvm2_restart_snapshot(void) { }     /* no watch, nothing to restart: keep the 4 KB */
+#endif
 /* THE VECTREX'S WARM-START MARK. On a reset its BIOS checks Vec_Cold_Flag at $CBFE: $7321
  * there means warm — no logo, straight to the cartridge, which is how the UVMC2's firmware
  * comes back to its menu ("loading", then the menu) after a game of Ralf's. Without it the
@@ -237,9 +255,9 @@ static void restart_game(void)
 #define VEC_COLD_FLAG_WARM 0x7321u
 static void reset_poll(void)
 {
-#ifdef UVM2_NO_RESET_BUTTON
-    return;     /* diagnostic build: the reset button is not watched at all */
-#endif
+#if !UVM2_RESET_WATCH
+    return;     /* not watched: see UVM2_RESET_WATCH */
+#else
     static uint32_t since;
     static int down;
     const uint8_t a = uvm2_via_read(UVM2_VIA_T1CH);
@@ -263,6 +281,7 @@ static void reset_poll(void)
 #endif
         down = 0; uvm2_reset_held_us = 0;
     }
+#endif
 }
 
 /* THE STACK PAINT (see stack0_peak in uvm2_bus.h). The pico-sdk memory map puts core 0's stack
@@ -304,7 +323,7 @@ void uvm2_core1_gap(void);   /* per-pass hook; weak, below */
 static void core1_main(void)
 {
     uint32_t served = 0;
-#ifndef UVM2_BIOS
+#if !defined(UVM2_BIOS) && UVM2_RESET_WATCH   /* only the watch's reboot needs it */
     uvm2_mem_write(VEC_COLD_FLAG_ADDR,      VEC_COLD_FLAG_WARM >> 8);   /* 6809: big-endian */
     uvm2_mem_write(VEC_COLD_FLAG_ADDR + 1u, VEC_COLD_FLAG_WARM & 0xFFu);
 #endif
