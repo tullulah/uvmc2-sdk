@@ -2069,6 +2069,14 @@ static void move_one(int dx, int dy)
     int forced = 0;
     int res_tot_x_ = 0, res_tot_y_ = 0;   /* what the priming unit took of the request */
     int32_t px_ = 0, py_ = 0; uint32_t pt1_ = 0;   /* the long ramp, to emit it as computed */
+    /* THE JUMP'S PARAMETERS, COMPUTED ONCE. The soft-start test below needs them, and when it
+     * does not fire the jump is the same (dx, dy) — so it used to be computed a second time,
+     * identically: 0.67 extra ramp_params per vector, ~7% of the list builder on the M33
+     * (counted instruction by instruction on the Thumb build, 2026-10-05). The model is pure
+     * (it reads its globals and writes nothing), so reusing the result changes no byte of the
+     * list; checked by hashing the lists of eleven game frames before and after. The copy is
+     * taken BEFORE the soft-start block nudges px_/py_ by one. */
+    int32_t jx_ = 0, jy_ = 0; uint32_t jt1_ = 0; int have_j_ = 0;
     if (uvm2_soft_start > 0) {
         /* THE CRITERION IS THE JUMP'S RATE, NOT ITS DISTANCE. Measured over 198 captured
          * transports that move anything: the 19 that carry a tiny unit in front have rate
@@ -2083,6 +2091,7 @@ static void move_one(int dx, int dy)
 #else
         vx_ramp_params_jump(dx, dy, &px_, &py_, &pt1_);
 #endif
+        jx_ = px_; jy_ = py_; jt1_ = pt1_; have_j_ = 1;
         const int rate = (px_ < 0 ? -px_ : px_) > (py_ < 0 ? -py_ : py_)
                        ? (px_ < 0 ? -px_ : px_) : (py_ < 0 ? -py_ : py_);
         if (rate >= uvm2_soft_start) {
@@ -2194,11 +2203,14 @@ static void move_one(int dx, int dy)
          * clean frame jumps at 1.8x the speed it draws at (median rate 64 against 35), and a
          * jump cost us ~267 cycles where ~32 is enough. */
 if (forced) { vx = px_; vy = py_; t1 = pt1_; } else {
+        if (have_j_) { vx = jx_; vy = jy_; t1 = jt1_; }   /* same (dx, dy): see jx_ above */
+        else {
 #if UVM2_Q_BITS > 0
         { uint32_t t0_ = SDK_T0(); vx_ramp_params_jump_qn(dx, dy, UVM2_Q_BITS, &vx, &vy, &t1); SDK_ACUM(0, t0_); }
 #else
         vx_ramp_params_jump(dx, dy, &vx, &vy, &t1);
 #endif
+        }
         /* THE STAIRCASE OF JUMP DURATIONS.
          *
          * A jump's t1 is not COMPUTED: it is PICKED from {8, 18, 31}, the first step whose rate
