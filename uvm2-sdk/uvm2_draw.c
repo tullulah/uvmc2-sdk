@@ -510,13 +510,19 @@ extern volatile uint32_t BEAM_VIA_SR;   /* in vectrex-draw; see via_setup */
 #define UVM2_H_T1CH_CONT   11u
 #define UVM2_H_T1CH_BLANK  29u
 
+/* MT_CLOSE_BLANK (emit.rs) overrides the 29 here too, so one knob sweeps every blank that
+ * closes a lit stroke; 0 = the constant, never below UVM2_H_T1CH_CONT. */
+extern volatile uint32_t MT_CLOSE_BLANK;
+
 static void extend_stroke_t1ch(void)
 {
     if (s_count == 0u) return;
     uint8_t *p = &s_cmds[s_buf][(s_count - 1u) * 3u];
     uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
     if (((v >> 8) & 0xFu) != (uint32_t)UVM2_VIA_T1CH) return;   /* not closing a ramp */
-    uint32_t gap = (v >> 12) + (UVM2_H_T1CH_BLANK - UVM2_H_T1CH_CONT);
+    uint32_t blank = MT_CLOSE_BLANK ? MT_CLOSE_BLANK : UVM2_H_T1CH_BLANK;
+    if (blank < UVM2_H_T1CH_CONT) blank = UVM2_H_T1CH_CONT;
+    uint32_t gap = (v >> 12) + (blank - UVM2_H_T1CH_CONT);
     if (gap > 4095u) gap = 4095u;
     s_cycles += gap - (v >> 12);
     v = (v & 0xFFFu) | (gap << 12);
@@ -722,6 +728,7 @@ extern volatile uint32_t T1_JUMP;
  * value on the C side, Rust produced a gap saturated at 4095 per vector and the frame blew
  * out 30x. See the MT_ORA_Y block in emit.rs. */
 extern volatile uint32_t MT_ORA_Y, MT_ORB_KEEP, MT_SR_ON, MT_ORA_X_ON;
+extern volatile uint32_t MT_CLOSE, MT_CLOSE_LONG;
 extern volatile uint32_t CEILING_RULES, DEBT_ON, INTEGER_STROKE;
 
 /* DAC_ZERO: put PORT A back to zero after each stroke, before blanking the beam. It is one
@@ -808,6 +815,16 @@ void uvm2_draw_init(void)
 #endif
 #ifdef UVM2_MT_ORA_X_ON
     MT_ORA_X_ON     = UVM2_MT_ORA_X_ON;
+#endif
+    /* The closing gaps after a lit stroke (16 / 21 / 29 by default): see MT_CLOSE in emit.rs. */
+#ifdef UVM2_MT_CLOSE
+    MT_CLOSE        = UVM2_MT_CLOSE;
+#endif
+#ifdef UVM2_MT_CLOSE_LONG
+    MT_CLOSE_LONG   = UVM2_MT_CLOSE_LONG;
+#endif
+#ifdef UVM2_MT_CLOSE_BLANK
+    MT_CLOSE_BLANK  = UVM2_MT_CLOSE_BLANK;
 #endif
     /* WHO RULES ON SHALLOW DIAGONALS: the minor axis's ceiling (1, the long-standing one) or
      * the speed cap (0). See the `ramp_params_q` note in ramp.rs. Compare on the console

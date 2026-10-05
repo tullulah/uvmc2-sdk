@@ -111,6 +111,31 @@ pub static MT_SR_ON: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU
 #[used] #[no_mangle]
 pub static MT_ORA_X_ON: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/* THE CLOSING GAPS AFTER A LIT STROKE'S T1CH, AS KNOBS: H_T1CH_CLOSE (16), H_T1CH_CLOSE_LONG
+ * (21) and H_T1CH_BLANK (29). All three were copied from the reference's Major Havoc capture,
+ * i.e. they are what the reference DOES, not a minimum measured on a console. Host-measured on
+ * real frames (2026-10-05): the +5 before every short jump and the +18 before every re-zero are
+ * ~4-6% of a frame. Sweep them on the console with short dense strokes; if lowering one leaves
+ * strokes short, it shows there first.
+ *
+ * Same units as the constants (the T1CH gap for t1 = 8). 0 = the constant. Never below
+ * H_T1CH_CONT (11): these lengthen the gap already emitted and cannot shorten it.
+ * MT_CLOSE_BLANK is also read by uvm2_draw.c, whose own blanks (set_z, the re-zero, the frame
+ * close) extend the T1CH by the same rule. */
+#[used] #[no_mangle]
+pub static MT_CLOSE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[used] #[no_mangle]
+pub static MT_CLOSE_LONG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+#[used] #[no_mangle]
+pub static MT_CLOSE_BLANK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// A closing gap: the knob if set, else the measured constant; never below H_T1CH_CONT.
+#[inline(always)]
+fn close_gap(knob: &core::sync::atomic::AtomicU32, def: u32) -> u32 {
+    let v = knob.load(Ordering::Relaxed);
+    (if v > 0 { v } else { def }).max(H_T1CH_CONT)
+}
+
 /* PROBE: the field as RUST sees it, and the gap that comes out of it. The C side says 4 and
  * the emitted command comes out saturated at 4095, so the value has to be seen HERE. */
 #[used] #[no_mangle]
@@ -379,9 +404,9 @@ pub fn moveto_seq<S: BusSink>(sink: &mut S, vx: i8, vy: i8, t1: u16, k: &Timings
      * 21 priming+jump ones. See UNITS_CONTINUE. */
     let blank_now = lit && !(sr && only_this_one);
     if lit {
-        let h = if blank_now { H_T1CH_BLANK }
-                else if sr && t1 > 8 { H_T1CH_CLOSE_LONG }
-                else { H_T1CH_CLOSE };
+        let h = if blank_now { close_gap(&MT_CLOSE_BLANK, H_T1CH_BLANK) }
+                else if sr && t1 > 8 { close_gap(&MT_CLOSE_LONG, H_T1CH_CLOSE_LONG) }
+                else { close_gap(&MT_CLOSE, H_T1CH_CLOSE) };
         sink.extend_last((h - H_T1CH_CONT) * E);
     }
     // BLANK FIRST (SR=0x00). With keep-lit the beam arrives at the jump LIT; if Y/mux is
@@ -1386,13 +1411,13 @@ pub(crate) fn test_knobs() -> TestKnobs {
     use crate::ramp as r;
     use core::sync::atomic::Ordering::Relaxed;
     let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let u32s: [&'static core::sync::atomic::AtomicU32; 28] = [
+    let u32s: [&'static core::sync::atomic::AtomicU32; 31] = [
         &r::DRAW_SCALE, &r::MIN_T1, &r::MIN_T1_START, &r::T1_LAG_START, &r::START_HITS,
         &r::T1_TRANSPORT, &r::CEILING_RULES, &r::DEBT_ON, &r::T1_JUMP, &r::RAMP_M_MAX,
         &r::RAMP_M_LARGE, &r::T1_LAG, &r::Y_HELD, &r::T1_EXTRA_Q8, &r::BEAM_VIA_SR,
         &r::T1CL_CACHE, &r::DAC_ZERO, &r::FIXED_RAMP,
         &T1CL_LAST, &MT_ORA_Y, &MT_ORB_KEEP, &MT_SR_ON, &MT_ORA_X_ON, &DBGX_FIELD, &DBGX_GAP,
-        &INTEGER_STROKE, &SKIP_Y, &UNITS_CONTINUE,
+        &INTEGER_STROKE, &SKIP_Y, &UNITS_CONTINUE, &MT_CLOSE, &MT_CLOSE_LONG, &MT_CLOSE_BLANK,
     ];
     let i32s: [&'static core::sync::atomic::AtomicI32; 4] =
         [&r::NEG_RATE_X, &r::NEG_RATE_Y, &r::DEBT_X, &r::DEBT_Y];
