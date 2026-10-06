@@ -49,9 +49,20 @@ void     v_directDraw32(int32_t xStart, int32_t yStart,
  * ignore this. */
 void     v_setColour(uint32_t rgb);
 
+/* A stroke with gaps: `gaps` = n (start, end) pairs, fractions 0..255 of the stroke where
+ * the beam is off. One ramp on the cartridge; separate lines here. */
+void     v_directGapped(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t brightness,
+                        const unsigned char *gaps, int n);
+
+/* Shift-register text sweep: `pattern` = n bytes, 8 dots each, bit 7 first; `step` = T1
+ * counts per byte (8). Returns how many bytes were drawn (the cartridge may fit fewer). */
+int      v_directSweepSR(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t brightness,
+                         const unsigned char *pattern, int n, int step);
+
 /* Input */
 uint8_t  v_readButtons(void);          /* also stores into currentButtonState */
 void     v_readJoystick1Analog(void);  /* stores into currentJoy1X / currentJoy1Y */
+void     v_setAnalog(int on);          /* a stick-steered game asks for analog axes once */
 
 /* Time */
 uint32_t v_millis(void);
@@ -67,6 +78,7 @@ void     v_writePSG(uint8_t reg, uint8_t val);     /* real PiTrex SDK name — l
 void     v_playSample(int idx, int voice, int loop);
 void     v_stopSample(int voice);
 int      v_samplePlaying(int voice);
+int      v_samplePos(int fps);         /* voice 0's cursor as frames at `fps` (0 if unknown) */
 
 #ifdef __cplusplus
 }

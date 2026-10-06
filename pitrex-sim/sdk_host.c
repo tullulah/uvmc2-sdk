@@ -99,6 +99,56 @@ void v_directDraw32(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b) {
     js_draw_line((int)x0, (int)y0, (int)x1, (int)y1, (int)b, (int)s_colour);
 }
 
+/* A STROKE WITH GAPS (the cartridge does it in one ramp, toggling BLANK). `gaps` are
+ * (start, end) pairs as fractions 0..255 of the stroke where the beam is OFF; here the lit
+ * stretches between them are drawn as separate lines. Same rounding as the cartridge: a gap
+ * whose end is not past its start blanks nothing. */
+void v_directGapped(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
+                    const unsigned char *gaps, int n) {
+    if (b == 0) return;
+    int32_t from = 0;                       /* lit from here, in 1/256ths of the stroke */
+    for (int i = 0; i <= n; i++) {
+        int32_t g0 = 256, g1 = 256;         /* past the last gap: light to the end */
+        if (i < n) {
+            g0 = gaps[i * 2]; g1 = gaps[i * 2 + 1];
+            if (g1 <= g0) continue;
+        }
+        if (g0 > from) {
+            v_directDraw32(x0 + (x1 - x0) * from / 256, y0 + (y1 - y0) * from / 256,
+                           x0 + (x1 - x0) * g0 / 256,   y0 + (y1 - y0) * g0 / 256, b);
+        }
+        if (g1 > from) from = g1;
+    }
+}
+
+/* THE SHIFT-REGISTER SWEEP (the cartridge's text). `pattern` is one byte per 8 dots, bit 7
+ * first; a byte's cell is `step` T1 counts and each dot one count, so the stroke spans
+ * n*step counts and a dot is 1/(n*step) of it. Each run of lit dots is one line. The
+ * cartridge may fit fewer bytes than asked for (the ramp speed caps it) and says how many;
+ * here they always all fit. */
+int v_directSweepSR(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
+                    const unsigned char *pattern, int n, int step) {
+    if (b == 0) return n;
+    if (n < 1 || step < 1) return 0;
+    const int32_t total = n * step;
+    for (int i = 0; i < n; i++) {
+        int bit = 0;
+        while (bit < 8) {
+            if (!(pattern[i] & (0x80 >> bit))) { bit++; continue; }
+            int run = bit;
+            while (run < 8 && (pattern[i] & (0x80 >> run))) run++;
+            const int32_t a = i * step + bit, e = i * step + run;
+            v_directDraw32(x0 + (x1 - x0) * a / total, y0 + (y1 - y0) * a / total,
+                           x0 + (x1 - x0) * e / total, y0 + (y1 - y0) * e / total, b);
+            bit = run;
+        }
+    }
+    return n;
+}
+
+/* The stick is always read as analog here; on the cartridge the BIOS must be told. */
+void v_setAnalog(int on) { (void)on; }
+
 static void snd_tick(void);     /* the .vmus/.vsfx sequencer, below */
 
 void v_WaitRecal(void) {
@@ -261,6 +311,14 @@ EM_JS(int, js_sample_playing, (int voice), {
 void v_playSample(int idx, int voice, int loop) { js_play_sample(idx, voice, loop); }
 void v_stopSample(int voice)                    { js_stop_sample(voice); }
 int  v_samplePlaying(int voice)                 { return js_sample_playing(voice); }
+
+/* Voice 0's cursor as a frame count at `fps` (with fps = the sample rate: in samples).
+ * Asked of the panel when it can tell; otherwise 0 — a game streaming into a ring buffer
+ * then simply stops refilling it, which is silent but never stalls. */
+EM_JS(int, js_sample_pos, (int fps), {
+    return (Module.pitrex && Module.pitrex.samplePos) ? (Module.pitrex.samplePos(fps) | 0) : 0;
+});
+int  v_samplePos(int fps)                       { return js_sample_pos(fps); }
 
 /* ---- FatFs over stdio (emscripten MEMFS) ---- */
 FRESULT f_open(FIL* fp, const char* path, BYTE mode) {
