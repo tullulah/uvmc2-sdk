@@ -96,6 +96,23 @@ void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b);    /* 16-segment e
 void vpy_draw_vector(const unsigned char *data, int x, int y);
 void vpy_draw_vector_ex(const unsigned char *data, int x, int y, int mirror, int intensity);
 
+/* Draw a compiled .vec sprite at (x,y) rotated by `angle` about its origin.
+ * `angle` uses VPy's angle unit, the one vpy_sin/vpy_cos and DRAW_VECTOR_3D take:
+ * 0..127 is one full turn, counter-clockwise (+Y up), so 32 = 90 degrees,
+ * 64 = 180 and 96 = 270; any int is taken modulo 128. The origin is the point of
+ * the sprite that vpy_draw_vector places at (x,y): the centre of the .vec's bounding
+ * box, as `compile-asset` writes it. Every point is rotated (sin/cos from the Q14
+ * table, exact at the quarter turns) and placed with sub-unit precision; each path
+ * keeps its own intensity. Same data as vpy_draw_vector (`{NAME}_vec`). */
+void vpy_draw_vector_rot(const unsigned char *data, int x, int y, int angle);
+/* vpy_draw_vector_rot with a mirror and an intensity override.
+ * `mirror` flips the sprite in sprite space BEFORE rotating it: bit 0 left-right,
+ * bit 1 upside down (0 none, 1 X, 2 Y, 3 both, as VPy's DRAW_VECTOR_EX);
+ * `intensity` > 0 replaces every path's intensity (<= 0 keeps the asset's own),
+ * as in vpy_draw_vector_ex. */
+void vpy_draw_vector_rot_ex(const unsigned char *data, int x, int y, int angle,
+                            int mirror, int intensity);
+
 /* ---- compiled animations (.vanim) ----------------------------------------
  * `anim` is a position-independent anim descriptor compiled from a .vanim by
  *   `vpy_cli compile-asset <file>.vanim --format c --out <name>.h`
@@ -282,6 +299,8 @@ void vpy_enemy_fire_event_str(int idx, const char *event);
 #define DRAW_ELLIPSE    vpy_draw_ellipse
 #define DRAW_VECTOR     vpy_draw_vector
 #define DRAW_VECTOR_EX  vpy_draw_vector_ex
+#define DRAW_VECTOR_ROT vpy_draw_vector_rot
+#define DRAW_VECTOR_ROT_EX vpy_draw_vector_rot_ex
 #define DRAW_ANIM       vpy_draw_anim
 #define WAIT_RECAL      vpy_wait_recal
 #define FLUSH           vpy_flush

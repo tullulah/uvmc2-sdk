@@ -287,8 +287,35 @@ void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b)
 extern void v_beamNewStroke(void);
 #endif
 
+/* Sprite rotation for draw_vec_stream. NULL = unrotated (the original integer
+ * path, unchanged). Otherwise every point is taken relative to the sprite
+ * origin (ox,oy), rotated by the Q14 pair (c,s) and placed in DEVICE units,
+ * so a rotated sprite keeps sub-unit precision instead of snapping each vertex
+ * to the VPy grid. */
+typedef struct { int ox, oy; int32_t c, s; } vec_rot_t;
+
+static int32_t rot_dev(int32_t q14_times_units)
+{
+    /* Q14 * VPy units -> device units (x VPY_SCALE), rounded half away from zero
+     * so a mirrored sprite stays the exact mirror. 32-bit on purpose (no libgcc
+     * 64-bit division for the PitrexCore interpreter): |local| <= 250 units keeps
+     * 2*250*16384*127 under 2^31. */
+    const int32_t v = q14_times_units * VPY_SCALE;
+    return v >= 0 ? (v + 8192) >> 14 : -((-v + 8192) >> 14);
+}
+
+static void vec_line(int x0, int y0, int x1, int y1, int b, const vec_rot_t *r)
+{
+    if (!r) { raw_line(x0, y0, x1, y1, b); return; }
+    const int32_t lx0 = x0 - r->ox, ly0 = y0 - r->oy;
+    const int32_t lx1 = x1 - r->ox, ly1 = y1 - r->oy;
+    const int32_t bx = (int32_t)r->ox * VPY_SCALE, by = (int32_t)r->oy * VPY_SCALE;
+    sb_push_dev(bx + rot_dev(lx0 * r->c - ly0 * r->s), by + rot_dev(lx0 * r->s + ly0 * r->c),
+                bx + rot_dev(lx1 * r->c - ly1 * r->s), by + rot_dev(lx1 * r->s + ly1 * r->c), b);
+}
+
 static void draw_vec_stream(const unsigned char *data, int ox, int oy,
-                            int mirror, int override_b)
+                            int mirror, int override_b, const vec_rot_t *rot)
 {
     if (!data) return;
     int path_count = (int)data[0] | ((int)data[1] << 8);
@@ -333,7 +360,7 @@ static void draw_vec_stream(const unsigned char *data, int ox, int oy,
                     int abc_x = abx + (bcx-abx)*t/STEPS, abc_y = aby + (bcy-aby)*t/STEPS;
                     int bcd_x = bcx + (cdx-bcx)*t/STEPS, bcd_y = bcy + (cdy-bcy)*t/STEPS;
                     int nx = abc_x + (bcd_x-abc_x)*t/STEPS, ny = abc_y + (bcd_y-abc_y)*t/STEPS;
-                    raw_line(px, py, nx, ny, b);
+                    vec_line(px, py, nx, ny, b, rot);
                     px = nx; py = ny;
                 }
                 cx = px; cy = py;
@@ -346,7 +373,7 @@ static void draw_vec_stream(const unsigned char *data, int ox, int oy,
             p += 2;
             if (mirror) dx = -dx;
             int nx = cx + dx, ny = cy + dy;
-            raw_line(cx, cy, nx, ny, b);
+            vec_line(cx, cy, nx, ny, b, rot);
             cx = nx; cy = ny;
         }
     }
@@ -354,12 +381,31 @@ static void draw_vec_stream(const unsigned char *data, int ox, int oy,
 
 void vpy_draw_vector(const unsigned char *data, int x, int y)
 {
-    draw_vec_stream(data, x, y, 0, 0);
+    draw_vec_stream(data, x, y, 0, 0, 0);
 }
 
 void vpy_draw_vector_ex(const unsigned char *data, int x, int y, int mirror, int intensity)
 {
-    draw_vec_stream(data, x, y, mirror ? 1 : 0, intensity);
+    draw_vec_stream(data, x, y, mirror ? 1 : 0, intensity, 0);
+}
+
+/* Rotation in VPy's angle unit (128 steps per turn, as vpy_sin / DRAW_VECTOR_3D),
+ * looked up in the Q14 table at 32x: the quarter turns (0/32/64/96) are exact. The
+ * mirror is applied in sprite space BEFORE the rotation, so a mirrored ship turned
+ * by `angle` is the mirror image of the ship turned by `-angle`. A vertical flip is
+ * a horizontal one plus half a turn, which is how bit 1 is done. */
+void vpy_draw_vector_rot_ex(const unsigned char *data, int x, int y, int angle,
+                            int mirror, int intensity)
+{
+    if (mirror & 2) { mirror ^= 1; angle += 64; }
+    const int a = (angle & 127) * (VPY_Q14_TURN / 128);
+    const vec_rot_t r = { x, y, vpy_cos_q14(a), vpy_sin_q14(a) };
+    draw_vec_stream(data, x, y, mirror & 1, intensity, &r);
+}
+
+void vpy_draw_vector_rot(const unsigned char *data, int x, int y, int angle)
+{
+    vpy_draw_vector_rot_ex(data, x, y, angle, 0, 0);
 }
 
 /* ---- SDK vector font (ported from pitrex-baremetal vectorFont.i, the ACTIVE
