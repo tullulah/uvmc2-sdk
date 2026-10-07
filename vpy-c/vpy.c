@@ -167,6 +167,10 @@ static void raw_line(int x0, int y0, int x1, int y1, int b)
 }
 
 /* ---- lifecycle ---- */
+/* Frames presented by vpy_wait_recal: the sample-position fallback clock (see
+ * v_samplePos, with the .vsmp player below). */
+static uint32_t s_frames_presented;
+
 void vpy_init(void)
 {
     ensure_tables();
@@ -179,6 +183,7 @@ void vpy_wait_recal(void)
 {
     vpy_flush();              /* the frame just drawn goes out... */
     v_WaitRecal();            /* ...and is presented here */
+    s_frames_presented++;
 }
 
 void vpy_frame_begin(void)
@@ -198,6 +203,7 @@ void vpy_run(void (*setup)(void), void (*loop)(void))
          * games don't have to call the sequencers manually. */
         vpy_music_update();
         vpy_sfx_update();
+        vpy_note_update();
         if (loop) loop();
     }
 }
@@ -844,6 +850,185 @@ void vpy_sfx_update(void)
     }
     s_sfx_ptr   = w;
     s_sfx_delay = w[0];
+}
+
+/* ---- instruments (.vinstr): PLAY_NOTE ----------------------------------------
+ * A straight C port of the VPy ARM note engine (vpy_play_note / vpy_note_update
+ * in buildtools/vpy_codegen/src/arm/builtins.rs), so a note sounds the same in C
+ * as in VPy. The instrument block (16 bytes, `vpy_cli compile-asset` .vinstr):
+ *   [0] duration_frames  [1] volume 0-15  [2] arpeggio_count 0-4
+ *   [3] arpeggio_speed_frames (>= 1)  [4..7] arpeggio intervals (signed)
+ *   [8] noise_enabled [9] noise_period [10] sweep delta [11] sweep frames
+ * Like the VPy runtime, noise and pitch sweep are carried but not played. */
+
+/* MIDI 24-107 -> AY tone period, clk 1.5 MHz: round(1500000 / (16 * f)) — the
+ * table `crate::psg::hz_to_period` builds for the VPy backends. */
+static const uint16_t s_note_period[84] = {
+    2867, 2706, 2554, 2411, 2275, 2148, 2027, 1913, 1806, 1705, 1609, 1519,
+    1433, 1353, 1277, 1205, 1138, 1074, 1014,  957,  903,  852,  804,  759,
+     717,  676,  638,  603,  569,  537,  507,  478,  451,  426,  402,  380,
+     358,  338,  319,  301,  284,  268,  253,  239,  226,  213,  201,  190,
+     179,  169,  160,  151,  142,  134,  127,  120,  113,  107,  101,   95,
+      90,   85,   80,   75,   71,   67,   63,   60,   56,   53,   50,   47,
+      45,   42,   40,   38,   36,   34,   32,   30,   28,   27,   25,   24,
+};
+
+typedef struct {
+    const unsigned char *instr;
+    uint32_t frames_left;     /* unsigned like the ARM counter: duration 0 never expires */
+    int base_note;
+    int arp_pos;
+    int arp_timer;
+    int active;
+} vpy_note_ch_t;
+
+static vpy_note_ch_t s_note[3];
+
+static int note_clamp(int n) { return n < 24 ? 24 : (n > 107 ? 107 : n); }
+
+static void note_period(int ch, int note)
+{
+    uint16_t p = s_note_period[note_clamp(note) - 24];
+    psg_write((uint8_t)(ch * 2),     (uint8_t)(p & 0xff));
+    psg_write((uint8_t)(ch * 2 + 1), (uint8_t)(p >> 8));
+}
+
+void vpy_play_note(const unsigned char *instr, int channel, int note)
+{
+    if (!instr || channel < 0 || channel > 2) return;
+    vpy_note_ch_t *c = &s_note[channel];
+    note = note_clamp(note);
+    c->instr       = instr;
+    c->active      = 1;
+    c->frames_left = instr[0];
+    c->base_note   = note;
+    c->arp_pos     = 0;
+    c->arp_timer   = instr[3];
+    note_period(channel, note);
+    psg_write((uint8_t)(8 + channel), (uint8_t)(instr[1] & 0x0f));
+    /* tone on for this channel, its noise off; the rest of the mixer as it was */
+    psg_write(7, (uint8_t)((s_psg_mixer & ~(1u << channel)) | (1u << (channel + 3))));
+}
+
+void vpy_note_update(void)
+{
+    for (int ch = 0; ch < 3; ch++) {
+        vpy_note_ch_t *c = &s_note[ch];
+        if (!c->active) continue;
+        if (--c->frames_left == 0) {           /* the note is over: silence it */
+            c->active = 0;
+            psg_write((uint8_t)(8 + ch), 0);
+            continue;
+        }
+        int count = c->instr[2];
+        if (count == 0) continue;
+        if (--c->arp_timer != 0) continue;
+        c->arp_timer = c->instr[3];
+        if (++c->arp_pos >= count) c->arp_pos = 0;
+        note_period(ch, c->base_note + (int8_t)c->instr[4 + c->arp_pos]);
+    }
+}
+
+/* ---- vector recordings (.vrec): DRAW_RECORDING --------------------------------
+ * Reads the table `vpy_cli compile-asset` emits for a .vrec — the bytes the VPy
+ * ARM and PiTrex backends assemble (vrec_chain.rs):
+ *   u32 frame_count, u32 offset[frame_count] (from the table base), then per frame
+ *   u16 chain_count and per chain: start_x i8, start_y i8, intensity u8,
+ *   seg_count u8, seg_count x (dx i8, dy i8).
+ * The arithmetic is the VPy ARM runtime's (vpy_draw_recording in arm/drawing.rs):
+ * in 1/16 of a unit, a value is (v * scale) >> 3, the chain start is offset by
+ * (x, y) and clamped to +-127 units, each delta is clamped on its own and the
+ * pen follows the clamped deltas. Converting 1/16 units to PiTrex units is exact
+ * enough to round-trip (the rp2350 backend's VS_Q4 gets the same 1/16 back). */
+static uint32_t rd_u32(const unsigned char *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+#define REC_Q4_MAX 2032   /* 127 units in 1/16 */
+
+static int32_t rec_q4(int v8, int scale)
+{
+    int32_t q = ((int32_t)v8 * scale) >> 3;
+    return q > REC_Q4_MAX ? REC_Q4_MAX : (q < -REC_Q4_MAX ? -REC_Q4_MAX : q);
+}
+
+static int32_t rec_q4_clamp(int32_t q)
+{
+    return q > REC_Q4_MAX ? REC_Q4_MAX : (q < -REC_Q4_MAX ? -REC_Q4_MAX : q);
+}
+
+static int32_t q4_dev(int32_t q)   /* 1/16 unit -> PiTrex units, rounded */
+{
+    int32_t v = q * VPY_SCALE;
+    return (v + (v < 0 ? -8 : 8)) / 16;
+}
+
+int vpy_recording_frames(const unsigned char *rec)
+{
+    return rec ? (int)rd_u32(rec) : 0;
+}
+
+void vpy_draw_recording(const unsigned char *rec, int x, int y, int scale, int frame)
+{
+    if (!rec) return;
+    int32_t n = (int32_t)rd_u32(rec);
+    if (n <= 0) return;
+    int32_t f = frame % n;
+    if (f < 0) f += n;
+    const unsigned char *p = rec + rd_u32(rec + 4 + 4 * f);
+    int chains = (int)p[0] | ((int)p[1] << 8);
+    p += 2;
+    for (int c = 0; c < chains; c++) {
+        int br   = p[2];
+        int segs = p[3];
+        int32_t px = rec_q4_clamp((int32_t)x * 16 + (((int32_t)(int8_t)p[0] * scale) >> 3));
+        int32_t py = rec_q4_clamp((int32_t)y * 16 + (((int32_t)(int8_t)p[1] * scale) >> 3));
+        p += 4;
+        for (int s = 0; s < segs; s++, p += 2) {
+            int32_t nx = px + rec_q4((int8_t)p[0], scale);
+            int32_t ny = py + rec_q4((int8_t)p[1], scale);
+            sb_push_dev(q4_dev(px), q4_dev(py), q4_dev(nx), q4_dev(ny), br);
+            px = nx; py = ny;
+        }
+    }
+}
+
+/* ---- digitised samples (.vsmp): PLAY_SAMPLE / SAMPLE_POS -----------------------
+ * The sample (`vpy_cli compile-asset` .vsmp: u32 rate, u32 count, packed 4-bit,
+ * low nibble first) goes to the SDK as it is, on voice 0 — what VPy's
+ * PLAY_SAMPLE does through svc #9 — and SAMPLE_POS is the SDK's voice-0 cursor.
+ *
+ * A backend with no sample player (the real PiTrex SDK has neither call, and
+ * vpy_cli links libvpy into VPy-pitrex games) gets the WEAK defaults below, which
+ * a backend's own definition replaces at link time: the sample is silent and the
+ * position counts presented frames from the first call, converted to `fps` — the
+ * same thing VPy-pitrex's SAMPLE_POS does with the wall clock, so a recording
+ * still plays at its own speed. Default DEFINITIONS rather than undefined weak
+ * references, because the macOS linker (the SDK's host checks) refuses the latter.
+ * Which backend does what is in vpy.h. */
+__attribute__((weak)) void v_playSampleData(const void *vsmp, int voice, int loop)
+{
+    (void)vsmp; (void)voice; (void)loop;
+}
+
+__attribute__((weak)) int v_samplePos(int fps)
+{
+    static uint32_t first;
+    static int started;
+    if (!started) { started = 1; first = s_frames_presented; }
+    uint32_t n = s_frames_presented - first;   /* frames at the 50 Hz vpy_init sets */
+    return (int)((n / 50u) * (uint32_t)fps + (n % 50u) * (uint32_t)fps / 50u);
+}
+
+void vpy_play_sample(const unsigned char *smp)
+{
+    if (smp) v_playSampleData(smp, 0, 0);
+}
+
+int vpy_sample_pos(int fps)
+{
+    return fps > 0 ? v_samplePos(fps) : 0;
 }
 
 /* ---- compiled levels (.vplay) ------------------------------------------------

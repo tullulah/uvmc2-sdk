@@ -320,6 +320,22 @@ EM_JS(int, js_sample_pos, (int fps), {
 });
 int  v_samplePos(int fps)                       { return js_sample_pos(fps); }
 
+/* A sample by its data (a .vsmp table: u32 rate, u32 count, packed 4-bit). The panel
+ * gets a COPY of the table — the header and ceil(count / 2) bytes — and decodes it
+ * itself (Module.pitrex.playSampleData(bytes, voice, loop)); it is also what feeds
+ * samplePos, since a voice started this way has a known rate and length. Bytes are
+ * read one at a time: the C array need not be word-aligned in the WASM heap. */
+EM_JS(void, js_play_sample_data, (const void *p, int voice, int loop), {
+    if (!(Module.pitrex && Module.pitrex.playSampleData)) return;
+    var n = (HEAPU8[p + 4] | (HEAPU8[p + 5] << 8) | (HEAPU8[p + 6] << 16) | (HEAPU8[p + 7] << 24)) >>> 0;
+    if (n > 0x4000000) return;   /* not a sample table */
+    Module.pitrex.playSampleData(HEAPU8.slice(p, p + 8 + ((n + 1) >>> 1)), voice, loop);
+});
+void v_playSampleData(const void *vsmp, int voice, int loop)
+{
+    if (vsmp) js_play_sample_data(vsmp, voice, loop);
+}
+
 /* ---- FatFs over stdio (emscripten MEMFS) ---- */
 FRESULT f_open(FIL* fp, const char* path, BYTE mode) {
     const char* m = (mode & FA_WRITE) ? "wb" : "rb";

@@ -474,6 +474,26 @@ void v_playSample(int idx, int voice, int loop)
 #endif
 }
 
+/* A sample BY ITS DATA (a .vsmp table linked into the game), not by bundle index:
+ * what libvpy's vpy_play_sample uses, so a C game plays a .vsmp the way VPy's
+ * PLAY_SAMPLE does (svc #9 hands the BIOS the same table).
+ *
+ *   - Vectrex Studio cartridge: the BIOS's player through the table, version >= 2
+ *     as in v_playSample. The game is linked into GAME_RAM, which the BIOS reads.
+ *   - .um2: NOTHING, on purpose. A sample linked into a .um2 image pushes it past the
+ *     loader's line and the console comes up with a solid red LED (uvm2_smp.h, "THE
+ *     SAMPLE BUNDLE"); VPy's PLAY_SAMPLE is a no-op there for the same reason
+ *     (UVM2_TARGET.md). A .um2 game ships its sounds in an SD bundle and plays
+ *     them by index with v_playSample. */
+void v_playSampleData(const void *vsmp, int voice, int loop)
+{
+#ifdef VPY_DUAL_CORE
+    if (vsmp && UVM2_API->version >= 2u) UVM2_API->play_sample(vsmp, (unsigned)voice, loop);
+#else
+    (void)vsmp; (void)voice; (void)loop;
+#endif
+}
+
 void v_stopSample(int voice)
 {
 #ifdef VPY_DUAL_CORE

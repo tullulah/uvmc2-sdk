@@ -176,6 +176,49 @@ void vpy_stop_music(void);                         /* mute channels + stop */
 void vpy_play_sfx(const unsigned char *data);     /* trigger a one-shot SFX (channel C) */
 void vpy_sfx_update(void);                         /* advance one frame (auto-called) */
 
+/* ---- instruments (.vinstr) -----------------------------------------------
+ * `instr` is the 16-byte instrument block compiled from a .vinstr by
+ *   `vpy_cli compile-asset <file>.vinstr --format c --out <name>.h`  ({NAME}_instr)
+ * An instrument is a timbre without a pitch: vpy_play_note gives it one. It sets
+ * the tone period of PSG channel `channel` (0-2 = A-C) for MIDI note `note`
+ * (clamped to 24-107), its volume, and enables that channel's tone. The note
+ * lasts the instrument's duration_frames (0 = held until the next note on the
+ * channel) and steps through its arpeggio. noise and pitch sweep are not played,
+ * as in the VPy runtime. vpy_run() drives vpy_note_update() automatically. */
+void vpy_play_note(const unsigned char *instr, int channel, int note);
+void vpy_note_update(void);                        /* advance one frame (auto-called) */
+
+/* ---- vector recordings (.vrec) -------------------------------------------
+ * `rec` is the recording table compiled from a .vrec by
+ *   `vpy_cli compile-asset <file>.vrec --format c --out <name>.h`  ({NAME}_vrec)
+ * Draws frame `frame % frame_count` at VPy position (x,y), `scale` 128 = 100%,
+ * each chain at its recorded intensity. Every segment of the frame is drawn,
+ * so keep recordings small. The frame is usually vpy_sample_pos(fps) (the
+ * soundtrack's clock) or a counter of your own. */
+void vpy_draw_recording(const unsigned char *rec, int x, int y, int scale, int frame);
+int  vpy_recording_frames(const unsigned char *rec);   /* frame_count (0 if empty) */
+
+/* ---- digitised samples (.vsmp) -------------------------------------------
+ * `smp` is the 4-bit sample compiled from a .vsmp by
+ *   `vpy_cli compile-asset <file>.vsmp --format c --out <name>.h`  ({NAME}_smp)
+ * vpy_play_sample starts it once on sample voice 0 (re-calling restarts it);
+ * vpy_sample_pos(fps) is how far that voice has played, as a frame number at
+ * `fps` — 0 when nothing is playing. Pass it to vpy_draw_recording and the
+ * picture follows the audio instead of drifting from it.
+ *
+ * Where it sounds (the same as VPy's PLAY_SAMPLE / SAMPLE_POS):
+ *   simulator         Web Audio, the cursor from the audio clock
+ *   rp2350 cartridge  the BIOS sample player (PSG volume DAC); needs a BIOS with
+ *                     table version >= 2, silent on an older one
+ *   uvm2 (.um2)       silent, and vpy_sample_pos stays 0: a .um2 cannot hold a
+ *                     sample in its image (UVM2_TARGET.md). Ports ship theirs in
+ *                     an SD bundle and play them with v_playSample(index, …).
+ *   no sample player  (the real PiTrex SDK) silent; vpy_sample_pos counts the
+ *                     frames presented since its first call, converted to `fps`,
+ *                     so a recording still plays at its own speed. */
+void vpy_play_sample(const unsigned char *smp);
+int  vpy_sample_pos(int fps);
+
 /* ---- compiled levels (.vplay) --------------------------------------------
  * `level` is a level byte image compiled from a .vplay by
  *   `vpy_cli compile-asset <file>.vplay --format c --out <name>.h`
@@ -254,6 +297,10 @@ void vpy_enemy_fire_event_str(int idx, const char *event);
 #define PLAY_MUSIC      vpy_play_music
 #define STOP_MUSIC      vpy_stop_music
 #define PLAY_SFX        vpy_play_sfx
+#define PLAY_NOTE       vpy_play_note
+#define DRAW_RECORDING  vpy_draw_recording
+#define PLAY_SAMPLE     vpy_play_sample
+#define SAMPLE_POS      vpy_sample_pos
 #define LOAD_LEVEL      vpy_load_level
 #define SHOW_LEVEL      vpy_show_level
 #define UPDATE_LEVEL    vpy_update_level

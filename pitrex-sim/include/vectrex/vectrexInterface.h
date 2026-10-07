@@ -79,6 +79,13 @@ void     v_playSample(int idx, int voice, int loop);
 void     v_stopSample(int voice);
 int      v_samplePlaying(int voice);
 int      v_samplePos(int fps);         /* voice 0's cursor as frames at `fps` (0 if unknown) */
+/* A sample given BY ITS DATA rather than by bank index: `vsmp` is a .vsmp table
+ * (u32 sample rate, u32 sample count, packed 4-bit samples, low nibble first —
+ * `vpy_cli compile-asset <file>.vsmp --format c`), word-aligned. What libvpy's
+ * vpy_play_sample uses. Re-triggering a voice restarts it; v_stopSample /
+ * v_samplePlaying / v_samplePos address it by `voice` like any other.
+ * On the .um2 it is a no-op: a sample does not fit in that image (uvm2_smp.h). */
+void     v_playSampleData(const void *vsmp, int voice, int loop);
 
 #ifdef __cplusplus
 }
