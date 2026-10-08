@@ -1517,6 +1517,73 @@ int vpy3d_text(const char *s, const vpy_xf *place, int32_t height, int br, int f
     return n;
 }
 
+/* ── a vector sprite in the world ───────────────────────────────────────────────
+ * The stream is walked exactly as vpy.c's draw_vec_stream walks it (a u16 path
+ * count; per path its intensity, start y, start x and two padding bytes, then 0xFF
+ * dy dx line steps and 0xFE cubic Beziers in absolute sprite units, 0x02 to end),
+ * each point carried onto the plane instead of the screen. */
+static void vec_point(const vpy_xf *place, int32_t scale, int32_t sx, int32_t sy, int32_t out[3])
+{
+    const int64_t lx = (int64_t)sx * scale, ly = (int64_t)sy * scale;
+    for (int r = 0; r < 3; r++)
+        out[r] = place->t[r] + (int32_t)(((int64_t)place->m[r * 3] * lx + (int64_t)place->m[r * 3 + 1] * ly) >> 14);
+}
+
+int vpy3d_draw_vec(const unsigned char *vec, const vpy_xf *place, int32_t scale, int br, int flags)
+{
+    if (!vec || !place || scale <= 0) return 0;
+    if (flags & VPY3D_TEXT_FRONT) {
+        int32_t eye[3]; vpy3d_eye(eye);
+        const int64_t nz = (int64_t)place->m[2] * (eye[0] - place->t[0]) + (int64_t)place->m[5] * (eye[1] - place->t[1])
+                         + (int64_t)place->m[8] * (eye[2] - place->t[2]);
+        if (nz >= 0) return 0;
+    }
+    const int occ = flags & VPY3D_TEXT_OCCLUDE;
+    const int paths = (int)vec[0] | ((int)vec[1] << 8);
+    const unsigned char *p = vec + 2;
+    int n = 0;
+    for (int k = 0; k < paths; k++) {
+        const int b = br > 0 ? br : p[0];
+        int32_t cx = (int8_t)p[2], cy = (int8_t)p[1];   /* the path starts here */
+        p += 5;
+        int32_t a[3], c[3];
+        vec_point(place, scale, cx, cy, a);
+        for (;;) {
+            const unsigned char marker = *p++;
+            if (marker == 0x02) break;
+            if (marker == 0xFE) {                  /* a cubic Bezier: absolute control points */
+                const int32_t P0x = (int8_t)p[0], P0y = (int8_t)p[1], P1x = (int8_t)p[2], P1y = (int8_t)p[3];
+                const int32_t P2x = (int8_t)p[4], P2y = (int8_t)p[5], P3x = (int8_t)p[6], P3y = (int8_t)p[7];
+                p += 8;
+                vec_point(place, scale, P0x, P0y, a);
+                for (int t = 1; t <= 8; t++) {
+                    const int32_t abx = P0x + (P1x - P0x) * t / 8, aby = P0y + (P1y - P0y) * t / 8;
+                    const int32_t bcx = P1x + (P2x - P1x) * t / 8, bcy = P1y + (P2y - P1y) * t / 8;
+                    const int32_t cdx = P2x + (P3x - P2x) * t / 8, cdy = P2y + (P3y - P2y) * t / 8;
+                    const int32_t ux = abx + (bcx - abx) * t / 8, uy = aby + (bcy - aby) * t / 8;
+                    const int32_t vx = bcx + (cdx - bcx) * t / 8, vy = bcy + (cdy - bcy) * t / 8;
+                    cx = ux + (vx - ux) * t / 8; cy = uy + (vy - uy) * t / 8;
+                    vec_point(place, scale, cx, cy, c);
+                    if (occ) vpy3d_occl_line(a[0], a[1], a[2], c[0], c[1], c[2], b);
+                    else     vpy3d_line_world(a[0], a[1], a[2], c[0], c[1], c[2], b);
+                    a[0] = c[0]; a[1] = c[1]; a[2] = c[2];
+                    n++;
+                }
+                continue;
+            }
+            cy += (int8_t)p[0];                    /* a line: dy, dx */
+            cx += (int8_t)p[1];
+            p += 2;
+            vec_point(place, scale, cx, cy, c);
+            if (occ) vpy3d_occl_line(a[0], a[1], a[2], c[0], c[1], c[2], b);
+            else     vpy3d_line_world(a[0], a[1], a[2], c[0], c[1], c[2], b);
+            a[0] = c[0]; a[1] = c[1]; a[2] = c[2];
+            n++;
+        }
+    }
+    return n;
+}
+
 int vpy3d_text_billboard(const char *s, int32_t x, int32_t y, int32_t z, int32_t height, int br, int flags)
 {
     /* the camera's own axes, turned back into the world: the rows of world→camera
