@@ -1545,6 +1545,7 @@ int vpy3d_draw_vec(const unsigned char *vec, const vpy_xf *place, int32_t scale,
     for (int k = 0; k < paths; k++) {
         const int b = br > 0 ? br : p[0];
         int32_t cx = (int8_t)p[2], cy = (int8_t)p[1];   /* the path starts here */
+        vpy_beam_rezero();                              /* each path from zero */
         p += 5;
         int32_t a[3], c[3];
         vec_point(place, scale, cx, cy, a);

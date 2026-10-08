@@ -64,6 +64,10 @@ typedef struct {
  * 127). For code that computes its own geometry and would lose it to the
  * +-127 logical grid — a 3D projection, a camera pan. */
 void vpy_draw_line_dev(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int br);
+/* Re-zero the beam before the next stroke drawn (carried on that stroke, so it
+ * happens in frame order at flush time). One per shape keeps a big multi-path
+ * sprite from drifting apart on real hardware. No-op in the simulator. */
+void vpy_beam_rezero(void);
 
 void vpy_wait_recal(void);           /* flush, then v_WaitRecal: the frame boundary */
 void vpy_flush(void);                /* send the accumulated frame, empty the buffer */

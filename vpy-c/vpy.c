@@ -37,13 +37,23 @@
 
 typedef struct {
     int16_t x0, y0, x1, y1;
-    uint8_t br;    /* 0..127 */
+    uint8_t br;    /* 0..127; bit 7 = re-zero the beam before this stroke */
     uint8_t pri;   /* shed order: 0 goes first, 255 is kept */
 } vpy_stroke_t;
 
 static vpy_stroke_t     s_sb[VPY_SB_MAX];
 static int              s_nsb;
 static uint8_t          s_pri = VPY_PRI_NORMAL;
+static uint8_t          s_zero_next;   /* next stroke starts from a fresh zero */
+#ifdef VPY_RP2350
+extern void v_beamNewStroke(void);
+#endif
+
+/* Ask for a beam re-zero before the NEXT stroke. It has to ride on the stroke:
+ * strokes only reach the beam in vpy_flush(), so calling v_beamNewStroke() at
+ * draw time put every re-zero of the frame at its start, and the shapes after
+ * it drifted off the integrators (a multi-path sprite came out broken apart). */
+void vpy_beam_rezero(void) { s_zero_next = 1; }
 static vpy_draw_stats_t s_stats;
 
 /* Lowest-priority slot strictly below `want`, or -1 if the buffer is all at
@@ -81,7 +91,8 @@ static void sb_push_dev(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int br)
     vpy_stroke_t *t = &s_sb[slot];
     t->x0 = sb_clamp(x0); t->y0 = sb_clamp(y0);
     t->x1 = sb_clamp(x1); t->y1 = sb_clamp(y1);
-    t->br = (uint8_t)br;
+    t->br = (uint8_t)br | (s_zero_next ? 0x80 : 0);
+    s_zero_next = 0;
     t->pri = s_pri;
 }
 
@@ -105,7 +116,10 @@ void vpy_flush(void)
 {
     for (int i = 0; i < s_nsb; i++) {
         const vpy_stroke_t *t = &s_sb[i];
-        v_directDraw32(t->x0, t->y0, t->x1, t->y1, t->br);
+#ifdef VPY_RP2350
+        if (t->br & 0x80) v_beamNewStroke();
+#endif
+        v_directDraw32(t->x0, t->y0, t->x1, t->y1, t->br & 0x7F);
     }
     s_stats.strokes = (uint32_t)s_nsb;
     if (s_stats.strokes > s_stats.peak) s_stats.peak = s_stats.strokes;
@@ -124,7 +138,7 @@ int vpy_peek_stroke(int i, int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1, i
     const vpy_stroke_t *t = &s_sb[i];
     if (x0) *x0 = t->x0;  if (y0) *y0 = t->y0;
     if (x1) *x1 = t->x1;  if (y1) *y1 = t->y1;
-    if (br) *br = t->br;
+    if (br) *br = t->br & 0x7F;
     return 1;
 }
 
@@ -273,13 +287,10 @@ void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b)
  * and each line adds its delta; bezier control points are sprite-origin
  * relative. Coordinates scale by VPY_SCALE (via raw_line), exactly like the ARM
  * path (which multiplies by 127). */
-#ifdef VPY_RP2350
-/* Per-path beam re-zero (RP2350 backend). Without it, chaining every path of
+/* Per-path beam re-zero (vpy_beam_rezero). Without it, chaining every path of
  * every shape with only relative moves lets integrator drift carry across shape
  * boundaries → each .vec wobbles as a block. Re-zeroing per path mirrors the
  * native ARM backend and kills the cross-shape drift. */
-extern void v_beamNewStroke(void);
-#endif
 
 static void draw_vec_stream(const unsigned char *data, int ox, int oy,
                             int mirror, int override_b)
@@ -290,7 +301,7 @@ static void draw_vec_stream(const unsigned char *data, int ox, int oy,
 
     for (int pi = 0; pi < path_count; pi++) {
 #ifdef VPY_RP2350
-        v_beamNewStroke();   /* fresh zero-ref per path — no cross-shape drift */
+        vpy_beam_rezero();   /* fresh zero-ref per path — no cross-shape drift */
 #endif
         int intensity = p[0];
         int y0 = (int8_t)p[1];
