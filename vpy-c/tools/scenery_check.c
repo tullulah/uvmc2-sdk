@@ -16,10 +16,12 @@
 
 uint8_t currentButtonState; int8_t currentJoy1X, currentJoy1Y;
 static int NS, MAXBR;
+static int32_t (*SAVE)[5];                      /* when set, the strokes are kept here */
 void vectrexinit(int m) { (void)m; } void v_init(void) {} void v_setRefresh(int h) { (void)h; }
 void v_WaitRecal(void) {}
 void v_directDraw32(int32_t a, int32_t b, int32_t c, int32_t d, uint8_t e)
-{ (void)a; (void)b; (void)c; (void)d; NS++; if (e > MAXBR) MAXBR = e; }
+{ if (SAVE && NS < 64) { SAVE[NS][0] = a; SAVE[NS][1] = b; SAVE[NS][2] = c; SAVE[NS][3] = d; SAVE[NS][4] = e; }
+  NS++; if (e > MAXBR) MAXBR = e; }
 void v_setColour(uint32_t r) { (void)r; } uint8_t v_readButtons(void) { return 0; }
 void v_readJoystick1Analog(void) {} uint32_t v_millis(void) { return 0; }
 void v_setSoundAY(uint8_t r, uint8_t v) { (void)r; (void)v; } void v_writePSG(uint8_t r, uint8_t v) { (void)r; (void)v; }
@@ -146,6 +148,30 @@ int main(void)
         u16(1); u8(2); u8(100); u8(0); pt(-500, 0, 0); pt(500, 0, 0);
         u16(0);
         CHECK(vpy3d_load_mesh(&a, img) && a.scenery, "with the pools full, scenery still loads (error %d)", vpy3d_error());
+    }
+
+    /* 8. short points (i16, flags bit2 / occluder count | 0x80) draw as the long ones */
+    {
+        static int32_t A[64][5];
+        vpy_mesh lo, sh;
+        header(2, 0, 0, 0);
+        u16(1); u8(3); u8(80); u8(1); pt(-500, 0, 300); pt(0, 300, 300); pt(500, 0, 300);
+        u16(1); wall(800, 0);
+        vpy3d_load_mesh(&lo, img);
+        header(2, 0, 0, 0);
+        u16(1); u8(3); u8(80); u8(1 | 4);
+        u16(-500); u16(0); u16(300); u16(0); u16(300); u16(300); u16(500); u16(0); u16(300);
+        u16(1); u8(4 | 0x80);
+        u16(-800); u16(-800); u16(0); u16(800); u16(-800); u16(0); u16(800); u16(800); u16(0); u16(-800); u16(800); u16(0);
+        CHECK(vpy3d_load_mesh(&sh, img), "a short-point image loads (error %d)", vpy3d_error());
+        int na, nb;
+        vpy3d_occl_reset(); NS = 0; SAVE = A; vpy3d_draw_mesh(&lo, &here, 100);
+        vpy3d_draw_mesh(&b, &behind, 100); na = strokes();
+        static int32_t B[64][5];
+        vpy3d_occl_reset(); NS = 0; SAVE = B; vpy3d_draw_mesh(&sh, &here, 100);
+        vpy3d_draw_mesh(&b, &behind, 100); nb = strokes();
+        SAVE = 0;
+        CHECK(na == 3 && nb == na && !memcmp(A, B, sizeof(A[0]) * na), "it draws and occludes as the long one (%d / %d strokes)", na, nb);
     }
 
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);

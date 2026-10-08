@@ -304,6 +304,52 @@ typedef enum {
 } vpy3d_error_t;
 vpy3d_error_t vpy3d_error(void);
 
+/* ---- SCENES (.vscene) --------------------------------------------------------
+ * A set put together from .vmesh pieces: where each stands, how it moves as the
+ * player travels, how often it repeats, which pieces the game switches on and
+ * off (the format is in vsceneres.rs and docs/ASSETS.md). The game passes ONE
+ * position a frame, `pos`: how far it has gone along x, y and z (a tunnel's
+ * distance flown, a turret's pan); each piece moves by its own `follow` of it.
+ *
+ *   #include "tunnel.h"                     (vpy_cli compile-asset tunnel.vscene)
+ *   static vpy_scene tunnel;
+ *   vpy3d_load_scene(&tunnel, TUNNEL_vscene, TUNNEL_vscene_meshes);   at start-up
+ *   int32_t pos[3] = { 0, 0, dist };
+ *   vpy3d_draw_scene(&tunnel, 0, pos, 0, 90);                         each frame
+ *
+ * vpy3d_draw_scene draws the items in the order the file lists them, each
+ * through vpy3d_draw_mesh: a piece's lines go through the occluders added so
+ * far, then its occluders go in. `place` (0 = where it stands) puts the whole
+ * scene in the world, after the pieces have moved. `groups`: bit n switches on
+ * the items of the scene's group n (and off its "!name" items). The scene's fog,
+ * if it has one, is in force for its pieces only (per line segment, or per copy
+ * for an item with "fog": "whole"); the game's own vpy3d_set_scenery_fog is back
+ * afterwards.
+ *
+ * Loading a scene checks its image and its meshes. A scenery-only mesh (lines
+ * and occluders, no faces) costs no RAM at all: it is read in place from ROM at
+ * every draw, like the scene. A mesh WITH faces is built once into the pools, as
+ * vpy3d_load_mesh, and kept in one of VPY3D_SCENE_SOLIDS slots shared by every
+ * scene; the same image loaded again (another scene, a reload) reuses its slot.
+ * Load scenes with solid pieces at start-up, before any vpy3d_pool_mark: a pool
+ * release would take their geometry away. Returns 0 if the image is bad, a mesh
+ * does not load or the slots are full (VPY3D_ERR_POOL: raise
+ * VPY3D_SCENE_SOLIDS); vpy3d_error() says which. */
+#ifndef VPY3D_SCENE_MESHES
+#define VPY3D_SCENE_MESHES 16      /* meshes per scene: the compiler refuses more */
+#endif
+#ifndef VPY3D_SCENE_SOLIDS
+#define VPY3D_SCENE_SOLIDS 8       /* meshes with faces, across all scenes */
+#endif
+typedef struct {
+    const unsigned char *data;               /* the image; 0 = not loaded (draws nothing) */
+    const unsigned char *const *meshes;      /* the header's mesh table, in ROM */
+    uint8_t slot[VPY3D_SCENE_MESHES];        /* a solid's slot; 255 = scenery only */
+} vpy_scene;
+
+int  vpy3d_load_scene(vpy_scene *s, const unsigned char *data, const unsigned char *const *meshes);
+void vpy3d_draw_scene(const vpy_scene *s, const vpy_xf *place, const int32_t pos[3], uint32_t groups, int br);
+
 /* ---- ONE SOLID HIDING ANOTHER -----------------------------------------------
  * Everything above removes hidden lines WITHIN a mesh. It knows nothing about a
  * second mesh in front of the first, and with no depth buffer that means the

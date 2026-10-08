@@ -734,12 +734,13 @@ static int32_t rds32(const unsigned char *p)
     return (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
 }
 
-/* A scenery point (i32 x, y, z in the image) through `x` (Q14 rotation + translation).
- * 64-bit: a room's coordinates run to a million and a Q14 product of that does
- * not fit in 32 bits. */
-static void scenery_point(const vpy_xf *x, const unsigned char *p, int32_t out[3])
+/* A scenery point (x, y, z in the image: i16 each when `sh`, else i32) through `x`
+ * (Q14 rotation + translation). 64-bit: a room's coordinates run to a million and a
+ * Q14 product of that does not fit in 32 bits. */
+static int16_t rds16(const unsigned char *p);
+static void scenery_point(const vpy_xf *x, const unsigned char *p, int sh, int32_t out[3])
 {
-    const int64_t v[3] = { rds32(p), rds32(p + 4), rds32(p + 8) };
+    const int64_t v[3] = { sh ? rds16(p) : rds32(p), sh ? rds16(p + 2) : rds32(p + 4), sh ? rds16(p + 4) : rds32(p + 8) };
     for (int r = 0; r < 3; r++)
         out[r] = (int32_t)((x->m[r*3+0] * v[0] + x->m[r*3+1] * v[1] + x->m[r*3+2] * v[2]) >> 14) + x->t[r];
 }
@@ -750,14 +751,15 @@ static void draw_scenery(const vpy_mesh *m, const vpy_xf *place, int br)
     const unsigned char *d = m->scenery;
     unsigned nl = rd16(d); d += 2;
     for (unsigned l = 0; l < nl; l++) {
-        unsigned n = d[0], pct = d[1], closed = d[2] & 1, fog = !(d[2] & 2);
+        unsigned n = d[0], pct = d[1], closed = d[2] & 1, fog = !(d[2] & 2), sh = (d[2] & 4) != 0;
+        const unsigned ps = sh ? 6 : 12;            /* bytes a point */
         d += 3;
         const int lbr = br * (int)pct / 100;
         int32_t first[3], a[3], b[3];
-        scenery_point(&mv, d, first);
+        scenery_point(&mv, d, sh, first);
         a[0] = first[0]; a[1] = first[1]; a[2] = first[2];
         for (unsigned k = 1; k <= n - 1 + closed; k++) {
-            if (k < n) scenery_point(&mv, d + k * 12, b);
+            if (k < n) scenery_point(&mv, d + k * ps, sh, b);
             else { b[0] = first[0]; b[1] = first[1]; b[2] = first[2]; }
             int sb = lbr;
             if (s_sfog_gone && fog) {               /* faded by the depth of its middle */
@@ -770,15 +772,16 @@ static void draw_scenery(const vpy_mesh *m, const vpy_xf *place, int br)
             if (sb > 0) vpy3d_occl_line_cam(a, b, sb > 127 ? 127 : sb);
             a[0] = b[0]; a[1] = b[1]; a[2] = b[2];
         }
-        d += n * 12;
+        d += n * ps;
     }
     unsigned no = rd16(d); d += 2;
     for (unsigned o = 0; o < no; o++) {
-        unsigned n = *d++;
+        const unsigned n = *d & 0x7f, sh = (*d & 0x80) != 0, ps = sh ? 6 : 12;
+        d++;
         int32_t c[8][3];
-        for (unsigned k = 0; k < n; k++) scenery_point(place, d + k * 12, c[k]);   /* world space */
+        for (unsigned k = 0; k < n; k++) scenery_point(place, d + k * ps, sh, c[k]);   /* world space */
         vpy3d_occl_add((const int32_t (*)[3])c, (int)n);
-        d += n * 12;
+        d += n * ps;
     }
 }
 
@@ -913,7 +916,7 @@ static int16_t  rds16(const unsigned char *p) { return (int16_t)rd16(p); }
 static const unsigned char *scenery_occluders(const unsigned char *q)
 {
     unsigned nl = rd16(q); q += 2;
-    for (unsigned l = 0; l < nl; l++) q += 3 + q[0] * 12;
+    for (unsigned l = 0; l < nl; l++) q += 3 + q[0] * ((q[2] & 4) ? 6 : 12);
     return q;
 }
 
@@ -925,12 +928,13 @@ static const unsigned char *scenery_checked(const unsigned char *s)
     unsigned nl = rd16(q); q += 2;
     for (unsigned l = 0; l < nl; l++) {
         if (q[0] < 2 || q[1] < 1 || q[1] > 100) return 0;
-        q += 3 + q[0] * 12;
+        q += 3 + q[0] * ((q[2] & 4) ? 6 : 12);
     }
     unsigned no = rd16(q); q += 2;
     for (unsigned o = 0; o < no; o++) {
-        if (q[0] < 3 || q[0] > 8) return 0;
-        q += 1 + q[0] * 12;
+        const unsigned n = q[0] & 0x7f;
+        if (n < 3 || n > 8) return 0;
+        q += 1 + n * ((q[0] & 0x80) ? 6 : 12);
     }
     return s;
 }
@@ -1713,4 +1717,131 @@ int vpy3d_text_billboard(const char *s, int32_t x, int32_t y, int32_t z, int32_t
     for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) at.m[r * 3 + k] = c->m[k * 3 + r];
     at.t[0] = x; at.t[1] = y; at.t[2] = z;
     return vpy3d_text(s, &at, height, br, flags & ~VPY3D_TEXT_FRONT);
+}
+
+/* ── scenes (.vscene) ───────────────────────────────────────────────────────
+ * The layout is in vsceneres.rs. Each item: flags, group, br %, axis, at[3],
+ * follow[3] (Q16), step, count, window min/max, then its mesh indices. */
+#define SCENE_HEAD 16
+#define SCENE_ITEM 42                 /* an item before its mesh indices */
+
+/* the solid pieces of every scene: a mesh with faces needs its geometry built */
+static vpy_mesh s_solid[VPY3D_SCENE_SOLIDS];
+static const unsigned char *s_solid_img[VPY3D_SCENE_SOLIDS];
+static unsigned s_nsolid;
+
+int vpy3d_load_scene(vpy_scene *s, const unsigned char *d, const unsigned char *const *meshes)
+{
+    s_err = VPY3D_OK;
+    if (d[0] != 'V' || d[1] != 'S' || d[2] != 'C' || d[3] != 'N') { s_err = VPY3D_ERR_MAGIC; return 0; }
+    if (d[4] != 1) { s_err = VPY3D_ERR_VERSION; return 0; }
+    const unsigned nm = d[5], ni = rd16(d + 6);
+    if (nm == 0 || nm > VPY3D_SCENE_MESHES || !meshes) { s_err = VPY3D_ERR_DATA; return 0; }
+    /* every item is checked here so the draw can walk them without asking again */
+    const unsigned char *q = d + SCENE_HEAD;
+    for (unsigned i = 0; i < ni; i++) {
+        const unsigned flags = q[0], group = q[1], pct = q[2], axis = q[3];
+        const unsigned n = q[SCENE_ITEM - 1];
+        if (pct < 1 || pct > 100 || axis > 2 || (group != 255 && group > 31) || q[32] == 0 || n == 0) {
+            s_err = VPY3D_ERR_DATA; return 0;
+        }
+        if ((flags & 1) && rds32(q + 28) <= 0) { s_err = VPY3D_ERR_DATA; return 0; }
+        for (unsigned k = 0; k < n; k++)
+            if (q[SCENE_ITEM + k] >= nm) { s_err = VPY3D_ERR_DATA; return 0; }
+        q += SCENE_ITEM + n;
+    }
+    /* the meshes: scenery only is checked and read in place later; a solid takes a slot,
+       claimed for good only when the whole scene has loaded */
+    vpy_scene t;
+    unsigned claimed = s_nsolid;
+    for (unsigned k = 0; k < nm; k++) {
+        const unsigned char *m = meshes[k];
+        vpy_mesh tmp;
+        if (!m) { s_err = VPY3D_ERR_DATA; return 0; }
+        if (m[0] != 'V' || m[1] != 'M' || m[2] != 'S' || m[3] != 'H') { s_err = VPY3D_ERR_MAGIC; return 0; }
+        if (m[4] == 2 && !rd16(m + 8) && !rd16(m + 10)) {
+            if (!vpy3d_load_mesh(&tmp, m)) return 0;         /* checks it; builds nothing */
+            t.slot[k] = 255;
+            continue;
+        }
+        unsigned j = 0;
+        while (j < claimed && s_solid_img[j] != m) j++;
+        if (j == claimed) {
+            if (claimed >= VPY3D_SCENE_SOLIDS) { s_err = VPY3D_ERR_POOL; return 0; }
+            if (!vpy3d_load_mesh(&s_solid[j], m)) return 0;
+            s_solid_img[j] = m;
+            claimed++;
+        }
+        t.slot[k] = (uint8_t)j;
+    }
+    s_nsolid = claimed;
+    t.meshes = meshes;
+    t.data = d;
+    *s = t;
+    return 1;
+}
+
+/* floor(a / b) for b > 0, whatever a's sign: the copies must wrap the same way
+ * on both sides of the origin */
+static int64_t floor_div(int64_t a, int64_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+void vpy3d_draw_scene(const vpy_scene *s, const vpy_xf *place, const int32_t pos[3], uint32_t groups, int br)
+{
+    if (!s->data) return;
+    const unsigned char *d = s->data;
+    const unsigned ni = rd16(d + 6);
+    const int32_t full = rds32(d + 8), gone = rds32(d + 12);
+    const int32_t keep_full = s_sfog_full, keep_gone = s_sfog_gone;
+    static const int32_t zero[3] = { 0, 0, 0 };
+    if (!pos) pos = zero;
+    const vpy_xf id = vpy3d_identity();
+    if (!place) place = &id;
+
+    const unsigned char *q = d + SCENE_HEAD;
+    for (unsigned i = 0; i < ni; i++) {
+        const unsigned flags = q[0], group = q[1], axis = q[3];
+        const unsigned nmesh = q[SCENE_ITEM - 1];
+        const unsigned char *idx = q + SCENE_ITEM;
+        const unsigned char *it = q;
+        q += SCENE_ITEM + nmesh;
+        if (group != 255 && !((groups >> group) & 1) != !!(flags & 8)) continue;
+
+        int64_t p[3];
+        for (int a = 0; a < 3; a++)
+            p[a] = rds32(it + 4 + a * 4) + (((int64_t)rds32(it + 16 + a * 4) * pos[a]) >> 16);
+        const int32_t step = rds32(it + 28);
+        const unsigned count = it[32];
+        const int32_t wmin = rds32(it + 33), wmax = rds32(it + 37);
+        /* a repeat: the first copy within one step past `at`, numbered along the whole run */
+        int64_t n0 = 0;
+        if (flags & 1) {
+            const int64_t moved = p[axis] - rds32(it + 4 + axis * 4);
+            n0 = floor_div(-moved, step);
+            p[axis] += n0 * step;
+        }
+        const int whole = (flags & 16) && gone;   /* each copy faded as one, by its origin */
+        s_sfog_full = full;
+        s_sfog_gone = (flags & (2 | 16)) ? 0 : gone;
+        const int pbr = br * (int)it[2] / 100;
+        for (unsigned k = 0; k < count; k++, p[axis] += step) {
+            vpy_xf at = *place;              /* place, after a move to p */
+            for (int r = 0; r < 3; r++)
+                at.t[r] = place->t[r] + (int32_t)((place->m[r*3+0] * p[0] + place->m[r*3+1] * p[1] + place->m[r*3+2] * p[2]) >> 14);
+            if ((flags & 4) && (at.t[2] < wmin || at.t[2] > wmax)) continue;   /* its z in the world */
+            const int64_t n = n0 + k;
+            const unsigned mi = idx[nmesh > 1 ? (unsigned)(n - floor_div(n, nmesh) * nmesh) : 0];
+            vpy_mesh lines;                  /* scenery only: a mesh of nothing but its tables, in ROM */
+            const vpy_mesh *m = &lines;
+            if (s->slot[mi] != 255) m = &s_solid[s->slot[mi]];
+            else { memset(&lines, 0, sizeof lines); lines.scenery = s->meshes[mi] + 16; }
+            int cbr = pbr;
+            if (whole) {
+                cbr = vpy3d_fog(pbr, at.t[0], at.t[1], at.t[2], full, gone);
+                if (cbr < 4) continue;               /* too dim to see, still costs the beam */
+            }
+            vpy3d_draw_mesh(m, &at, cbr);
+        }
+    }
+    s_sfog_full = keep_full;
+    s_sfog_gone = keep_gone;
 }
