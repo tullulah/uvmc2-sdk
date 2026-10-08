@@ -10,6 +10,7 @@
  *   and the flush with the rest of the game.
  */
 #include "vpy3d.h"
+#include <string.h>
 
 /* ── pools, shared by every mesh ─────────────────────────────────────────── */
 typedef struct {
@@ -42,6 +43,7 @@ static uint8_t  RU[VPY3D_POOL_E];            /* already emitted */
 static int      s_chain = 1;                 /* follow connectivity when emitting */
 static int      s_wire;                      /* draw hidden edges too: see the header */
 static int      s_mesh_occl;                 /* meshes go through the occluder: see the header */
+static int32_t  s_sfog_full, s_sfog_gone;    /* scenery fog; gone_at 0 = off */
 
 /* ── camera and lens ─────────────────────────────────────────────────────── */
 static vpy_xf  s_cam;
@@ -407,6 +409,7 @@ int vpy3d_mesh_begin(vpy_mesh *m)
     m->f0 = (uint16_t)nPF; m->nf = 0;
     m->e0 = (uint16_t)nPE; m->ne = 0;
     m->open = 0;
+    m->scenery = 0;
     s_build_overflow = s_stats.overflow;
     /* full already: nothing can be built. Said here, as the header always promised
      * (it returned 1 regardless, and the build went on to fail piece by piece) */
@@ -656,6 +659,7 @@ int vpy3d_mesh_copy(vpy_mesh *dst, const vpy_mesh *src)
     for (int e = 0; e < src->ne; e++) PE[dst->e0 + e] = PE[src->e0 + e];
     dst->open = src->open;
     dst->hard_cos = src->hard_cos;
+    dst->scenery = src->scenery;
     return 1;
 }
 
@@ -709,7 +713,76 @@ void vpy3d_world_to_model(const vpy_xf *place, int32_t wx, int32_t wy, int32_t w
 }
 
 /* ── drawing a mesh ──────────────────────────────────────────────────────── */
+static void draw_scenery(const vpy_mesh *m, const vpy_xf *place, int br);
+static uint16_t rd16(const unsigned char *p);
+static void draw_surface(const vpy_mesh *m, const vpy_xf *place, int br);
+
 void vpy3d_draw_mesh(const vpy_mesh *m, const vpy_xf *place, int br)
+{
+    if (m->nf) draw_surface(m, place, br);
+    if (m->scenery) draw_scenery(m, place, br);
+}
+
+void vpy3d_set_scenery_fog(int32_t full_until, int32_t gone_at)
+{
+    s_sfog_full = full_until;
+    s_sfog_gone = gone_at > full_until ? gone_at : 0;
+}
+
+static int32_t rds32(const unsigned char *p)
+{
+    return (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+}
+
+/* A scenery point (i32 x, y, z in the image) through `x` (Q14 rotation + translation).
+ * 64-bit: a room's coordinates run to a million and a Q14 product of that does
+ * not fit in 32 bits. */
+static void scenery_point(const vpy_xf *x, const unsigned char *p, int32_t out[3])
+{
+    const int64_t v[3] = { rds32(p), rds32(p + 4), rds32(p + 8) };
+    for (int r = 0; r < 3; r++)
+        out[r] = (int32_t)((x->m[r*3+0] * v[0] + x->m[r*3+1] * v[1] + x->m[r*3+2] * v[2]) >> 14) + x->t[r];
+}
+
+static void draw_scenery(const vpy_mesh *m, const vpy_xf *place, int br)
+{
+    const vpy_xf mv = vpy3d_mul(vpy3d_camera(), place);   /* model -> camera */
+    const unsigned char *d = m->scenery;
+    unsigned nl = rd16(d); d += 2;
+    for (unsigned l = 0; l < nl; l++) {
+        unsigned n = d[0], pct = d[1], closed = d[2] & 1, fog = !(d[2] & 2);
+        d += 3;
+        const int lbr = br * (int)pct / 100;
+        int32_t first[3], a[3], b[3];
+        scenery_point(&mv, d, first);
+        a[0] = first[0]; a[1] = first[1]; a[2] = first[2];
+        for (unsigned k = 1; k <= n - 1 + closed; k++) {
+            if (k < n) scenery_point(&mv, d + k * 12, b);
+            else { b[0] = first[0]; b[1] = first[1]; b[2] = first[2]; }
+            int sb = lbr;
+            if (s_sfog_gone && fog) {               /* faded by the depth of its middle */
+                const int32_t z = (int32_t)(((int64_t)a[2] + b[2]) / 2);
+                if (z >= s_sfog_gone) sb = 0;
+                else if (z > s_sfog_full)
+                    sb = (int)((int64_t)lbr * (s_sfog_gone - z) / (s_sfog_gone - s_sfog_full));
+                if (sb < 4) sb = 0;                 /* too dim to see, still costs the beam */
+            }
+            if (sb > 0) vpy3d_occl_line_cam(a, b, sb > 127 ? 127 : sb);
+            a[0] = b[0]; a[1] = b[1]; a[2] = b[2];
+        }
+        d += n * 12;
+    }
+    unsigned no = rd16(d); d += 2;
+    for (unsigned o = 0; o < no; o++) {
+        unsigned n = *d++;
+        int32_t c[8][3];
+        for (unsigned k = 0; k < n; k++) scenery_point(place, d + k * 12, c[k]);   /* world space */
+        vpy3d_occl_add((const int32_t (*)[3])c, (int)n);
+        d += n * 12;
+    }
+}
+
+static void draw_surface(const vpy_mesh *m, const vpy_xf *place, int br)
 {
     if (m->nv > VPY3D_MESH_MAXV || m->nf > VPY3D_MESH_MAXF) { s_stats.overflow++; return; }
     const vpy_xf *cam = vpy3d_camera();
@@ -836,19 +909,59 @@ vpy3d_error_t vpy3d_error(void) { return s_err; }
 static uint16_t rd16(const unsigned char *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static int16_t  rds16(const unsigned char *p) { return (int16_t)rd16(p); }
 
+/* Past a version-2 image's lines: where its occluder count sits. */
+static const unsigned char *scenery_occluders(const unsigned char *q)
+{
+    unsigned nl = rd16(q); q += 2;
+    for (unsigned l = 0; l < nl; l++) q += 3 + q[0] * 12;
+    return q;
+}
+
+/* The scenery tables after the faces, checked once here so the draw can walk them
+ * without asking again; 0 if they do not hold together. */
+static const unsigned char *scenery_checked(const unsigned char *s)
+{
+    const unsigned char *q = s;
+    unsigned nl = rd16(q); q += 2;
+    for (unsigned l = 0; l < nl; l++) {
+        if (q[0] < 2 || q[1] < 1 || q[1] > 100) return 0;
+        q += 3 + q[0] * 12;
+    }
+    unsigned no = rd16(q); q += 2;
+    for (unsigned o = 0; o < no; o++) {
+        if (q[0] < 3 || q[0] > 8) return 0;
+        q += 1 + q[0] * 12;
+    }
+    return s;
+}
+
 int vpy3d_load_mesh(vpy_mesh *m, const unsigned char *d)
 {
     s_err = VPY3D_OK;
     if (!d || d[0] != 'V' || d[1] != 'M' || d[2] != 'S' || d[3] != 'H') {
         s_err = VPY3D_ERR_MAGIC; return 0;
     }
-    if (d[4] != 1) { s_err = VPY3D_ERR_VERSION; return 0; }
+    const unsigned version = d[4];
+    if (version != 1 && version != 2) { s_err = VPY3D_ERR_VERSION; return 0; }
 
     int      open      = d[5] & 1;
     int      hard_cos  = rds16(d + 6);
     unsigned nv        = rd16(d + 8);
     unsigned nf        = rd16(d + 10);
     unsigned nidx      = rd16(d + 12);
+
+    /* Scenery only: nothing goes into the pools, so nothing is built -- it
+     * loads even when the pools are full. */
+    if (version == 2 && nv == 0 && nf == 0) {
+        if (nidx) { s_err = VPY3D_ERR_DATA; return 0; }
+        const unsigned char *sc = scenery_checked(d + 16);
+        if (!sc) { s_err = VPY3D_ERR_DATA; return 0; }
+        memset(m, 0, sizeof *m);
+        m->open = (uint8_t)open;
+        m->hard_cos = (int16_t)hard_cos;
+        m->scenery = sc;
+        return 1;
+    }
 
     uint32_t before = s_stats.overflow;
     vpy3d_mesh_begin(m);
@@ -877,11 +990,17 @@ int vpy3d_load_mesh(vpy_mesh *m, const unsigned char *d)
     }
     if (seen != nidx) { s_err = VPY3D_ERR_DATA; B = 0; return 0; }
 
+    /* version 2: the scenery that follows the faces, checked once here so the
+     * draw can walk it without asking again */
+    const unsigned char *scenery = 0;
+    if (version == 2 && !(scenery = scenery_checked(f))) { s_err = VPY3D_ERR_DATA; B = 0; return 0; }
+
     if (!vpy3d_mesh_end(hard_cos)) {
         s_err = (s_stats.overflow != before) ? VPY3D_ERR_POOL : VPY3D_ERR_DATA;
         return 0;
     }
     vpy3d_mesh_open(m, open);
+    m->scenery = (scenery && (rd16(scenery) || rd16(scenery_occluders(scenery)))) ? scenery : 0;
     return 1;
 }
 

@@ -181,6 +181,7 @@ typedef struct {
     uint16_t e0, ne;
     uint8_t  open;    /* 1 = a plate, not a solid: its outline is always drawn */
     int16_t  hard_cos; /* the crease threshold it was built with: a dent re-applies it */
+    const unsigned char *scenery;  /* a version-2 .vmesh's lines and occluders, read in place; 0 = none */
 } vpy_mesh;
 
 /* Crease threshold: two faces meeting at a sharper angle than this keep their
@@ -275,6 +276,23 @@ int  vpy3d_get_chaining(void);
  * Returns 0 and leaves `m` alone if the magic or the version is wrong, or if
  * the pools are full; vpy3d_error() says which. */
 int vpy3d_load_mesh(vpy_mesh *m, const unsigned char *data);
+
+/* SCENERY: a version-2 .vmesh may also carry LINES (polylines that are not the
+ * edge of any face: a floor's markings, a wall seen edge-on, the outline of a
+ * room) and OCCLUDERS (convex solids by 3 to 8 corners that are never drawn).
+ * vpy3d_draw_mesh draws them after the faces:
+ *   - every line through the occluder, so whatever the game added before this
+ *     mesh (nearer things, drawn first) hides it -- always, whatever
+ *     vpy3d_set_mesh_occlusion says;
+ *   - each line at its own percent of `br`, and, when scenery fog is on, faded
+ *     by the depth of its middle (per segment, so a long corridor dims away),
+ *     unless the line says "fog": false;
+ *   - then the occluders go into the table, so they hide what is drawn AFTER the
+ *     mesh, never the mesh's own lines. Draw near to far, as with any occluder.
+ * A mesh may be scenery only (no faces). The lines and occluders are read in
+ * place from the image: they take no pool space, and the image must stay where
+ * it is (a const array in ROM, as compile-asset makes it). */
+void vpy3d_set_scenery_fog(int32_t full_until, int32_t gone_at);   /* 0, 0 = off (the default) */
 
 /* Why the last vpy3d_load_mesh returned 0. */
 typedef enum {
