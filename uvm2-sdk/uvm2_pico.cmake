@@ -159,6 +159,12 @@ foreach(opt ${UVM2_GAME_OPTS})
     target_compile_options(${UVM2_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:C>:${opt}>")
 endforeach()
 
+# FLOAT IS THE FPU'S (README "Float"; uvm2.mk sets the same for rp2350-cart). The pico-sdk
+# already compiles -mfloat-abi=softfp for the M33's FPU; these two make a float cheap and a
+# double visible: sqrtf as a single vsqrt.f32, and a warning wherever a double creeps in.
+target_compile_options(${UVM2_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-fno-math-errno>"
+                                            "$<$<COMPILE_LANGUAGE:C,CXX>:-Wdouble-promotion>")
+
 # OUT OF DATE ON ONE POINT: "we never wrote the core-1 consumer" is no longer true —
 # uvm2_core1.c exists (replay, input, the PSG queue and the 50 Hz pacing) and
 # uvm2_pico_main.c starts it. What was missing was the switch: it is turned on with
@@ -343,6 +349,13 @@ target_link_options(${UVM2_NAME} PRIVATE -Wl,--undefined=uvm2_svc_handler)
 # ever overlapped it, ld says so and the build FAILS, which is infinitely better than finding
 # out on the screen. For C games the section does not exist and the option does nothing.
 target_link_options(${UVM2_NAME} PRIVATE -Wl,--section-start=.vpyram=0x2007C000)
+
+# THE JACK'S RING AT THE TOP, for a game that asks (UVM2_JACK_RING_TOP in its defines): its last
+# 8 KB of SRAM, so the ring's 8 KB alignment pads nothing in .bss (see uvm2_jack.c). Not with
+# VPy's VPY_RAM, which uses that same top.
+if(DEFINED UVM2_GAME_DEFS AND "${UVM2_GAME_DEFS}" MATCHES "UVM2_JACK_RING_TOP")
+    target_link_options(${UVM2_NAME} PRIVATE -Wl,--section-start=.jackring=0x2007E000)
+endif()
 
 # No USB/UART stdio: the cart has neither, and enabling it drags TinyUSB into a
 # 50 Hz draw loop.

@@ -224,6 +224,17 @@ endif
 UVM2_UM2_ONLY ?=
 UVM2_CFLAGS += $(UVM2_UM2_ONLY)
 
+# FLOAT IS THE FPU'S (the SDK's rule, README "Float"). The RP2350's Cortex-M33 has a
+# single-precision FPU: a float divide or square root is 14 cycles there, and a library call of
+# hundreds without it. The .um2 already gets it from the pico-sdk (-mfloat-abi=softfp, +fp);
+# `rp2350-cart` used to take the game's flags as they came, and a bare -mcpu=cortex-m33 is
+# -mfloat-abi=soft: every float in software. Forced here for both. softfp, not hard: the floats
+# still cross calls in integer registers, so it links with the soft-float Rust crate.
+#   -fno-math-errno     sqrtf is one vsqrt.f32 (otherwise a check and a call to libm's)
+#   -Wdouble-promotion  says where a double slips in: the FPU has no double, that is software
+UVM2_FPU_FLAGS = -mfloat-abi=softfp -mfpu=fpv5-sp-d16 -fno-math-errno -Wdouble-promotion
+UVM2_CFLAGS += $(UVM2_FPU_FLAGS)
+
 UVM2_CFLAGS_CLEAN = $(filter-out -DVPY_DUAL_CORE -Wa$(,)--defsym$(,)DUAL_CORE_FLAG=0x44430001,\
                       $(UVM2_CFLAGS)) -I$(UVM2_SDK)
 

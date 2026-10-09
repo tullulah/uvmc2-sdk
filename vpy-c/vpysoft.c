@@ -42,6 +42,20 @@ static int64_t isqrt64(int64_t n)
     }
     return r;
 }
+/* THE SPRINGS IN FLOAT, ON THE FPU (the SDK's rule: float is the FPU's; see README).
+ * A Cortex-M33 has no 64-bit divide -- each one a library call of hundreds of cycles -- and
+ * isqrt64 walks 32 rounds of 64-bit sums: two Jedi robes spent tens of milliseconds a frame in
+ * here and the music on the jack starved. Its single-precision FPU takes a square root or a
+ * divide in 14 cycles, and a float's 24 bits are far more than a spring's length needs. The
+ * points stay Q8 integers; only each spring's pull is worked in float. __builtin_sqrtf, not
+ * sqrtf: a game built -ffreestanding (no builtins, no libm on the cartridge) would otherwise
+ * call a sqrtf nobody links; the builtin is a bare vsqrt.f32 with -fno-math-errno, which the
+ * uvm2 builds pass, and libm's sqrtf on a host. */
+static float spring_len(const int32_t *e)
+{
+    const float x = (float)e[0], y = (float)e[1], z = (float)e[2];
+    return __builtin_sqrtf(x * x + y * y + z * z);
+}
 static void redo_gravity(void)
 {
     const int64_t d = (int64_t)s_rate * s_rate;
@@ -299,17 +313,19 @@ void vpysoft_step(void)
             for (int j = 0; j < B->ns; j++) {
                 const spring_t *s = &s_s[B->s0 + j];
                 pt_t *a = &s_p[s->a], *c = &s_p[s->b];
-                int64_t d[3], l2 = 0;
-                for (int k = 0; k < 3; k++) { d[k] = (int64_t)c->p[k] - a->p[k]; l2 += d[k] * d[k]; }
-                const int64_t l = isqrt64(l2);
-                if (l == 0) continue;
-                const int64_t diff = (l - s->rest) * s->stiff / ONE;           /* too long > 0 */
                 const int wa = a->pinned ? 0 : 1, wc = c->pinned ? 0 : 1;
                 if (!(wa + wc)) continue;
+                const int32_t e[3] = { c->p[0] - a->p[0], c->p[1] - a->p[1], c->p[2] - a->p[2] };
+                const float l = spring_len(e);
+                if (l == 0.0f) continue;
+                /* the share of d that closes the gap: (too long > 0) x stiffness, over length;
+                   split between the two ends when neither is pinned */
+                float f = (l - (float)s->rest) * (float)s->stiff * (1.0f / ONE) / l;
+                if (wa && wc) f *= 0.5f;
                 for (int k = 0; k < 3; k++) {
-                    const int64_t m = d[k] * diff / l;
-                    if (wa) a->p[k] += (int32_t)(m * wa / (wa + wc));
-                    if (wc) c->p[k] -= (int32_t)(m * wc / (wa + wc));
+                    const int32_t m = (int32_t)((float)e[k] * f);
+                    if (wa) a->p[k] += m;
+                    if (wc) c->p[k] -= m;
                 }
             }
             if (B->kind == K_BLOB && B->pressure) keep_area(B);
@@ -325,9 +341,8 @@ void vpysoft_step(void)
         }
         for (int j = 0; j < B->ns; j++) {
             const spring_t *s = &s_s[B->s0 + j];
-            int64_t l2 = 0;
-            for (int k = 0; k < 3; k++) { const int64_t d = (int64_t)s_p[s->b].p[k] - s_p[s->a].p[k]; l2 += d * d; }
-            const int64_t over = isqrt64(l2) - s->rest;
+            const int32_t e[3] = { s_p[s->b].p[0] - s_p[s->a].p[0], s_p[s->b].p[1] - s_p[s->a].p[1], s_p[s->b].p[2] - s_p[s->a].p[2] };
+            const int64_t over = (int32_t)spring_len(e) - s->rest;   /* (int32: one vcvt; to int64 is a library call) */
             if (over > worst) worst = over;
         }
         if (B->kind == K_BLOB && B->area0) {

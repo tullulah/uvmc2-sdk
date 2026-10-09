@@ -84,6 +84,10 @@ int      uvm2_sd_open(const char *path, uvm2_sd_file *f);
 /* The next bytes, up to `max`. Returns what was copied; 0 is the end of the file (or an
  * error: then `ok` is 0 and uvm2_sd_error says which). */
 uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max);
+/* Moves to `pos` bytes in (at most the file's size); the next uvm2_sd_next reads from there.
+ * 1 if it went. For files read in pieces out of order, like a pack of sounds of which a
+ * screen needs only some. FatFs walks the cluster chain to get there: cheap for a few MB. */
+int      uvm2_sd_seek(uvm2_sd_file *f, uint32_t pos);
 /* Optional; see above. */
 void     uvm2_sd_close(uvm2_sd_file *f);
 

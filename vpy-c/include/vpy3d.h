@@ -63,6 +63,13 @@ extern "C" {
 #ifndef VPY3D_MESH_MAXF
 #define VPY3D_MESH_MAXF 256
 #endif
+/* EDGES IN ONE MESH: the draw's per-edge scratch (five arrays, 7 bytes an edge). It was the
+ * whole pool's size, which a game with a big pool paid for many times over -- the scratch only
+ * ever holds the mesh being drawn. A game sets it to its biggest mesh (a mesh with more is
+ * not drawn, and counts as an overflow). */
+#ifndef VPY3D_MESH_MAXE
+#define VPY3D_MESH_MAXE VPY3D_POOL_E
+#endif
 
 #define VPY3D_ONE 16384        /* Q14: this is 1.0 */
 

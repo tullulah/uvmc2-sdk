@@ -60,6 +60,26 @@ back to the menu. What each version changes: [CHANGELOG.md](CHANGELOG.md).
 `uvmc2.py --help` lists the rest (`upload`, `run`, `ports`); the protocol is in its docstring
 and in `uvm2-sdk/monitor/`.
 
+## Float
+
+**Every float runs on the FPU.** The RP2350's Cortex-M33 has a single-precision FPU
+(a float divide or square root is 14 cycles) and no 64-bit integer divide (an
+`int64_t` `/` is a library call of hundreds of cycles). So:
+
+- Both builds compile for the FPU: the `.um2` through the pico-sdk
+  (`-mfloat-abi=softfp`, `+fp`) and `rp2350-cart` through `uvm2.mk`
+  (`UVM2_FPU_FLAGS`). Both add `-fno-math-errno` (so `sqrtf` is one `vsqrt.f32`)
+  and `-Wdouble-promotion`.
+- Write `float`, `sqrtf`, `1.0f`: a `double` is software on this FPU. Take
+  `-Wdouble-promotion` warnings as bugs.
+- Hot loops that need a length, a ratio or a divide over wide values work in `float`,
+  not in `int64_t`. Positions may stay fixed-point integers; convert at the edges.
+  Example: the springs in `vpy-c/vpysoft.c`, which went from tens of milliseconds
+  a frame (two cloth robes) to a few.
+- On the host (the simulator, desktop harnesses) floats are the host's, so a
+  float result can differ from the console's in its last bits. Nothing may
+  depend on bit-exact float results across targets.
+
 ## Checking it
 
 ```sh

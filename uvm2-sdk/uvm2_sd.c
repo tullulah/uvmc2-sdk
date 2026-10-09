@@ -736,6 +736,16 @@ int uvm2_sd_open(const char *path, uvm2_sd_file *f)
     return 1;
 }
 
+int uvm2_sd_seek(uvm2_sd_file *f, uint32_t pos)
+{
+    if (f->magic != UVM2_SD_OPEN_MAGIC || pos > f->len) return 0;
+    FRESULT fr = f_lseek(FIL_OF(f), pos);
+    if (!fail(fr)) { f->ok = 0; return 0; }
+    f->pos = pos;
+    f->ok = 1;                                /* reading again from there, after the end too */
+    return 1;
+}
+
 uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max)
 {
     if (!f->ok || f->magic != UVM2_SD_OPEN_MAGIC) return 0;

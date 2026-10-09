@@ -48,7 +48,11 @@
 #endif
 #define RING_WORDS   (1u << UVM2_JACK_RING_LOG2)
 #define RING_BITS    (UVM2_JACK_RING_LOG2 + 2u)   /* log2(bytes): 4 bytes a word */
-#define AHEAD        1600u                  /* keep ~50 ms queued            */
+/* keep ~50 ms queued -- BUT NEVER MORE THAN THE RING HOLDS. With a 4 KB ring (1024 words) a
+ * 1600-word target can never be met: every refill asked for more than fits, the writer lapped
+ * the reader and overwrote what had not played, and the music ran fast or crawled depending on
+ * the frame time (return of the jedi, 2026-10-08). Three quarters of a small ring instead. */
+#define AHEAD        (RING_WORDS * 3u / 4u < 1600u ? RING_WORDS * 3u / 4u : 1600u)
 
 /* Below a frame of audio the ring cannot cover a single late refill. */
 _Static_assert(RING_WORDS >= 512u, "UVM2_JACK_RING_LOG2 under 16 ms of audio");
@@ -83,7 +87,17 @@ extern uint32_t uvm2_cycles_per_e_q8;   /* uvm2_bus.c, set by uvm2_measure_e() a
 #define PIN_WS  44u
 #define PIN_BCK 45u
 
+#if defined(UVM2_JACK_RING_TOP)
+/* PINNED AT THE TOP OF SRAM (uvm2_pico.cmake puts .jackring at 0x2007E000), NOT IN .bss. Aligned
+ * to its own size for the DMA's wrap, the ring in .bss made the linker pad up to 8 KB in front of
+ * it wherever the layout put it, and a game's free RAM jumped by 8 KB with a one-line change
+ * (return of the jedi, 2026-10-09). NOBITS: it costs the image nothing; init() zeroes it. If the
+ * game's RAM ever reaches it, the link fails instead of corrupting it. Needs the 8 KB ring. */
+_Static_assert(RING_WORDS == 2048u, "UVM2_JACK_RING_TOP is laid out for the 8 KB ring");
+static uint32_t s_ring[RING_WORDS] __attribute__((aligned(RING_WORDS * 4), section(".jackring,\"aw\",%nobits@")));
+#else
 static uint32_t s_ring[RING_WORDS] __attribute__((aligned(RING_WORDS * 4)));
+#endif
 static int      s_ok, s_dma = -1, s_sm = -1;
 static uint32_t s_clk, s_div_q8;   /* what it believed and what it set: uvm2_jack.h */
 static uint32_t s_w;                        /* next word the CPU will write   */

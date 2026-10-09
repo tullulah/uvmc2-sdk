@@ -35,11 +35,11 @@ static vpy3d_stats_t s_stats;
 /* per-draw scratch */
 static int32_t TC[VPY3D_MESH_MAXV][3];       /* vertices in camera space */
 static uint8_t FV[VPY3D_MESH_MAXF];          /* 1 = face turned toward us */
-static uint8_t ED[VPY3D_POOL_E];             /* 0 skip, 1 draw, 2 already drawn */
-static uint8_t ES[VPY3D_POOL_E];             /* 1 = silhouette, 0 = interior */
+static uint8_t ED[VPY3D_MESH_MAXE];             /* 0 skip, 1 draw, 2 already drawn */
+static uint8_t ES[VPY3D_MESH_MAXE];             /* 1 = silhouette, 0 = interior */
 /* the runs of one mesh, as vertex pairs, before they are put in an order */
-static uint16_t RA[VPY3D_POOL_E], RB[VPY3D_POOL_E];
-static uint8_t  RU[VPY3D_POOL_E];            /* already emitted */
+static uint16_t RA[VPY3D_MESH_MAXE], RB[VPY3D_MESH_MAXE];
+static uint8_t  RU[VPY3D_MESH_MAXE];            /* already emitted */
 static int      s_chain = 1;                 /* follow connectivity when emitting */
 static int      s_wire;                      /* draw hidden edges too: see the header */
 static int      s_mesh_occl;                 /* meshes go through the occluder: see the header */
@@ -787,7 +787,7 @@ static void draw_scenery(const vpy_mesh *m, const vpy_xf *place, int br)
 
 static void draw_surface(const vpy_mesh *m, const vpy_xf *place, int br)
 {
-    if (m->nv > VPY3D_MESH_MAXV || m->nf > VPY3D_MESH_MAXF) { s_stats.overflow++; return; }
+    if (m->nv > VPY3D_MESH_MAXV || m->nf > VPY3D_MESH_MAXF || m->ne > VPY3D_MESH_MAXE) { s_stats.overflow++; return; }
     const vpy_xf *cam = vpy3d_camera();
     vpy_xf mv = vpy3d_mul(cam, place);         /* model -> camera, in one go */
 
@@ -848,7 +848,7 @@ static void draw_surface(const vpy_mesh *m, const vpy_xf *place, int br)
             if (nb < 0 || ED[nb] != 1) break;
             c = nb;
         }
-        if (ns < VPY3D_POOL_E) { RA[ns] = (uint16_t)start; RB[ns] = (uint16_t)v; RU[ns] = 0; ns++; }
+        if (ns < VPY3D_MESH_MAXE) { RA[ns] = (uint16_t)start; RB[ns] = (uint16_t)v; RU[ns] = 0; ns++; }
     }
 
     /* One of the mesh's strokes, in camera space. Through the occluder when the
