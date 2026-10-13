@@ -40,6 +40,9 @@
  */
 
 #include "uvm2_bus.h"
+#ifdef UVM2_CORE0_WORKER
+#include "uvm2_bus_stream.h"
+#endif
 
 extern uint32_t uvm2_sig_written[2], uvm2_sig_n[2];
 
@@ -320,6 +323,24 @@ volatile uint32_t uvm2_cached_axes;
 static uint32_t s_audio_acc;
 
 void uvm2_core1_gap(void);   /* per-pass hook; weak, below */
+
+#ifdef UVM2_CORE0_WORKER
+/* THE GAME'S WORK, ON THE CORE THAT REPLAYS (our cartridge's BIOS: API set_worker).
+ *
+ * Replaying a list used to keep this core busy for the whole pass: uvm2_exec pushes the
+ * words in small batches and each batch waits for the previous DMA, so ~30 ms of a 30 ms
+ * pass went into a wait loop, measured on Virtua Fighter (exec_acc = 97% of the time).
+ * With a worker registered, the pass goes out the way the single-core path already sends
+ * it: the whole list accumulated, ONE DMA fired, and this core is free until the bus is
+ * done. The worker runs in that window — VF renders its next display list here while core
+ * 1 emulates the next frame, instead of the two adding up on core 1.
+ *
+ * The worker may build and publish a list (the draw calls and wait_recal of the table):
+ * the deferred frame opens at its first draw and waits for frame_done >= its number - 2,
+ * which the pass being replayed already satisfies, as long as it publishes at most one
+ * list per call. It is not called while the program is inside a BIOS call (the hold). */
+void (*volatile uvm2_worker)(void);
+#endif
 static void core1_main(void)
 {
     uint32_t served = 0;
@@ -433,8 +454,19 @@ static void core1_main(void)
                 else                                     uvm2_sig_last_ok = h;
             }
         }
-        uint32_t cycles = uvm2_exec(uvm2_frame_buffer(served),
-                                    uvm2_frame_length(served));
+        uint32_t cycles;
+#ifdef UVM2_CORE0_WORKER
+        void (*const work)(void) = uvm2_worker;
+        if (work) {
+            vbus_list_begin();
+            cycles = uvm2_exec(uvm2_frame_buffer(served), uvm2_frame_length(served));
+            vbus_list_end();
+            vbus_list_fire();                 /* the beam draws by DMA from here */
+            if (!uvm2_replay_hold) work();    /* ...while the game works on this core */
+            vbus_list_wait();                 /* and the bus is done before anything else */
+        } else
+#endif
+        cycles = uvm2_exec(uvm2_frame_buffer(served), uvm2_frame_length(served));
 #endif
         uint32_t t1 = time_us_32();
         uvm2_stats.us_exec = t1 - t0;
