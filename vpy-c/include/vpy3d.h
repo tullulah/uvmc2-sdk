@@ -35,7 +35,8 @@
 #define VPY3D_H
 
 #include <stdint.h>
-#include "vpy.h"
+/* A game that includes vpy3d.h gets libvpy too */
+#include "vpy.h" /* IWYU pragma: export */
 
 #ifdef __cplusplus
 extern "C" {
