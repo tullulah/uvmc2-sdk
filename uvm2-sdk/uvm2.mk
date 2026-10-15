@@ -153,6 +153,12 @@ ifeq ($(UVM2_PSRAM_START),1)
 UVM2_CFLAGS += -DUVM2_PSRAM_START=1
 endif
 
+# THE USB DEBUG MONITOR (uvm2_monitor.c): MONITOR.BIN off the card, a serial port for the IDE
+# while the game runs (upload to the card, memory). The IDE's "Upload to Cartridge" sets it.
+ifeq ($(UVM2_USB_MONITOR),1)
+UVM2_CFLAGS += -DUVM2_USB_MONITOR=1
+endif
+
 # THE CORE CLOCK, in MHz, a multiple of 150. Unset = whatever the firmware left (150 on the
 # UVMC2). See uvm2_set_sys_clock in uvm2_bus.c for everything that depends on it.
 #   make uvm2 UVM2_SYS_MHZ=300

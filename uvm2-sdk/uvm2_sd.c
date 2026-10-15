@@ -344,8 +344,23 @@ int uvm2_sd_init(void)
     /* 80 pulses with CS high: the card asks for them before it enters SPI mode. */
     for (int i = 0; i < 10; i++) xfer(0xFF);
 
-    cs(1);
-    if (command(0, 0, 0x95) != 0x01) { cs(0); uvm2_sd_error = UVM2_SD_NO_INIT; return 0; }
+    /* CMD0, MORE THAN ONCE. A chip reset does not reset the card: it keeps its power, and
+     * whatever ran before may have left it mid-transfer — the multicart's menu, sent to
+     * BOOTSEL under the SD bridge, left it streaming a multi-block read, and the one CMD0 we
+     * used to send got lost among the data bytes (CMD0 never 0x01, card "dead" until power
+     * off). So: stop a transfer (CMD12), let the card release MISO, clock it with CS high,
+     * and ask again. */
+    uint8_t idle = 0xFF;
+    for (int t = 0; t < 8 && idle != 0x01; t++) {
+        cs(1);
+        idle = command(0, 0, 0x95);
+        if (idle == 0x01) break;
+        command(12, 0, 0x61);
+        for (int i = 0; i < 100000 && xfer(0xFF) != 0xFF; i++) { }
+        cs(0);
+        for (int i = 0; i < 10; i++) xfer(0xFF);
+    }
+    if (idle != 0x01) { cs(0); uvm2_sd_error = UVM2_SD_NO_INIT; return 0; }
 
     uint8_t r = command(8, 0x1AA, 0x87);     /* a v2 card answers 0x01 + 4 bytes */
     int v2 = (r == 0x01);
@@ -626,11 +641,12 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     return write_all(&f, data, n);
 }
 
-#ifdef UVM2_USB_MONITOR
-/* A FILE WRITTEN AS IT ARRIVES: the USB monitor's uploads (uvm2_monitor.c), a .um2 sent from
- * the IDE in pieces, so it never has to sit whole in memory. Open, any number of puts, close;
- * one at a time. Missing folders are created and an existing file is replaced. Only in a
- * monitor build: the open file costs its sector buffer in SRAM. */
+#if defined(UVM2_USB_MONITOR) || defined(UVM2_SD_STREAM)
+/* A FILE WRITTEN AS IT ARRIVES: the USB uploads of the monitor (uvm2_monitor.c) and of the SD
+ * bridge (sdbridge/), a .um2 sent from the IDE in pieces, so it never has to sit whole in
+ * memory. Open, any number of puts, close; one at a time. Missing folders are created and an
+ * existing file is replaced. Only in those builds: the open file costs its sector buffer in
+ * SRAM. */
 static FIL s_stream;
 static int s_streaming;
 

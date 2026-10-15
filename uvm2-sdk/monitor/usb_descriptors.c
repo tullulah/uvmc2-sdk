@@ -21,7 +21,11 @@ static const uint8_t desc_config[] = {
 };
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) { (void)index; return desc_config; }
 
-static const char *const strings[] = { "", "Vectrex Studio", "UVMC2 debug monitor", "1", "Monitor" };
+/* The SD bridge (../sdbridge) answers on the same ids and protocol, under its own name. */
+#ifndef USB_PRODUCT
+#define USB_PRODUCT "UVMC2 debug monitor"
+#endif
+static const char *const strings[] = { "", "Vectrex Studio", USB_PRODUCT, "1", "Monitor" };
 static uint16_t desc_str[32];
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {

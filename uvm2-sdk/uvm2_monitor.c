@@ -77,24 +77,27 @@ volatile int uvm2_monitor_state;   /* the step above */
 /* What the load saw, for the line on screen: bytes read, where it failed, the first word. */
 static uint32_t s_bytes, s_fail, s_word;
 
-/* The file in 1 KB pieces through SRAM, each copied into the PSRAM by the CPU and read back:
- * the card's driver never writes the PSRAM itself, and a piece that does not read back as
- * written says so (s_fail = 0x10000 + offset). */
+/* The file in 512-byte pieces through SRAM, each copied into the PSRAM by the CPU and read
+ * back: the card's driver never writes the PSRAM itself, and a piece that does not read back
+ * as written says so (s_fail = 0x10000 + offset). The piece is on the stack: this runs once,
+ * at boot, and a static buffer cost a big game the last 1 KB it had (ROTJ's .bss overflowed). */
 static int load_image(void)
 {
-    static uint8_t buf[1024];
+    uint32_t words[128];
+    uint8_t *buf = (uint8_t *)words;
+    const uint32_t piece = sizeof words;
     volatile uint32_t *dst = (volatile uint32_t *)UVM2_MONITOR_UNCACHED;
-    for (uint32_t off = 0; off < UVM2_MONITOR_MAX; off += sizeof buf) {
-        uint32_t n = uvm2_sd_read_from("MONITOR.BIN", buf, sizeof buf, off);
+    for (uint32_t off = 0; off < UVM2_MONITOR_MAX; off += piece) {
+        uint32_t n = uvm2_sd_read_from("MONITOR.BIN", buf, piece, off);
         if (n == 0) break;
-        for (uint32_t i = n; i < sizeof buf; i++) buf[i] = 0;
-        const uint32_t *w = (const uint32_t *)buf;
+        for (uint32_t i = n; i < piece; i++) buf[i] = 0;
+        const uint32_t *w = words;
         for (uint32_t i = 0; i < (n + 3u) / 4u; i++) dst[(off >> 2) + i] = w[i];
         __asm volatile ("dsb" ::: "memory");
         for (uint32_t i = 0; i < (n + 3u) / 4u; i++)
             if (dst[(off >> 2) + i] != w[i]) { s_fail = 0x10000u + off + i * 4u; return 0; }
         s_bytes = off + n;
-        if (n < sizeof buf) break;
+        if (n < piece) break;
     }
     return s_bytes >= 6u * 4u;
 }

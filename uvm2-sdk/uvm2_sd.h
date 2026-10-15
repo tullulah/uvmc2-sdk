@@ -38,7 +38,7 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n);
 int uvm2_sd_write2(const char *path, const unsigned char *a, uint32_t na,
                    const unsigned char *b, uint32_t nb);
 
-/** A file written in pieces as they arrive (UVM2_USB_MONITOR builds only): open, puts, close.
+/** A file written in pieces as they arrive (UVM2_USB_MONITOR / UVM2_SD_STREAM builds): open, puts, close.
  *  Missing folders are created, an existing file is replaced. Each returns 1 if it worked. */
 int uvm2_sd_stream_open(const char *path);
 int uvm2_sd_stream_put(const unsigned char *data, uint32_t n);
