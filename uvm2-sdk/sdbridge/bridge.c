@@ -13,7 +13,7 @@
  *
  * GOING BACK. Resetting only the chip would leave the 6809 lost (the cartridge cannot reset
  * the console), so `b` does not reset: it shows DONE and waits for the console's RESET button,
- * which the SDK sees through the VIA (UVM2_RESET_BUTTON, counting only); then it reboots into
+ * which the SDK sees through the VIA (its reset watch, counting only: UVM2_RESET_WATCH_ONLY); then it reboots into
  * the multicart's firmware with the button still down, and the console comes up in its menu.
  * Nobody presses it within a minute: it reboots anyway (and RESET then brings the menu).
  *

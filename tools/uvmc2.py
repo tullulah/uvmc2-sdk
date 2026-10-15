@@ -156,7 +156,12 @@ def connect(tries=1):
             except OSError:
                 continue
             p.write('v\n')
-            ver = p.line(2)
+            # what was in the port before (a game's text: a line cut in two) is not the answer
+            end, ver = time.time() + 2, None
+            while time.time() < end:
+                ver = p.line(end - time.time())
+                if ver is None or ver.startswith('UVMC2-'):
+                    break
             if ver and ver.startswith('UVMC2-'):
                 return p, ver
             p.close()

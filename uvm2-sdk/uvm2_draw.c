@@ -3102,6 +3102,11 @@ static void frame_filler(void)
 void uvm2_frame_end(void)
 {
     uint32_t cycles = 0;
+#if UVM2_RESET_WATCH
+    /* One press of the console's reset button: the game starts again from here, the game's
+     * core putting its globals back (uvm2_core1.c, reset_poll). */
+    { extern void uvm2_restart_if_asked(void); uvm2_restart_if_asked(); }
+#endif
 
     /* DO NOT PUBLISH AN EMPTY FRAME.
      *

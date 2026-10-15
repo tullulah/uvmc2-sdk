@@ -600,9 +600,15 @@ static int write_all(FIL *f, const unsigned char *data, uint32_t n)
 /* OVERWRITES THE FIRST SECTOR OF A FILE THAT ALREADY EXISTS, without changing its size or
  * its clusters. It does NOT create: if the file is not there, MISSING, and uvm2_config falls
  * back to uvm2_sd_create. A file shorter than 512 bytes is TOO_BIG, as before. */
+/* ONE SECTOR OF SCRATCH for the whole SDK (uvm2_sd.h): the overwrite and the create below pad
+ * into it, the config reader reads into it. None of them runs while another holds it, and
+ * three static buffers of their own were a kilobyte of SRAM a big game had not got (ROTJ with
+ * the debug monitor and the reset button did not link, 2026-10-15). */
+unsigned char uvm2_sd_sector[520];
+
 int uvm2_sd_overwrite(const char *path, const unsigned char *data, uint32_t n)
 {
-    static unsigned char b[512];
+    unsigned char *const b = uvm2_sd_sector;
     FIL f;
     uint32_t len;
     uvm2_sd_error = UVM2_SD_OK;
@@ -617,7 +623,7 @@ int uvm2_sd_overwrite(const char *path, const unsigned char *data, uint32_t n)
  * overwrite it in place. Creates the folders on the way; an existing file is replaced. */
 int uvm2_sd_create(const char *path, const unsigned char *data, uint32_t n)
 {
-    static unsigned char b[512];
+    unsigned char *const b = uvm2_sd_sector;
     FIL f;
     uint32_t len;
     uvm2_sd_error = UVM2_SD_OK;

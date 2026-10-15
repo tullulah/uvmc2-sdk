@@ -28,6 +28,7 @@ void uvm2_romzip_load(void);       /* uvm2_romzip.c: reads roms/<game>.zip off t
 void uvm2_core1_start(void);       /* uvm2_core1.c */
 void uvm2_stack_paint(void);       /* uvm2_core1.c: stack0_peak / stack1_peak */
 void uvm2_restart_snapshot(void);  /* uvm2_core1.c: .data, for the reset button's restart */
+void uvm2_restart_keep(void);      /* uvm2_core1.c: that copy on to the PSRAM */
 void uvm2_monitor_load(void);      /* uvm2_monitor.c: the debug monitor, with UVM2_USB_MONITOR */
 #endif
 
@@ -102,7 +103,7 @@ int main(void)
      * there is no point starting it before the clock is there. */
     uvm2_stream_start();
 #endif
-#  if defined(UVM2_CMDS_IN_PSRAM) || defined(UVM2_PSRAM_START) || defined(UVM2_ROMZIP_IN_PSRAM) || defined(UVM2_USB_MONITOR)
+#  if defined(UVM2_CMDS_IN_PSRAM) || defined(UVM2_PSRAM_START) || defined(UVM2_ROMZIP_IN_PSRAM) || defined(UVM2_USB_MONITOR) || (UVM2_RESET_WATCH && !defined(UVM2_RESET_WATCH_ONLY))
     /* UVM2_PSRAM_START: powers the PSRAM up WITHOUT using it, so that "the list lives
      * there" and "the chip is active" can be tested separately. The PIO stream works with
      * the chip off and collapses into a diagonal with the list in PSRAM — even copying it
@@ -128,6 +129,9 @@ int main(void)
      * moves — and not one pin drives. Two weeks of "the chip is dead" were this. */
     uvm2_qmi_bring_up();
     uvm2_psram_ready = uvm2_psram_init();
+#ifdef UVM2_DUAL_CORE
+    uvm2_restart_keep();   /* the reset button's copy of .data, before core 1 takes its stack */
+#endif
 #  endif
     /* The romset, BEFORE the game: its main() calls aae_load_roms() first thing. On our own
      * cartridge the firmware does this; here the UVM2 does not, so we have to read it

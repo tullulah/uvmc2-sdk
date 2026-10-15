@@ -29,6 +29,16 @@
 #ifndef UVM2_BUS_H
 #define UVM2_BUS_H
 
+/* THE CONSOLE'S RESET BUTTON IS WATCHED (uvm2_core1.c, reset_poll): one press starts the game
+ * again, two in a row go back to the UVMC2's menu. On in every dual-core game since v1.4.0;
+ * UVM2_NO_RESET_BUTTON turns it off. Not in a BIOS (the Vectrex Studio cartridge's firmware
+ * has its own). */
+#if defined(UVM2_DUAL_CORE) && !defined(UVM2_NO_RESET_BUTTON) && !defined(UVM2_BIOS)
+#define UVM2_RESET_WATCH 1
+#else
+#define UVM2_RESET_WATCH 0
+#endif
+
 /* ── THE BASELINE IS NOT NEGOTIABLE: DUAL CORE + PIO + DMA ───────────────────
  *
  * A UVM2 game draws with core 1 replaying the list through the PIO stream, which the DMA

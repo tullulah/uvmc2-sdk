@@ -201,7 +201,7 @@ UVM2_COLD static int load_from_sd(struct uvm2_config *c, const char *path, int g
      * `uvm2_sd_read_from` is the CHUNKED reader and has no such rule: it reads whatever fits
      * from the offset it is given. Here only the first sector matters, which is exactly what
      * the writer touches. */
-    static unsigned char buf[520];
+    unsigned char *const buf = uvm2_sd_sector;   /* the SDK's sector of scratch (uvm2_sd.c) */
     uint32_t n = uvm2_sd_read_from(path, buf, 512, 0);
     if (n == 0) return 0;
     buf[n] = 0;

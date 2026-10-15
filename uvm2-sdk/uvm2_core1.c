@@ -155,51 +155,43 @@ static void psg_drain(void)
 volatile uint8_t  uvm2_cached_buttons = 0xFFu;
 
 #ifndef UVM2_BIOS
-/* THE CONSOLE'S RESET BUTTON: HELD 3 SECONDS, BACK TO THE UVMC2's MENU; HELD 1 TO 3 AND LET GO,
- * THE GAME STARTS AGAIN (restart_game, below). Under a second it does nothing, so a brush
- * against the button costs nothing.
+/* THE CONSOLE'S RESET BUTTON: ONE PRESS STARTS THE GAME AGAIN, TWO IN A ROW (within
+ * UVM2_RESET_DOUBLE_US) GO BACK TO THE UVMC2's MENU.
  *
  * The reset button is not wired to the cartridge (the UVMC2's schematic: its one button, SW1,
  * is the RP2350's BOOTSEL, and /RUN has only a pull-up). What it does reach is the VIA: the
- * console's reset holds the 6522 in reset, and a VIA in reset STOPS ITS TIMERS. So the way to
- * see the button is to watch a timer — Ralf's games do exactly that, and reboot into the
- * firmware with rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0).
+ * console's reset puts the 6522's registers back to zero, DDRB among them -- and every frame's
+ * list sets DDRB to 0x9F at its start (uvm2_draw.c, via_setup). So DDRB reading 0 between
+ * frames says the VIA was reset since: the button. That is Ralf's own test (2026-10-15: "I am
+ * just checking if DDRB is not zero. Reset sets it back to zero and I set it to the correct
+ * value at the begin of each frame"); the cartridge then reboots into the firmware with
+ * rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0).
  *
- * Between frames (CLAUDE.md invariant 7: reads happen between frames), core 1 reads T1's
- * HIGH byte twice, UVM2_RESET_GAP bus cycles apart. T1 counts down one per cycle and keeps
- * counting after it expires, so its high byte moves at least once in more than 256 cycles;
- * the high byte, because reading the LOW one clears T1's interrupt flag. Not moving = the
- * VIA is held in reset. Held for UVM2_RESET_HOLD_US, the cartridge reboots — at once, while
- * still held, as Ralf's do. A shorter press only costs the VIA its setup, which every frame's
- * list programs again at its start.
- * `uvm2_reset_seen` counts the presses noticed and `uvm2_reset_held_us` is how long the
- * current one has lasted, so "it never reboots" can be told from "it never saw the button". */
-/* OFF UNLESS A GAME ASKS FOR IT (-DUVM2_RESET_BUTTON), since 2026-10-05. The watch cannot tell
- * a held reset from a T1 that merely looks still: on the UVMC2 it restarted dkong, the
- * playroom and Major Havoc with nobody near the button (Major Havoc: on a press of button 4),
- * and every false "press" also stops the controllers being read for UVM2_RESET_SETTLE frames,
- * which in play is controls that respond on and off. Until the false positive is understood,
- * a feature that misfires costs more than the one it gives. Off, it costs nothing: no bus
- * reads, no wait, no warm-start mark, and none of the 4 KB .data copy. UVM2_NO_RESET_BUTTON
- * still turns it off where a build already says so. */
-#if defined(UVM2_RESET_BUTTON) && !defined(UVM2_NO_RESET_BUTTON)
-#define UVM2_RESET_WATCH 1
-#else
-#define UVM2_RESET_WATCH 0
-#endif
-#define UVM2_RESET_GAP      300u        /* bus cycles between the two reads: > 256 */
-#define UVM2_RESET_HOLD_US  3000000u    /* held this long: back to the UVMC2's menu */
-#define UVM2_RESTART_US     1000000u    /* held this long and let go: the game starts again */
-volatile uint32_t uvm2_reset_seen, uvm2_reset_held_us;
-/* WHAT A "PRESS" LOOKED LIKE, so a false one can be told from a real one. Reported on the
- * UVMC2 2026-10-04: a game reset itself with nobody near the button (dkong, then the
- * playroom as soon as its hub drew), so the watch saw T1 standing still where it was not.
- * `uvm2_reset_held_max_us` is the longest "press", `uvm2_reset_last_t1` the high byte the
- * two reads agreed on (a VIA in reset reads 0x00; anything else is a timer that moved
- * between reads we did not make where we think), and `uvm2_reset_polls` proves the watch
- * runs at all. With UVM2_RESET_WATCH_ONLY the watch counts and acts on nothing — a
- * diagnostic build, to read these with the game running. */
-volatile uint32_t uvm2_reset_held_max_us, uvm2_reset_polls;
+ * PRESSES, NOT A HOLD. The button gives the VIA a pulse, not a reset held while it is down:
+ * measured on the UVMC2 (2026-10-15), a short press and one held 3 s each read DDRB = 0 for
+ * one frame and once, the next frame's list having set it again; letting go reads nothing.
+ * So how long it was held cannot be told -- the old scheme (held 3 s: the menu; 1 to 3 s and
+ * let go: the game again) could never work -- and the two are told apart by counting presses.
+ * After one, the game waits UVM2_RESET_DOUBLE_US for a second before it starts again.
+ *
+ * The first version watched T1 instead (Ralf's old trick: a VIA in reset stops its timers),
+ * reading its high byte twice between frames, and saw presses nobody made: on the UVMC2 it
+ * restarted dkong, the playroom and Major Havoc with nobody near the button. DDRB cannot
+ * come back to 0 by itself: 0 false presses in thousands of frames, measured.
+ *
+ * Between frames (CLAUDE.md invariant 7: reads happen between frames), core 1 reads DDRB once.
+ * `uvm2_reset_seen` counts the presses, `uvm2_reset_polls` proves the watch runs, and
+ * UVM2_RESET_WATCH_ONLY makes it count and do nothing (the SD bridge's build, which acts on
+ * the count itself).
+ *
+ * ON IN EVERY DUAL-CORE GAME since v1.4.0 (UVM2_RESET_WATCH, uvm2_bus.h); it was opt-in
+ * (-DUVM2_RESET_BUTTON) while the T1 test misfired. UVM2_NO_RESET_BUTTON turns it off. Off, it
+ * costs nothing: no bus read, no warm-start mark, no copy of .data. */
+#define UVM2_RESET_DOUBLE_US 1000000u   /* a second press within this: the menu */
+#define UVM2_RESET_BOUNCE_US  150000u   /* and not before this: one press bouncing */
+volatile uint32_t uvm2_reset_seen, uvm2_reset_polls;   /* presses noticed, and reads made */
+/* No longer kept (a press has no length to measure, above); defined for what reads them. */
+volatile uint32_t uvm2_reset_held_us, uvm2_reset_held_max_us;
 volatile uint8_t  uvm2_reset_last_t1;
 /* THE CONTROLLERS ARE NOT READ WHILE THE VIA IS IN RESET, nor for UVM2_RESET_SETTLE frames
  * after: a VIA in reset reads back zeros, which on the active-low buttons is "all pressed".
@@ -211,41 +203,63 @@ volatile uint8_t  uvm2_reset_last_t1;
 static uint32_t s_input_hold;
 #define INPUT_HELD() (s_input_hold != 0u)
 
-/* THE GAME, STARTED AGAIN, without the menu: the reset button held between one and three
- * seconds and let go. The image is still in SRAM, so the bootrom is asked to boot it again
- * from there (BOOT_TYPE_RAM_IMAGE, the way the UVMC2's launcher started it). What would not
- * be clean is .data: a no_flash image keeps its initial values in place, so whatever the game
- * changed would start the next run. So .data is copied aside as the game starts
- * (uvm2_restart_snapshot, from main) and put back just before the reboot; .bss and the
- * stacks are cleared by the start-up itself. A .data too big for the copy turns the restart
- * off and counts it in `uvm2_restart_refused` — the button then does nothing short of the
- * menu, rather than restart a game with stale globals. */
+/* THE GAME, STARTED AGAIN, without the menu (one press). The image is still in SRAM, so the
+ * bootrom is asked to boot it again from there (BOOT_TYPE_RAM_IMAGE, the way the launcher
+ * started it). What would not be clean is .data: a RAM image keeps its initial values in
+ * place, so whatever the game changed would start the next run. So .data is copied aside as
+ * the game starts and put back just before the reboot; .bss and the stacks are cleared by the
+ * start-up itself.
+ *
+ * THE COPY IS IN THE PSRAM (UVM2_RESTART_PSRAM, the monitor's window, between its image and
+ * the RTT ring): a big game has no SRAM for it. It is taken FIRST in main, before anything
+ * writes a global and before the PSRAM is up, so it goes to core 1's stack first (core 1
+ * has not started; UVM2_RESTART_SNAP bytes at most) and on to the PSRAM once it answers
+ * (uvm2_restart_keep). No PSRAM, or a bigger .data: one press is the menu, as two are.
+ *
+ * Put back by the GAME's core (uvm2_frame_end, uvm2_restart_if_asked), not by core 1, which
+ * sees the press: the game must not be writing its globals while they are copied. */
 #if UVM2_RESET_WATCH
-#define UVM2_RESTART_SNAP   4096u       /* bytes of .data that can be put back */
+#define UVM2_RESTART_SNAP   2048u       /* bytes of .data that can be put back (core 1's stack) */
+#define UVM2_RESTART_PSRAM  ((volatile uint8_t *)0x157E0000u)
 #define UVM2_IMAGE_BASE     0x20000000u /* where the launcher loads a .um2 (uvm2_game.ld) */
 #define UVM2_IMAGE_WINDOW   (496u * 1024u)
 extern uint8_t __data_start__[], __data_end__[];
-static uint8_t s_data_snap[UVM2_RESTART_SNAP];
-static int     s_snap_ok;
+extern uint32_t __StackOneBottom[];
+extern int uvm2_psram_ready;
+static uint32_t s_snap_n;               /* bytes copied to core 1's stack (0: none) */
+static int      s_snap_ok;              /* and kept in the PSRAM */
 volatile uint32_t uvm2_restart_refused;
-void uvm2_restart_snapshot(void)
+volatile uint32_t uvm2_restart_asked;   /* core 1 saw one press and its wait ran out */
+__attribute__((optimize("Os"))) void uvm2_restart_snapshot(void)
 {
+#ifdef UVM2_RESET_WATCH_ONLY
+    return;   /* it only counts presses (the SD bridge): nothing restarts */
+#endif
     const uint32_t n = (uint32_t)(__data_end__ - __data_start__);
     if (n > UVM2_RESTART_SNAP) { uvm2_restart_refused++; return; }
-    for (uint32_t i = 0; i < n; i++) s_data_snap[i] = __data_start__[i];
+    uint8_t *t = (uint8_t *)__StackOneBottom;
+    for (uint32_t i = 0; i < n; i++) t[i] = __data_start__[i];
+    s_snap_n = n;
+}
+__attribute__((optimize("Os"))) void uvm2_restart_keep(void)
+{
+    if (!s_snap_n || uvm2_psram_ready != 1) return;
+    const uint8_t *t = (const uint8_t *)__StackOneBottom;
+    for (uint32_t i = 0; i < s_snap_n; i++) UVM2_RESTART_PSRAM[i] = t[i];
     s_snap_ok = 1;
 }
-static void restart_game(void)
+__attribute__((optimize("Os"))) void uvm2_restart_if_asked(void)
 {
-    if (!s_snap_ok) { uvm2_restart_refused++; return; }
-    const uint32_t n = (uint32_t)(__data_end__ - __data_start__);
+    if (!uvm2_restart_asked) return;
     __asm volatile ("cpsid i" ::: "memory");      /* nothing runs on what is being put back */
-    for (uint32_t i = 0; i < n; i++) __data_start__[i] = s_data_snap[i];
+    for (uint32_t i = 0; i < s_snap_n; i++) __data_start__[i] = UVM2_RESTART_PSRAM[i];
     rom_reboot(BOOT_TYPE_RAM_IMAGE | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, UVM2_IMAGE_BASE, UVM2_IMAGE_WINDOW);
 }
 #else
 volatile uint32_t uvm2_restart_refused;
-void uvm2_restart_snapshot(void) { }     /* no watch, nothing to restart: keep the 4 KB */
+void uvm2_restart_snapshot(void) { }
+void uvm2_restart_keep(void) { }
+void uvm2_restart_if_asked(void) { }
 #endif
 /* THE VECTREX'S WARM-START MARK. On a reset its BIOS checks Vec_Cold_Flag at $CBFE: $7321
  * there means warm — no logo, straight to the cartridge, which is how the UVMC2's firmware
@@ -256,33 +270,40 @@ void uvm2_restart_snapshot(void) { }     /* no watch, nothing to restart: keep t
  * at the moment of the reboot: with the reset button down the 6809 may be driving the bus. */
 #define VEC_COLD_FLAG_ADDR 0xCBFEu
 #define VEC_COLD_FLAG_WARM 0x7321u
-static void reset_poll(void)
+/* Once a frame on core 1: small rather than fast (it reads one register), so a big game's
+ * SRAM pays as little as it can for it (ROTJ with the monitor is at its edge). */
+__attribute__((optimize("Os"))) static void reset_poll(void)
 {
 #if !UVM2_RESET_WATCH
     return;     /* not watched: see UVM2_RESET_WATCH */
 #else
-    static uint32_t since;
-    static int down;
-    const uint8_t a = uvm2_via_read(UVM2_VIA_T1CH);
-    uvm2_bus_delay(UVM2_RESET_GAP);
-    const uint8_t b = uvm2_via_read(UVM2_VIA_T1CH);
+    static uint32_t first_at;
+    static uint8_t down, pending;
+    /* Not before a frame has been drawn: until a list has set it, DDRB is 0 from the start-up
+     * (seen on the UVMC2: two "presses" at every boot). */
+    if (uvm2_frame_done == 0u) return;
     uvm2_reset_polls++;
-    if (a == b) {
+    if (uvm2_via_read(UVM2_VIA_DDRB) == 0) {   /* 0x9F as the frame left it, 0 if reset */
         s_input_hold = UVM2_RESET_SETTLE;
-        if (!down) { down = 1; uvm2_reset_seen++; since = time_us_32(); uvm2_reset_last_t1 = a; }
-        uvm2_reset_held_us = time_us_32() - since;
-        if (uvm2_reset_held_us > uvm2_reset_held_max_us) uvm2_reset_held_max_us = uvm2_reset_held_us;
+        if (!down) {
+            down = 1;
+            uvm2_reset_seen++;
 #ifndef UVM2_RESET_WATCH_ONLY
-        if (uvm2_reset_held_us >= UVM2_RESET_HOLD_US)
-            rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
+            const uint32_t now = time_us_32();
+            /* a second pulse this soon is the same press bouncing, not a second press */
+            if (pending && now - first_at < UVM2_RESET_BOUNCE_US) return;
+            /* the second press within the wait, or a game that cannot start again: the menu */
+            if ((pending && now - first_at < UVM2_RESET_DOUBLE_US) || !s_snap_ok)
+                rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
+            pending = 1;
+            first_at = now;
 #endif
+        }
     } else {
         if (s_input_hold) s_input_hold--;
-        /* let go: between one and three seconds is a restart (three is the menu, above) */
-#ifndef UVM2_RESET_WATCH_ONLY
-        if (down && uvm2_reset_held_us >= UVM2_RESTART_US) restart_game();
-#endif
-        down = 0; uvm2_reset_held_us = 0;
+        down = 0;
+        /* one press and the wait ran out: the game's core starts it again (uvm2_frame_end) */
+        if (pending && time_us_32() - first_at >= UVM2_RESET_DOUBLE_US) { pending = 0; uvm2_restart_asked = 1; }
     }
 #endif
 }

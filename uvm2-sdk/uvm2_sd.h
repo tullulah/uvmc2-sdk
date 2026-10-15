@@ -30,6 +30,10 @@ int uvm2_sd_create(const char *path, const unsigned char *data, uint32_t n);
  *  than 512 bytes. 1 if it was written. */
 int uvm2_sd_overwrite(const char *path, const unsigned char *data, uint32_t n);
 
+/** A sector of scratch shared by the SDK (the two above pad into it, the config reader reads
+ *  into it): borrowed by one at a time, never across a call that may take it. */
+extern unsigned char uvm2_sd_sector[520];
+
 /** Writes a file of ANY size; missing folders are created and an existing file is replaced.
  *  1 if it was written. This is the one for dumping traces, saved games or captures. */
 int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n);

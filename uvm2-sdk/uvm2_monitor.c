@@ -41,6 +41,12 @@
 #include "uvm2_bus.h"
 #include "uvm2_text.h"
 
+/* THE MONITOR'S PSRAM WINDOW, 256 KB from 0x117C0000 (0x157C0000 uncached), and what else
+ * lives in it, all through the uncached alias:
+ *   0x157C0000  MONITOR.BIN, its .data and .bss (~40 KB)
+ *   0x157E0000  the reset button's copy of .data (uvm2_core1.c, up to 2 KB)
+ *   0x157F0000  the RTT ring of DEBUG_PRINT / vpy_log (sdk_rp2350.c, 4 KB)
+ *   0x157F1000  the pause sign's commands (built by the monitor, replayed by core 1) */
 #define UVM2_MONITOR_ADDR      0x117C0000u   /* monitor/monitor.ld */
 #define UVM2_MONITOR_UNCACHED  0x157C0000u
 #define UVM2_MONITOR_MAX       (256u * 1024u)
