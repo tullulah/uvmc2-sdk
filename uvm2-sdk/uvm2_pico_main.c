@@ -28,6 +28,7 @@ void uvm2_romzip_load(void);       /* uvm2_romzip.c: reads roms/<game>.zip off t
 void uvm2_core1_start(void);       /* uvm2_core1.c */
 void uvm2_stack_paint(void);       /* uvm2_core1.c: stack0_peak / stack1_peak */
 void uvm2_restart_snapshot(void);  /* uvm2_core1.c: .data, for the reset button's restart */
+void uvm2_monitor_load(void);      /* uvm2_monitor.c: the debug monitor, with UVM2_USB_MONITOR */
 #endif
 
 /* PANIC, WITH NO printf IN THE WAY.
@@ -101,7 +102,7 @@ int main(void)
      * there is no point starting it before the clock is there. */
     uvm2_stream_start();
 #endif
-#  if defined(UVM2_CMDS_IN_PSRAM) || defined(UVM2_PSRAM_START) || defined(UVM2_ROMZIP_IN_PSRAM)
+#  if defined(UVM2_CMDS_IN_PSRAM) || defined(UVM2_PSRAM_START) || defined(UVM2_ROMZIP_IN_PSRAM) || defined(UVM2_USB_MONITOR)
     /* UVM2_PSRAM_START: powers the PSRAM up WITHOUT using it, so that "the list lives
      * there" and "the chip is active" can be tested separately. The PIO stream works with
      * the chip off and collapses into a diagonal with the list in PSRAM — even copying it
@@ -132,6 +133,8 @@ int main(void)
      * cartridge the firmware does this; here the UVM2 does not, so we have to read it
      * ourselves. If it fails, the game paints its "no romset" sign and does not hang. */
     uvm2_romzip_load();
+    /* A debug build's USB port (uvm2_monitor.c): MONITOR.BIN off the card into the PSRAM. */
+    uvm2_monitor_load();
 #  ifdef UVM2_DUAL_CORE
     /* After the runtime init, never before: core 1 takes the bus from here on,
      * and it must not start until the VIA has been programmed and the 6809 is

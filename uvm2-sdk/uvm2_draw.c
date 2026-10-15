@@ -3112,6 +3112,10 @@ void uvm2_frame_end(void)
      * and pads to the pace exactly as without it. Off, it only counts the combo. */
     uvm2_hud_frame();
 #endif
+#ifdef UVM2_USB_MONITOR
+    /* the USB debug monitor (uvm2_monitor.c): its line in the corner, then its work */
+    { extern void uvm2_monitor_frame(void); uvm2_monitor_frame(); }
+#endif
 
     /* BLANK EXPLICITLY, do not assume it. This used to say "blanked already (every lit
      * segment restores the PCR)", which is an ASSUMPTION: it only holds if the frame ended on
