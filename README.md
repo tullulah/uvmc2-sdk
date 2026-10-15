@@ -37,6 +37,27 @@ Requirements: the Arm GNU Toolchain (`arm-none-eabi-gcc`), CMake, Python 3, and
 Rust (cargo 1.78 or newer — the beam model and the bus stream are linked into
 every build).
 
+## On the cartridge, over USB
+
+The UVMC2's USB port is enough to put games on its SD card, run them and debug them — no card
+reader, no probe, no IDE. A game built with `make uvm2 UVM2_USB_MONITOR=1` carries the debug
+monitor (`MONITOR.BIN` on the card, loaded into the PSRAM); from the multicart's menu, an SD
+bridge is run from SRAM through BOOTSEL (the flash is never written). Both are prebuilt in
+`uvm2-sdk/prebuilt/`. Needs `picotool`; macOS and Linux.
+
+```sh
+tools/uvmc2.py deploy build_uvm2/game.um2      # onto the card (with MONITOR.BIN), and running
+tools/uvmc2.py log                             # the game's DEBUG_PRINT / vpy_log text
+tools/uvmc2.py gdb build_uvm2/pico/game.elf    # the gdb port, and the command:
+arm-none-eabi-gdb build_uvm2/pico/game.elf -ex "target remote /dev/cu.usbmodemXXX3"
+```
+
+gdb attaches with no server in between (the monitor's second USB port speaks its remote
+protocol): break, step, next, finish, bt, print, set var, info registers, Ctrl-C, detach. A
+held game stays on screen with a pause sign. Breakpoints work from the game's first frame on.
+`uvmc2.py --help` lists the rest (`upload`, `run`, `ports`); the protocol is in its docstring
+and in `uvm2-sdk/monitor/`.
+
 ## Checking it
 
 ```sh

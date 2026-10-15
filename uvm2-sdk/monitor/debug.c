@@ -63,7 +63,7 @@ static volatile uint32_t *s_frame;
 static uint32_t *s_saved;
 static uint32_t s_excret;
 
-enum { RUN, HALT_BP, HALT_STEP, HALT_PAUSE, HALT_BKPT };
+enum { RUN = DBG_RUN, HALT_BP = DBG_BP, HALT_STEP = DBG_STEP, HALT_PAUSE = DBG_PAUSE, HALT_BKPT = DBG_BKPT };
 static volatile int s_state = RUN;
 static volatile int s_event;          /* a stop the interrupt has still to report */
 
@@ -151,6 +151,7 @@ static void stop(int why)
     tmp_clear();
     s_state = why;
     s_event = 1;
+    mon_paused(1);
     mon_wake_usb();                       /* the interrupt reports it */
 }
 
@@ -160,6 +161,7 @@ static void resume(void)
 {
     uint32_t pc = s_frame[6];
     s_state = RUN;
+    if (!s_stepping) mon_paused(0);   /* a step keeps the sign: it ends held again */
     if (bp_find(pc) >= 0) {
         s_over_bp = pc;
         insn_write(pc, s_bp_orig[bp_find(pc)]);
@@ -252,6 +254,7 @@ void dbg_events(void)
 {
     if (!s_event) return;
     s_event = 0;
+    gdb_stopped(s_state);
     mon_put("!S ");
     mon_put(s_why[s_state]);
     mon_put(" ");
@@ -301,9 +304,8 @@ int dbg_command(const char *l)
         return 1;
     }
     case 'D':
-        while (s_bp_n) bp_clear(s_bp_addr[s_bp_n - 1]);
+        dbg_detach();
         mon_put("OK\r\n");
-        if (halted) s_go = GO_CONTINUE;
         return 1;
     case 'H':
         mon_put("OK\r\n");
@@ -344,4 +346,26 @@ int dbg_command(const char *l)
         return 1;
     }
     return 0;
+}
+
+/* ── For gdb.c ─────────────────────────────────────────────────────────────────────────── */
+
+int dbg_halted(void) { return s_state != RUN; }
+int dbg_reason(void) { return s_state; }
+uint32_t dbg_reg(int n) { return reg_get(n); }
+int dbg_set_reg(int n, uint32_t v) { return n >= 0 && n <= 16 && reg_set(n, v); }
+int dbg_bp(int set, uint32_t addr) { return set ? bp_set(addr) : (bp_clear(addr), 1); }
+void dbg_pause(void) { if (s_state == RUN) DEMCR |= DEMCR_MON_PEND; }
+
+void dbg_resume(int step)
+{
+    if (s_state == RUN) return;
+    if (step) { s_lo = s_hi = 0; s_skip = 0; s_go = GO_STEP; }
+    else s_go = GO_CONTINUE;
+}
+
+void dbg_detach(void)
+{
+    while (s_bp_n) bp_clear(s_bp_addr[s_bp_n - 1]);
+    if (s_state != RUN) s_go = GO_CONTINUE;
 }

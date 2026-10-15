@@ -249,6 +249,14 @@ uint32_t uvm2_list_commands(void) { return s_count; }
 /* The list being built (uvm2_list_commands of it so far): a BIOS keeps a copy of a small one
  * built at boot to replay it on its own (the pause sign, uvm2_replay_extra). */
 const uint8_t *uvm2_list_buffer(void) { return s_cmds[s_buf]; }
+/* The list back to `count` commands and `cycles` (uvm2_list_commands / uvm2_list_cycles read
+ * before): what was drawn since is taken out again. The debug monitor builds its pause sign on
+ * top of a frame this way, keeps a copy and leaves the frame as it was (uvm2_monitor.c). */
+void uvm2_list_rewind(uint32_t count, uint32_t cycles)
+{
+    if (count <= s_count) { s_count = count; s_cycles = cycles; }
+    uvm2_draw_invalidate();
+}
 /* How many more commands the game may still put in this frame's list (uvm2_hud.c asks, so it
  * never makes a list overflow). */
 uint32_t uvm2_list_room(void) { return s_limit > s_count ? s_limit - s_count : 0u; }

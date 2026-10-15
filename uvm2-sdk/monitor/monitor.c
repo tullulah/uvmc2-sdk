@@ -23,6 +23,9 @@
  *   b                    -> "OK", then the chip resets (back to the multicart's menu)
  *   the debugger's commands (Z z H c s R P Q) and its "!S" stops: debug.c
  *   "!T <hex>"           the game's DEBUG_PRINT / vpy_log text (its RTT ring)
+ *
+ * A SECOND PORT speaks gdb's Remote Serial Protocol (gdb.c): arm-none-eabi-gdb attaches to the
+ * game with `target remote <that port>`.
  */
 #include <stdint.h>
 #include <string.h>
@@ -88,6 +91,8 @@ static int readable(uint32_t a, uint32_t n)
     uint32_t e = a + n;
     return (a >= 0x20000000u && e <= 0x20082000u) || (a >= 0x10000000u && e <= 0x11800000u) || (a >= 0x15000000u && e <= 0x15800000u);
 }
+int mon_readable(uint32_t a, uint32_t n) { return n && readable(a, n); }
+int mon_writable(uint32_t a, uint32_t n) { return n && a >= 0x20000000u && a + n <= 0x20082000u; }
 
 /* What the game lends the monitor (uvm2_monitor.c): the SD card, a file written in pieces. */
 typedef struct {
@@ -96,8 +101,15 @@ typedef struct {
     int (*put)(const unsigned char *data, uint32_t n);
     int (*close)(void);
     void *rtt;      /* version 2: the game's RTT block, whose text goes out as "!T" lines */
+    volatile uint32_t *paused;   /* version 3: set while the game is held (the pause sign) */
 } uvm2_monitor_host;
 static const uvm2_monitor_host *s_host;
+
+/* The game is held / runs on (debug.c): the game's SDK draws its pause sign meanwhile. */
+void mon_paused(int on)
+{
+    if (s_host && s_host->version >= 3 && s_host->paused) *s_host->paused = (uint32_t)on;
+}
 
 /* AN UPLOAD: `u` names the file; the game's core opens it (UP_OPEN), then the interrupt fills
  * s_chunk from the port and the game's core writes each full chunk to the card. While a chunk
@@ -221,6 +233,7 @@ static void poll(void)
 {
     tud_task();
     dbg_events();
+    gdb_poll();
     rtt_drain();
     for (;;) {
         int up = s_up;

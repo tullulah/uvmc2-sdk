@@ -13,11 +13,21 @@ static const tusb_desc_device_t desc_device = {
 };
 uint8_t const *tud_descriptor_device_cb(void) { return (uint8_t const *)&desc_device; }
 
+/* Interface 0: the monitor's port. Interface 2 (UVM2_GDB_PORT): gdb's. macOS names their
+ * devices after the interface number: /dev/cu.usbmodem<location>1 and ...3. */
+#ifdef UVM2_GDB_PORT
+enum { ITF_CDC = 0, ITF_CDC_DATA, ITF_GDB, ITF_GDB_DATA, ITF_TOTAL };
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_CDC_DESC_LEN)
+#else
 enum { ITF_CDC = 0, ITF_CDC_DATA, ITF_TOTAL };
 #define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
+#endif
 static const uint8_t desc_config[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
     TUD_CDC_DESCRIPTOR(ITF_CDC, 4, 0x81, 8, 0x02, 0x82, 64),
+#ifdef UVM2_GDB_PORT
+    TUD_CDC_DESCRIPTOR(ITF_GDB, 5, 0x83, 8, 0x04, 0x84, 64),
+#endif
 };
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) { (void)index; return desc_config; }
 
@@ -25,7 +35,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) { (void)index; ret
 #ifndef USB_PRODUCT
 #define USB_PRODUCT "UVMC2 debug monitor"
 #endif
-static const char *const strings[] = { "", "Vectrex Studio", USB_PRODUCT, "1", "Monitor" };
+static const char *const strings[] = { "", "Vectrex Studio", USB_PRODUCT, "1", "Monitor", "GDB" };
 static uint16_t desc_str[32];
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {

@@ -28,6 +28,7 @@
  *     PS<psram: 0 never tried, 1 failed, 2 up> N<bytes loaded> X<failure> W<first word>
  *     USB<clk_usb in kHz, measured> S<USB interrupt sources seen> C<SIE_STATUS now> */
 #include <stdint.h>
+#include <string.h>
 #ifdef UVM2_USB_MONITOR
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
@@ -36,6 +37,8 @@
 #include "hardware/structs/clocks.h"
 #include "hardware/structs/pll.h"
 #include "uvm2_sd.h"
+#include "uvm2_draw.h"
+#include "uvm2_bus.h"
 
 #define UVM2_MONITOR_ADDR      0x117C0000u   /* monitor/monitor.ld */
 #define UVM2_MONITOR_UNCACHED  0x157C0000u
@@ -55,9 +58,56 @@ typedef struct {
     int (*put)(const unsigned char *data, uint32_t n);
     int (*close)(void);
     void *rtt;      /* version 2: the game's RTT block (sdk_rp2350.c), its text goes out on USB */
+    volatile uint32_t *paused;   /* version 3: set while the debugger holds the game */
 } uvm2_monitor_host;
 extern char _SEGGER_RTT[] __attribute__((weak));   /* absent in a game without the C runtime */
-static const uvm2_monitor_host s_host = { 2, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close, _SEGGER_RTT };
+static volatile uint32_t s_paused;
+static const uvm2_monitor_host s_host = { 3, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close, _SEGGER_RTT, &s_paused };
+
+/* THE PAUSE SIGN, as on the Vectrex Studio cartridge (its firmware, bios.rs): two bars in the
+ * top right corner over the last picture while the debugger holds the game. Core 1 redraws
+ * that picture on its own (UVM2_REPLAY_LAST) and then calls uvm2_replay_extra, which adds the
+ * sign. It is drawn once, on top of the first frame the monitor sees, copied out and taken
+ * out of that frame again (uvm2_list_rewind). The copy is kept in the PSRAM, in the monitor's
+ * window after the RTT ring (sdk_rp2350.c, 0x157F0000 + 4 KB), written and read through the
+ * uncached alias: a big game has not got the few hundred bytes in SRAM, and SCRATCH_X is
+ * core 1's stack. Core 1 copies it to its stack before replaying it, since a list replayed
+ * straight out of the PSRAM is what the stream does not take (uvm2_draw.c). */
+#define PAUSE_MAX 160
+#define s_pause_cmds ((uint8_t *)0x157F1000u)
+static volatile uint32_t s_pause_n;
+static int s_pause_built;
+
+static void build_pause_sign(void)
+{
+    const uint32_t n0 = uvm2_list_commands(), c0 = uvm2_list_cycles();
+    for (int bar = 96; bar <= 110; bar += 14) {
+        for (int k = 0; k < 3; k++) {
+            uvm2_draw_reset();
+            uvm2_draw_intensity(0x7F);
+            uvm2_draw_move_abs(bar + 2 * k, 112);
+            uvm2_draw_delta(0, -26);
+        }
+    }
+    uvm2_draw_reset();
+    uint32_t n = uvm2_list_commands() - n0;
+    if (n <= PAUSE_MAX) {
+        const uint8_t *src = uvm2_list_buffer() + n0 * 3u;
+        for (uint32_t i = 0; i < n * 3u; i++) ((volatile uint8_t *)s_pause_cmds)[i] = src[i];
+        s_pause_n = n;
+    }
+    uvm2_list_rewind(n0, c0);
+}
+
+/* Core 1, after each redraw of the last picture (uvm2_core1.c). */
+void uvm2_replay_extra(void)
+{
+    if (!s_paused || !s_pause_n) return;
+    uint8_t cmds[PAUSE_MAX * 3];
+    const uint32_t n = s_pause_n;
+    for (uint32_t i = 0; i < n * 3u; i++) cmds[i] = ((const volatile uint8_t *)s_pause_cmds)[i];
+    uvm2_exec(cmds, n);
+}
 
 typedef struct {
     uint32_t magic, version;
@@ -129,7 +179,9 @@ static void read_clocks(void)
     s_pll = (pll_usb_hw->cs & PLL_CS_LOCK_BITS) != 0;
     s_clk = (clocks_hw->clk[clk_usb].ctrl & CLOCKS_CLK_USB_CTRL_ENABLE_BITS) != 0;
     s_rst = (resets_hw->reset_done & RESETS_RESET_USBCTRL_BITS) != 0;
+#ifdef UVM2_USB_MONITOR_DIAG
     s_usb_khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_USB);
+#endif
 }
 
 /* One step of the bring-up; returns the step reached. */
@@ -141,12 +193,18 @@ static int step(int st)
         return 10;
     case 10:
         /* clk_usb at 48 MHz from PLL_USB. Left alone if it already runs: whoever set it up
-         * (the multicart's firmware, for its own USB port) may be feeding other clocks from it. */
+         * (the multicart's firmware, for its own USB port) may be feeding other clocks from it.
+         * And it always runs here -- the multicart's firmware and the bootrom's BOOTSEL both
+         * leave it at 48 MHz (measured) -- so only the diagnostic build carries the set-up:
+         * pll_init and clock_configure are ~400 bytes a big game has not got (ROTJ). Without
+         * the clock the monitor stays here, off, and the game runs as ever. */
+#ifdef UVM2_USB_MONITOR_DIAG
         if (!s_pll) { pll_init(pll_usb, 1, 1440000000u, 6, 5); }
         if (!(clocks_hw->clk[clk_usb].ctrl & CLOCKS_CLK_USB_CTRL_ENABLE_BITS))
             clock_configure_undivided(clk_usb, 0, CLOCKS_CLK_USB_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB, 48000000u);
         read_clocks();
-        return 11;
+#endif
+        return s_pll && s_clk ? 11 : 10;
     case 11: {
         /* the controller out of reset, waiting at most 10 ms: without its clock it never
          * comes out, and the pico-sdk's own wait (in tud_init) would hang for ever */
@@ -229,6 +287,7 @@ void uvm2_monitor_frame(void)
     show();
 #endif
     if (!s_mon) return;
+    if (!s_pause_built) { s_pause_built = 1; build_pause_sign(); }
     int st = uvm2_monitor_state;
     if (st == 14) { s_mon->task(); return; }
     /* With the lines on, the one just drawn says the step before: a hang inside the next
