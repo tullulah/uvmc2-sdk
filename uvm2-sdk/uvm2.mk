@@ -350,6 +350,7 @@ uvm2: $(UVM2_DEPS) | $(UVM2_BUILD)
 	    -DUVM2_GAME_INCS="$(call list,$(UVM2_GAME_INCS))" \
 	    -DUVM2_GAME_DEFS="$(call list,$(UVM2_GAME_DEFS))" \
 	    -DUVM2_GAME_PREINC="$(call list,$(UVM2_GAME_PREINC))" \
+	    -DUVM2_GAME_OPTS="$(call list,$(UVM2_DEBUG_CFLAGS))" \
 	    -DUVM2_GAME_LIBS="$(call list,$(UVM2_GAME_LIBS))" > $(UVM2_CMAKE_BUILD).log
 	cmake --build $(UVM2_CMAKE_BUILD) -j8
 ifeq ($(filter 0,$(UVM2_LOAD_PSRAM)),$(UVM2_LOAD_PSRAM))
@@ -390,8 +391,10 @@ RP2350_LDFLAGS ?= -nostdlib -Wl,--gc-sections -Wl,-T,$(RP2350_SDK)/rp2350_game_r
 # -g: the line table the IDE's debugger needs (Debug on Cartridge, the SWD build mode). It does
 # not change the image: the _sd.bin is objcopied out of the ELF without the debug sections.
 RP2350_CART_CFLAGS = $(filter-out $(UVM2_UM2_ONLY),$(UVM2_CFLAGS_CLEAN)) -DVPY_DUAL_CORE -g
-# UVM2_DEBUG_CFLAGS: what the IDE's "SWD debug" build mode adds (-Og), after the game's own
-# flags so its -O is the one gcc keeps: locals stay where the debugger can read and set them.
+# UVM2_DEBUG_CFLAGS: what the IDE's debug builds add (-Og), after the game's own flags so its
+# -O is the one gcc keeps: locals stay where the debugger can read and set them. The uvm2
+# recipe passes it to CMake as UVM2_GAME_OPTS (always, empty or not: a cached debug
+# configuration must not outlive the debug build).
 RP2350_CART_CFLAGS += $(UVM2_DEBUG_CFLAGS)
 
 rp2350-cart $(UVM2_NAME)_rp2350: $(UVM2_DEPS) | $(RP2350_BUILD)
