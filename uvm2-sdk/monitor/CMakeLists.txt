@@ -13,7 +13,7 @@ target_include_directories(monitor PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 # the first lock taken (inside tud_init) spun for ever. The game keeps the software ones in
 # its SRAM, so the two never share a lock.
 target_compile_definitions(monitor PRIVATE PICO_USE_SW_SPIN_LOCKS=0)
-target_link_libraries(monitor tinyusb_device hardware_irq hardware_resets hardware_timer)
+target_link_libraries(monitor tinyusb_device hardware_irq hardware_resets hardware_timer pico_bootrom)
 # Our own script, given straight to the linker (the pico-sdk's own one is not used at all)
 target_link_options(monitor PRIVATE -nostartfiles -Wl,--gc-sections -Wl,--wrap=panic -Wl,--wrap=irq_add_shared_handler -Wl,--wrap=irq_remove_handler -Wl,--wrap=irq_set_enabled -T${CMAKE_CURRENT_LIST_DIR}/monitor.ld)
 add_custom_command(TARGET monitor POST_BUILD

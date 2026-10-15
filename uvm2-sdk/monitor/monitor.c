@@ -12,18 +12,21 @@
  * exclusive loads/stores, and an exclusive store to the PSRAM never succeeds.
  *
  * PROTOCOL: text lines, answers end in CR LF.
- *   v                    -> "UVMC2-MON 2"
+ *   v                    -> "UVMC2-MON 3"
  *   r <hex addr> <n>     -> n bytes (n <= 256) as hex, one line
  *   w <hex addr> <hex>   -> "OK": the bytes written (SRAM only)
  *   u <size> <path>      -> "OK", then exactly <size> raw bytes, then "DONE <size> <crc32>";
  *                           "ERR ..." instead if the file cannot be opened or written. The file
  *                           goes onto the SD card as it arrives (the game writes it, see task).
+ *   x                    -> "OK", then the chip goes to BOOTSEL (the host loads a game into SRAM
+ *                           and runs it: picotool load -x)
  *   b                    -> "OK", then the chip resets (back to the multicart's menu)
  */
 #include <stdint.h>
 #include <string.h>
 #include "tusb.h"
 #include "hardware/timer.h"
+#include "pico/bootrom.h"
 
 #define MON_MAGIC 0x4E4F4D55u   /* "UMON" */
 
@@ -117,7 +120,7 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *d, uint32_t n)
 
 static void command(const char *l)
 {
-    if (l[0] == 'v') { put("UVMC2-MON 2\r\n"); return; }
+    if (l[0] == 'v') { put("UVMC2-MON 3\r\n"); return; }
     if (l[0] == 'r') {
         const char *p = l + 1;
         uint32_t a = parse_hex(&p), n = parse_dec(&p);
@@ -157,6 +160,12 @@ static void command(const char *l)
         s_eat_lf = s_line_cr;
         s_up = UP_OPEN;   /* the game's core opens it and answers */
         return;
+    }
+    if (l[0] == 'x') {                   /* to BOOTSEL: the host runs a game from RAM */
+        put("OK\r\n");
+        tud_cdc_write_flush();
+        busy_wait_us_32(20000);
+        rom_reset_usb_boot_extra(-1, 0, false);
     }
     if (l[0] == 'b') {
         put("OK\r\n");

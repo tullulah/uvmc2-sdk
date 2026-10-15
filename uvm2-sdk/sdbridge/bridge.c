@@ -21,6 +21,8 @@
  * the IDE uploads through either the same way:
  *   v                 -> "UVMC2-BRIDGE 2"
  *   u <size> <path>   -> "OK", then <size> raw bytes, then "DONE <size> <crc32>" (or "ERR ...")
+ *   x                 -> "OK", then the chip goes to BOOTSEL: the host loads the game it just
+ *                        put on the card into SRAM and runs it (picotool load -x)
  *   b                 -> "OK"; the screen says DONE, RESET on the console goes back to the menu
  * A command line ending in CR LF: the LF after it is not taken for the file's first byte. */
 #include <stdint.h>
@@ -208,6 +210,13 @@ static void command(const char *l)
         while (*p == ' ') p++;
         upload(n, p);
         return;
+    }
+    if (l[0] == 'x') {                   /* to BOOTSEL: the host runs the game from RAM */
+        put("OK\r\n");
+        say("STARTING THE GAME", 0);
+        uint32_t t0 = time_us_32();
+        while (time_us_32() - t0 < 20000u) tud_task();   /* the answer out first */
+        rom_reset_usb_boot_extra(-1, 0, false);
     }
     if (l[0] == 'b') {
         put("OK\r\n");
