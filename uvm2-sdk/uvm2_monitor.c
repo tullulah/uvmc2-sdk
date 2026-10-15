@@ -47,10 +47,20 @@
 #define STEP_FRAMES            1u
 #endif
 
+/* What the game lends the monitor: the SD card, a file written in pieces (its uploads). The
+ * monitor calls these from its `task`, i.e. here, on the game's core, between frames. */
+typedef struct {
+    uint32_t version;
+    int (*open)(const char *path);
+    int (*put)(const unsigned char *data, uint32_t n);
+    int (*close)(void);
+} uvm2_monitor_host;
+static const uvm2_monitor_host s_host = { 1, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close };
+
 typedef struct {
     uint32_t magic, version;
     uint32_t *bss_start, *bss_end;
-    void (*init)(void);
+    void (*init)(const uvm2_monitor_host *host);   /* before version 4 it took nothing */
     void (*task)(void);
     uint32_t (*status)(void);   /* version 2: irqs << 8 | connected << 1 | mounted */
     uint32_t (*seen)(void);     /* version 3: the USB interrupt sources seen (INTS bits) */
@@ -143,7 +153,7 @@ static int step(int st)
         return s_rst ? 12 : 11;   /* not out of reset: stay, it says RST0 */
     }
     case 12:
-        s_mon->init();
+        s_mon->init(&s_host);
         return 13;
     default:
         return 14;

@@ -626,6 +626,42 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     return write_all(&f, data, n);
 }
 
+#ifdef UVM2_USB_MONITOR
+/* A FILE WRITTEN AS IT ARRIVES: the USB monitor's uploads (uvm2_monitor.c), a .um2 sent from
+ * the IDE in pieces, so it never has to sit whole in memory. Open, any number of puts, close;
+ * one at a time. Missing folders are created and an existing file is replaced. Only in a
+ * monitor build: the open file costs its sector buffer in SRAM. */
+static FIL s_stream;
+static int s_streaming;
+
+int uvm2_sd_stream_open(const char *path)
+{
+    uint32_t len;
+    if (s_streaming) { f_close(&s_stream); s_streaming = 0; }
+    if (!begin() || !make_parents(path)) return 0;
+    if (!open_file(&s_stream, path, FA_WRITE | FA_CREATE_ALWAYS, &len)) return 0;
+    s_streaming = 1;
+    return 1;
+}
+
+int uvm2_sd_stream_put(const unsigned char *data, uint32_t n)
+{
+    UINT put = 0;
+    if (!s_streaming) return 0;
+    FRESULT fr = f_write(&s_stream, data, n, &put);
+    if (fr == FR_OK && put != n) fr = FR_DENIED;              /* the card filled up */
+    if (fr != FR_OK) { f_close(&s_stream); s_streaming = 0; }
+    return fail(fr);
+}
+
+int uvm2_sd_stream_close(void)
+{
+    if (!s_streaming) return 0;
+    s_streaming = 0;
+    return fail(f_close(&s_stream));                          /* the entry is written HERE */
+}
+#endif
+
 /* The same, from two pieces: a header and a body that live in different places (a command
  * list dump: its header on the stack, the list in its own buffer, which may be in PSRAM). One
  * file, one close; either piece may be empty, not both. */

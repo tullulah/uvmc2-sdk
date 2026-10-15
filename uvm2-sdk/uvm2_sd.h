@@ -38,6 +38,12 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n);
 int uvm2_sd_write2(const char *path, const unsigned char *a, uint32_t na,
                    const unsigned char *b, uint32_t nb);
 
+/** A file written in pieces as they arrive (UVM2_USB_MONITOR builds only): open, puts, close.
+ *  Missing folders are created, an existing file is replaced. Each returns 1 if it worked. */
+int uvm2_sd_stream_open(const char *path);
+int uvm2_sd_stream_put(const unsigned char *data, uint32_t n);
+int uvm2_sd_stream_close(void);
+
 /* A CHUNK of the file, starting `from` bytes in. Returns what was copied, which may be less
  * than `max` without that being a failure (unlike uvm2_sd_read, where not fitting IS one). It
  * exists so long captures can be replayed without loading them whole into RAM. */
