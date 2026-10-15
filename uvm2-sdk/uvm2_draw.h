@@ -13,6 +13,12 @@
 #ifndef UVM2_DRAW_H
 #define UVM2_DRAW_H
 
+/* A build with the USB debug monitor redraws the last picture while no new one comes
+ * (UVM2_REPLAY_LAST): a game held at a breakpoint stays on screen instead of going dark. */
+#if defined(UVM2_USB_MONITOR) && !defined(UVM2_REPLAY_LAST)
+#define UVM2_REPLAY_LAST 1
+#endif
+
 #include <stdint.h>
 
 #ifdef __cplusplus

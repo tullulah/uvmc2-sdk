@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.13)
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 project(uvm2_monitor C CXX ASM)
 pico_sdk_init()
-add_executable(monitor monitor.c usb_descriptors.c)
+add_executable(monitor monitor.c debug.c usb_descriptors.c)
 target_include_directories(monitor PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 # HARDWARE spin locks, not the RP2350 default software ones: those are LDAEX/STREX on a
 # variable in the image's .bss, i.e. in the PSRAM, where an exclusive store never succeeds --

@@ -54,8 +54,10 @@ typedef struct {
     int (*open)(const char *path);
     int (*put)(const unsigned char *data, uint32_t n);
     int (*close)(void);
+    void *rtt;      /* version 2: the game's RTT block (sdk_rp2350.c), its text goes out on USB */
 } uvm2_monitor_host;
-static const uvm2_monitor_host s_host = { 1, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close };
+extern char _SEGGER_RTT[] __attribute__((weak));   /* absent in a game without the C runtime */
+static const uvm2_monitor_host s_host = { 2, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close, _SEGGER_RTT };
 
 typedef struct {
     uint32_t magic, version;

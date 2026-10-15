@@ -534,20 +534,31 @@ void *memmove(void *d, const void *s, size_t n) {
  *
  * A SEGGER RTT control block (`_SEGGER_RTT`, the layout probe-rs reads): one up channel the
  * game writes and the IDE's debugger reads while the game runs -- DEBUG_PRINT, vpy_log().
- * Only on the Vectrex Studio cartridge (the .um2 links the stubs below).
+ * On the Vectrex Studio cartridge, and in a UVMC2 build with the USB debug monitor
+ * (UVM2_USB_MONITOR), whose monitor reads the same ring and sends it over USB (uvm2_monitor.c
+ * hands it the block). Any other .um2 links the stubs below.
  *
  * IT NEVER WAITS. With nobody reading (no probe, or the IDE not debugging) the ring fills
  * and what does not fit is dropped: the firmware's defmt-rtt blocks instead, and a cartridge
  * with it on and no reader freezes at its first line (bios.rs SMP_TELEM). A game must run the
  * same with or without the debugger. */
-#if defined(VPY_RP2350) && !defined(UVM2_PICO_RUNTIME)
+#if defined(VPY_RP2350) && (!defined(UVM2_PICO_RUNTIME) || defined(UVM2_USB_MONITOR))
 #include <stdarg.h>
+typedef struct { const char *name; char *buf; unsigned size; volatile unsigned wr; volatile unsigned rd; unsigned flags; } vpy_rtt_ring;
+typedef struct { char id[16]; int up_n, down_n; vpy_rtt_ring up[1], down[1]; } vpy_rtt_cb;
+#if defined(UVM2_PICO_RUNTIME)
+/* THE UVMC2's RING IS IN THE PSRAM, in the debug monitor's window (uvm2_monitor.c: 256 KB at
+ * 0x117C0000, the monitor uses ~30): a big .um2 has not got the 1 KB in SRAM (ROTJ's .bss
+ * overflowed by 860 bytes with it). Written through the uncached alias, as everything the
+ * game writes there; the monitor reads it the same way. */
+#define VPY_RTT_SIZE 4096
+#define vpy_rtt_up_buf ((char *)0x157F0000u)
+#else
 #ifndef VPY_RTT_SIZE
 #define VPY_RTT_SIZE 1024
 #endif
-typedef struct { const char *name; char *buf; unsigned size; volatile unsigned wr; volatile unsigned rd; unsigned flags; } vpy_rtt_ring;
-typedef struct { char id[16]; int up_n, down_n; vpy_rtt_ring up[1], down[1]; } vpy_rtt_cb;
 static char vpy_rtt_up_buf[VPY_RTT_SIZE];
+#endif
 static char vpy_rtt_down_buf[16];
 __attribute__((used)) vpy_rtt_cb _SEGGER_RTT = {
     "SEGGER RTT", 1, 1,
