@@ -412,6 +412,21 @@ int vpy3d_terrain(const int16_t *h, int cols, int rows, int32_t x0, int32_t z0, 
 int vpy3d_text(const char *s, const vpy_xf *place, int32_t height, int br, int flags);
 int vpy3d_text_billboard(const char *s, int32_t x, int32_t y, int32_t z, int32_t height, int br, int flags);
 
+/* ---- a vector sprite in the world -------------------------------------------
+ * A compiled .vec (the very data DRAW_VECTOR takes) on a plane in the world, in
+ * perspective: a logo lying on a receding plane, a window frame or a skyline as the
+ * backdrop of a 3D scene, decals on a wall. `place` puts the plane exactly as for
+ * vpy3d_text: the sprite's x runs along its local x, y up its local y, its origin
+ * (the sprite's centre, where the compiler put it) at place->t. `scale` is world
+ * units per sprite unit. `br` > 0 draws every path at that brightness; <= 0 keeps
+ * each path's own, as DRAW_VECTOR does. Bezier segments are cut into 8 lines.
+ *   VPY3D_TEXT_OCCLUDE  through the occluder: solids in front hide it
+ *   VPY3D_TEXT_FRONT    only when its -z side faces the camera
+ * (VPY3D_TEXT_CENTRE has no meaning here: a sprite is centred already.) The points'
+ * own z, which a .vec may carry, is not in the compiled stream and is not used.
+ * Returns the strokes it sent. */
+int vpy3d_draw_vec(const unsigned char *vec, const vpy_xf *place, int32_t scale, int br, int flags);
+
 /* ---- a ray against a mesh ---------------------------------------------------
  * The first face of mesh `m`, placed by `place`, that a ray from (ox,oy,oz)
  * along (dx,dy,dz) meets within `max_dist` world units. Returns the face's index
