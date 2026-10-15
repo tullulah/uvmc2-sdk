@@ -323,6 +323,10 @@ volatile uint32_t uvm2_cached_axes;
 static uint32_t s_audio_acc;
 
 void uvm2_core1_gap(void);   /* per-pass hook; weak, below */
+/* After each redraw of the last list (UVM2_REPLAY_LAST): a BIOS may draw over it -- the
+ * Vectrex Studio cartridge's pause sign while a debugger holds the program. Weak, absent
+ * unless someone defines it. */
+extern void uvm2_replay_extra(void) __attribute__((weak));
 
 #ifdef UVM2_CORE0_WORKER
 /* THE GAME'S WORK, ON THE CORE THAT REPLAYS (our cartridge's BIOS: API set_worker).
@@ -625,6 +629,11 @@ static void core1_main(void)
         }
 
         uvm2_stats.us_rest = time_us_32() - t2;
+#ifdef UVM2_REPLAY_LAST
+        /* After a REDRAW of the last list (the program published nothing new: it is slow, or
+         * a debugger has it paused) whatever the BIOS adds on top: our cartridge's pause sign. */
+        if (replay && uvm2_replay_extra) uvm2_replay_extra();
+#endif
         __asm volatile ("dmb" ::: "memory");       /* the work before the flag */
         uvm2_frame_done = served;
 #ifdef UVM2_REPLAY_LAST

@@ -246,6 +246,9 @@ uint32_t uvm2_list_cycles(void) { return s_cycles; }
  * call cost, which `uvm2_stats.commands` cannot because it is only written when the
  * frame closes. Nothing in a game should need it. */
 uint32_t uvm2_list_commands(void) { return s_count; }
+/* The list being built (uvm2_list_commands of it so far): a BIOS keeps a copy of a small one
+ * built at boot to replay it on its own (the pause sign, uvm2_replay_extra). */
+const uint8_t *uvm2_list_buffer(void) { return s_cmds[s_buf]; }
 /* How many more commands the game may still put in this frame's list (uvm2_hud.c asks, so it
  * never makes a list overflow). */
 uint32_t uvm2_list_room(void) { return s_limit > s_count ? s_limit - s_count : 0u; }

@@ -381,7 +381,12 @@ uvm2-clean:
 RP2350_BUILD   ?= build_rp2350
 RP2350_LDFLAGS ?= -nostdlib -Wl,--gc-sections -Wl,-T,$(RP2350_SDK)/rp2350_game_ram.ld \
                   -Wa,--defsym,DUAL_CORE_FLAG=0x44430001
-RP2350_CART_CFLAGS = $(filter-out $(UVM2_UM2_ONLY),$(UVM2_CFLAGS_CLEAN)) -DVPY_DUAL_CORE
+# -g: the line table the IDE's debugger needs (Debug on Cartridge, the SWD build mode). It does
+# not change the image: the _sd.bin is objcopied out of the ELF without the debug sections.
+RP2350_CART_CFLAGS = $(filter-out $(UVM2_UM2_ONLY),$(UVM2_CFLAGS_CLEAN)) -DVPY_DUAL_CORE -g
+# UVM2_DEBUG_CFLAGS: what the IDE's "SWD debug" build mode adds (-Og), after the game's own
+# flags so its -O is the one gcc keeps: locals stay where the debugger can read and set them.
+RP2350_CART_CFLAGS += $(UVM2_DEBUG_CFLAGS)
 
 rp2350-cart $(UVM2_NAME)_rp2350: $(UVM2_DEPS) | $(RP2350_BUILD)
 	$(UVM2_LINKER) $(RP2350_CART_CFLAGS) $(RP2350_LDFLAGS) \
