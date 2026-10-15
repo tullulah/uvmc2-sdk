@@ -35,6 +35,7 @@
 #include "uvm2_draw.h"
 #include "uvm2_text.h"
 #include "uvm2_bus.h"
+#include "vs_logo.h"
 
 static char s_line[96];
 static unsigned s_len;
@@ -69,11 +70,13 @@ static void line(int x0, int y0, int dx, int dy)
 static void screen(void)
 {
     uvm2_frame_begin();
-    uvm2_print_text(-90, 90, "VECTREX STUDIO", 3, 70);
-    uvm2_print_text(-110, 40, s_title, 3, 110);
-    if (s_detail[0]) uvm2_print_text(-110, 10, s_detail, 3, 90);
+    /* the Vectrex Studio logo turning, as in the RP2350 cartridge's intro: a turn every 2.56 s */
+    vs_logo_draw((int)(time_us_32() / 20000u), 0, 72, 8, 100,
+                 uvm2_draw_reset, uvm2_draw_intensity, uvm2_draw_move_abs, uvm2_draw_delta);
+    uvm2_print_text(-110, 25, s_title, 3, 110);
+    if (s_detail[0]) uvm2_print_text(-110, 0, s_detail, 3, 90);
     if (s_total) {
-        const int w = 200, x = -100, y = -50, h = 16;
+        const int w = 200, x = -100, y = -45, h = 16;
         uvm2_draw_reset();
         uvm2_draw_intensity(90);
         line(x, y, w, 0); line(x + w, y, 0, h); line(x + w, y + h, -w, 0); line(x, y + h, 0, -h);
@@ -86,17 +89,17 @@ static void screen(void)
         if (p >= 10) pct[n++] = (char)('0' + (p / 10) % 10);
         pct[n++] = (char)('0' + p % 10);
         pct[n++] = '%'; pct[n] = 0;
-        uvm2_print_text(-20, -80, pct, 3, 100);
+        uvm2_print_text(-20, -75, pct, 3, 100);
     }
     uvm2_frame_end();
     s_shown_at = time_us_32();
 }
 
-/* A new picture at most every 150 ms: frame_begin can wait for the buffer core 1 is drawing,
- * and USB is not serviced meanwhile. */
+/* A new picture every 40 ms, for the logo to turn: frame_begin can wait for the buffer core 1
+ * is drawing (a frame at most), and USB is not serviced meanwhile -- bulk transfers wait. */
 static void screen_maybe(void)
 {
-    if (time_us_32() - s_shown_at > 150000u) screen();
+    if (time_us_32() - s_shown_at > 40000u) screen();
 }
 
 static void say(const char *title, const char *detail)
@@ -240,6 +243,7 @@ int main(void)
     uint32_t seen0 = 0, finished_at = 0;
     for (;;) {
         tud_task();
+        if (tud_mounted()) screen_maybe();   /* not before: enumeration wants answers at once */
         if (s_finished) {
             if (!finished_at) { finished_at = time_us_32(); seen0 = uvm2_reset_seen; }
             if (uvm2_reset_seen != seen0) back_to_menu();                 /* RESET is down */

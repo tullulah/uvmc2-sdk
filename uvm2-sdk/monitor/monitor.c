@@ -33,6 +33,7 @@
 #include "hardware/timer.h"
 #include "pico/bootrom.h"
 #include "monitor.h"
+#include "vs_logo.h"
 
 #define MON_MAGIC 0x4E4F4D55u   /* "UMON" */
 
@@ -102,6 +103,18 @@ typedef struct {
     int (*close)(void);
     void *rtt;      /* version 2: the game's RTT block, whose text goes out as "!T" lines */
     volatile uint32_t *paused;   /* version 3: set while the game is held (the pause sign) */
+    /* version 4: the game's drawing (see draw_screen) */
+    void (*print_text)(int x, int y, const char *str, int scale, int intensity);
+    void (*draw_reset)(void);
+    void (*draw_intensity)(int brightness);
+    void (*draw_move_abs)(int x, int y);
+    void (*draw_delta)(int dx, int dy);
+    uint32_t (*list_commands)(void);
+    uint32_t (*list_cycles)(void);
+    const uint8_t *(*list_buffer)(void);
+    void (*list_rewind)(uint32_t count, uint32_t cycles);
+    volatile uint32_t *pause_n;
+    void (*clear_frame)(void);   /* version 5: the game's drawing out of this frame */
 } uvm2_monitor_host;
 static const uvm2_monitor_host *s_host;
 
@@ -316,11 +329,90 @@ static void reply(const char *a, uint32_t size, uint32_t crc)
     usb_release(old);
 }
 
+/* ── ON SCREEN, from `task`, inside the game's frame (host version 4) ──────────────────── */
+
+#define PAUSE_MAX 160
+#define PAUSE_CMDS ((volatile uint8_t *)0x157F1000u)   /* the game's uvm2_monitor.c reads it */
+static int s_pause_built;
+
+static void line(int x0, int y0, int dx, int dy)
+{
+    s_host->draw_move_abs(x0, y0);
+    while (dx || dy) {                   /* a delta is at most 127 a side */
+        int sx = dx > 100 ? 100 : dx < -100 ? -100 : dx;
+        int sy = dy > 100 ? 100 : dy < -100 ? -100 : dy;
+        s_host->draw_delta(sx, sy);
+        dx -= sx; dy -= sy;
+    }
+}
+
+/* The pause sign (as the Vectrex Studio cartridge's firmware draws it): drawn into this frame,
+ * copied out for core 1 to add to its redraws while the game is held, taken out again. */
+static void build_pause_sign(void)
+{
+    const uint32_t n0 = s_host->list_commands(), c0 = s_host->list_cycles();
+    for (int bar = 96; bar <= 110; bar += 14) {
+        for (int k = 0; k < 3; k++) {
+            s_host->draw_reset();
+            s_host->draw_intensity(0x7F);
+            line(bar + 2 * k, 112, 0, -26);
+        }
+    }
+    s_host->draw_reset();
+    uint32_t n = s_host->list_commands() - n0;
+    if (n <= PAUSE_MAX) {
+        const uint8_t *src = s_host->list_buffer() + n0 * 3u;
+        for (uint32_t i = 0; i < n * 3u; i++) PAUSE_CMDS[i] = src[i];
+        *s_host->pause_n = n;
+    }
+    s_host->list_rewind(n0, c0);
+}
+
+/* While a file goes up: what and how much, as the SD bridge shows it from the menu, in place
+ * of the game's picture (the game runs on underneath: its frames are cleared before this). */
+static void upload_screen(void)
+{
+    if (s_up == UP_NONE || !s_up_total) return;
+    char name[24];
+    unsigned k = 0;
+    for (const char *p = s_up_path; *p && k < sizeof name - 1; p++) name[k++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+    name[k] = 0;
+    if (s_host->version >= 5) s_host->clear_frame();   /* the screen to itself, not over the game */
+    static int angle;
+    angle += 2;                          /* a frame of the game's: a turn every 2.56 s at 50 Hz */
+    vs_logo_draw(angle, 0, 72, 8, 100, s_host->draw_reset, s_host->draw_intensity, s_host->draw_move_abs, s_host->draw_delta);
+    s_host->print_text(-110, 25, "UPLOADING", 3, 110);
+    s_host->print_text(-110, 0, name, 3, 90);
+    const int w = 200, x = -100, y = -45, h = 16;
+    s_host->draw_reset();
+    s_host->draw_intensity(90);
+    line(x, y, w, 0); line(x + w, y, 0, h); line(x + w, y + h, -w, 0); line(x, y + h, 0, -h);
+    int fill = (int)((uint64_t)(w - 4) * s_up_got / s_up_total);
+    if (fill > 0) for (int r = 3; r < h - 2; r += 3) line(x + 2, y + r, fill, 0);
+    uint32_t pc = (uint32_t)((uint64_t)100u * s_up_got / s_up_total);
+    char t[6];
+    int n = 0;
+    if (pc >= 100) t[n++] = '1';
+    if (pc >= 10) t[n++] = (char)('0' + (pc / 10) % 10);
+    t[n++] = (char)('0' + pc % 10);
+    t[n++] = '%'; t[n] = 0;
+    s_host->print_text(-20, -75, t, 3, 100);
+    s_host->draw_reset();
+}
+
+static void draw_screen(void)
+{
+    if (!s_host || s_host->version < 4) return;
+    if (!s_pause_built) { s_pause_built = 1; build_pause_sign(); }
+    upload_screen();
+}
+
 /* Once a frame, from the game's core, NOT from the interrupt: the card is the game's (its own
  * reads and writes happen on this core, between frames), and a 4 KB write takes milliseconds.
  * Besides the upload, it only backs the interrupt up for an event it left queued. */
 static void mon_task(void)
 {
+    draw_screen();
     poll_masked();
     if (s_up == UP_OPEN) {
         int ok = s_host->open(s_up_path);

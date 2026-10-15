@@ -152,6 +152,7 @@ uint32_t uvm2_list_cycles(void);
 uint32_t uvm2_list_commands(void);
 const uint8_t *uvm2_list_buffer(void);
 void uvm2_list_rewind(uint32_t count, uint32_t cycles);   /* undo what was drawn since */
+void uvm2_list_clear_frame(void);   /* undo all the frame's drawing (after its prologue) */
 void uvm2_frame_end(void);
 
 /* Frames completed since boot — the only clock a halted Vectrex gives us. */

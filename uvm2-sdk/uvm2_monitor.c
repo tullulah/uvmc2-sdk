@@ -39,6 +39,7 @@
 #include "uvm2_sd.h"
 #include "uvm2_draw.h"
 #include "uvm2_bus.h"
+#include "uvm2_text.h"
 
 #define UVM2_MONITOR_ADDR      0x117C0000u   /* monitor/monitor.ld */
 #define UVM2_MONITOR_UNCACHED  0x157C0000u
@@ -59,53 +60,48 @@ typedef struct {
     int (*close)(void);
     void *rtt;      /* version 2: the game's RTT block (sdk_rp2350.c), its text goes out on USB */
     volatile uint32_t *paused;   /* version 3: set while the debugger holds the game */
+    /* version 4: the game's drawing, for what the monitor puts on screen from its `task`
+     * (inside the game's frame): the upload's bar, and the pause sign it builds once.
+     * Function pointers and not code here: a big game has no SRAM left for it (ROTJ). */
+    void (*print_text)(int x, int y, const char *str, int scale, int intensity);
+    void (*draw_reset)(void);
+    void (*draw_intensity)(int brightness);
+    void (*draw_move_abs)(int x, int y);
+    void (*draw_delta)(int dx, int dy);
+    uint32_t (*list_commands)(void);
+    uint32_t (*list_cycles)(void);
+    const uint8_t *(*list_buffer)(void);
+    void (*list_rewind)(uint32_t count, uint32_t cycles);
+    volatile uint32_t *pause_n;  /* commands of the sign the monitor left at UVM2_PAUSE_CMDS */
+    void (*clear_frame)(void);   /* version 5: the game's drawing out of this frame (the upload screen) */
 } uvm2_monitor_host;
 extern char _SEGGER_RTT[] __attribute__((weak));   /* absent in a game without the C runtime */
-static volatile uint32_t s_paused;
-static const uvm2_monitor_host s_host = { 3, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close, _SEGGER_RTT, &s_paused };
+static volatile uint32_t s_paused, s_pause_n;
+static const uvm2_monitor_host s_host = {
+    5, uvm2_sd_stream_open, uvm2_sd_stream_put, uvm2_sd_stream_close, _SEGGER_RTT, &s_paused,
+    uvm2_print_text, uvm2_draw_reset, uvm2_draw_intensity, uvm2_draw_move_abs, uvm2_draw_delta,
+    uvm2_list_commands, uvm2_list_cycles, uvm2_list_buffer, uvm2_list_rewind, &s_pause_n,
+    uvm2_list_clear_frame,
+};
 
 /* THE PAUSE SIGN, as on the Vectrex Studio cartridge (its firmware, bios.rs): two bars in the
  * top right corner over the last picture while the debugger holds the game. Core 1 redraws
  * that picture on its own (UVM2_REPLAY_LAST) and then calls uvm2_replay_extra, which adds the
- * sign. It is drawn once, on top of the first frame the monitor sees, copied out and taken
- * out of that frame again (uvm2_list_rewind). The copy is kept in the PSRAM, in the monitor's
- * window after the RTT ring (sdk_rp2350.c, 0x157F0000 + 4 KB), written and read through the
- * uncached alias: a big game has not got the few hundred bytes in SRAM, and SCRATCH_X is
- * core 1's stack. Core 1 copies it to its stack before replaying it, since a list replayed
- * straight out of the PSRAM is what the stream does not take (uvm2_draw.c). */
+ * sign. The monitor builds it (monitor.c), on top of the first frame it sees, and takes it
+ * back out of that frame (list_rewind); the commands are in the PSRAM, in the monitor's window
+ * after the RTT ring (sdk_rp2350.c), through the uncached alias. Core 1 copies them to its
+ * stack before replaying them: a list replayed straight out of the PSRAM is what the stream
+ * does not take (uvm2_draw.c). */
 #define PAUSE_MAX 160
-#define s_pause_cmds ((uint8_t *)0x157F1000u)
-static volatile uint32_t s_pause_n;
-static int s_pause_built;
-
-static void build_pause_sign(void)
-{
-    const uint32_t n0 = uvm2_list_commands(), c0 = uvm2_list_cycles();
-    for (int bar = 96; bar <= 110; bar += 14) {
-        for (int k = 0; k < 3; k++) {
-            uvm2_draw_reset();
-            uvm2_draw_intensity(0x7F);
-            uvm2_draw_move_abs(bar + 2 * k, 112);
-            uvm2_draw_delta(0, -26);
-        }
-    }
-    uvm2_draw_reset();
-    uint32_t n = uvm2_list_commands() - n0;
-    if (n <= PAUSE_MAX) {
-        const uint8_t *src = uvm2_list_buffer() + n0 * 3u;
-        for (uint32_t i = 0; i < n * 3u; i++) ((volatile uint8_t *)s_pause_cmds)[i] = src[i];
-        s_pause_n = n;
-    }
-    uvm2_list_rewind(n0, c0);
-}
+#define UVM2_PAUSE_CMDS ((const volatile uint8_t *)0x157F1000u)
 
 /* Core 1, after each redraw of the last picture (uvm2_core1.c). */
 void uvm2_replay_extra(void)
 {
-    if (!s_paused || !s_pause_n) return;
-    uint8_t cmds[PAUSE_MAX * 3];
     const uint32_t n = s_pause_n;
-    for (uint32_t i = 0; i < n * 3u; i++) cmds[i] = ((const volatile uint8_t *)s_pause_cmds)[i];
+    if (!s_paused || !n || n > PAUSE_MAX) return;
+    uint8_t cmds[PAUSE_MAX * 3];
+    for (uint32_t i = 0; i < n * 3u; i++) cmds[i] = UVM2_PAUSE_CMDS[i];
     uvm2_exec(cmds, n);
 }
 
@@ -287,7 +283,6 @@ void uvm2_monitor_frame(void)
     show();
 #endif
     if (!s_mon) return;
-    if (!s_pause_built) { s_pause_built = 1; build_pause_sign(); }
     int st = uvm2_monitor_state;
     if (st == 14) { s_mon->task(); return; }
     /* With the lines on, the one just drawn says the step before: a hang inside the next

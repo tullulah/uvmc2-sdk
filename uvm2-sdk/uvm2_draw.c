@@ -114,6 +114,7 @@ static int32_t s_box_w_prev;
 /* Commands in the list RIGHT AFTER opening the frame (the prologue). Anything past that
  * is real content. */
 static uint32_t s_count_after_begin;
+static uint32_t s_cycles_after_begin;   /* the same, in bus cycles (uvm2_list_clear_frame) */
 static uint32_t s_peak_i, s_peak_k, s_peak_n;
 
 #ifdef UVM2_DUAL_CORE
@@ -257,6 +258,9 @@ void uvm2_list_rewind(uint32_t count, uint32_t cycles)
     if (count <= s_count) { s_count = count; s_cycles = cycles; }
     uvm2_draw_invalidate();
 }
+/* Everything the game drew in this frame out again, back to where uvm2_frame_begin left the
+ * list: the debug monitor's upload screen takes the whole picture (uvm2_monitor.c). */
+void uvm2_list_clear_frame(void) { uvm2_list_rewind(s_count_after_begin, s_cycles_after_begin); }
 /* How many more commands the game may still put in this frame's list (uvm2_hud.c asks, so it
  * never makes a list overflow). */
 uint32_t uvm2_list_room(void) { return s_limit > s_count ? s_limit - s_count : 0u; }
@@ -2929,6 +2933,7 @@ void uvm2_frame_begin(void)
     /* What the prologue left in the list: the bar frame_end measures against when deciding
      * whether there is anything to publish. */
     s_count_after_begin = s_count;
+    s_cycles_after_begin = s_cycles;
 }
 
 /* PER BUFFER, not a single one: with double buffering core 0 signs the frame it has just
