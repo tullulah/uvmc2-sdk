@@ -529,3 +529,81 @@ void *memmove(void *d, const void *s, size_t n) {
     return d;
 }
 #endif
+
+/* ── RTT: TEXT FOR THE IDE, OVER THE SWD PROBE ───────────────────────────────────────────
+ *
+ * A SEGGER RTT control block (`_SEGGER_RTT`, the layout probe-rs reads): one up channel the
+ * game writes and the IDE's debugger reads while the game runs -- DEBUG_PRINT, vpy_log().
+ * Only on the Vectrex Studio cartridge (the .um2 links the stubs below).
+ *
+ * IT NEVER WAITS. With nobody reading (no probe, or the IDE not debugging) the ring fills
+ * and what does not fit is dropped: the firmware's defmt-rtt blocks instead, and a cartridge
+ * with it on and no reader freezes at its first line (bios.rs SMP_TELEM). A game must run the
+ * same with or without the debugger. */
+#if defined(VPY_RP2350) && !defined(UVM2_PICO_RUNTIME)
+#include <stdarg.h>
+#ifndef VPY_RTT_SIZE
+#define VPY_RTT_SIZE 1024
+#endif
+typedef struct { const char *name; char *buf; unsigned size; volatile unsigned wr; volatile unsigned rd; unsigned flags; } vpy_rtt_ring;
+typedef struct { char id[16]; int up_n, down_n; vpy_rtt_ring up[1], down[1]; } vpy_rtt_cb;
+static char vpy_rtt_up_buf[VPY_RTT_SIZE];
+static char vpy_rtt_down_buf[16];
+__attribute__((used)) vpy_rtt_cb _SEGGER_RTT = {
+    "SEGGER RTT", 1, 1,
+    { { "Terminal", vpy_rtt_up_buf, VPY_RTT_SIZE, 0, 0, 0 } },
+    { { "Terminal", vpy_rtt_down_buf, sizeof vpy_rtt_down_buf, 0, 0, 0 } },
+};
+
+void vpy_rtt_write(const char *s, unsigned n)
+{
+    vpy_rtt_ring *r = &_SEGGER_RTT.up[0];
+    unsigned wr = r->wr, rd = r->rd, size = r->size;
+    unsigned room = rd > wr ? rd - wr - 1 : size - (wr - rd) - 1;
+    if (n > room) return;                         /* nobody reading: dropped, never waited for */
+    for (unsigned i = 0; i < n; i++) { r->buf[wr] = s[i]; if (++wr == size) wr = 0; }
+    __asm volatile ("dmb" ::: "memory");          /* the bytes before the index */
+    r->wr = wr;
+}
+
+static unsigned rtt_num(char *out, int32_t v, unsigned base, int is_signed)
+{
+    char tmp[12]; unsigned n = 0, k = 0;
+    uint32_t u = (is_signed && v < 0) ? (uint32_t)(-(v + 1)) + 1u : (uint32_t)v;
+    do { unsigned d = u % base; tmp[n++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); u /= base; } while (u);
+    if (is_signed && v < 0) out[k++] = '-';
+    while (n) out[k++] = tmp[--n];
+    return k;
+}
+
+/* printf for a log line: %d %i %u %x %c %s %%, no widths. */
+void vpy_log(const char *fmt, ...)
+{
+    char line[160]; unsigned n = 0;
+    va_list ap; va_start(ap, fmt);
+    for (const char *p = fmt; *p && n < sizeof line - 12; p++) {
+        if (*p != '%') { line[n++] = *p; continue; }
+        switch (*++p) {
+        case 'd': case 'i': n += rtt_num(line + n, va_arg(ap, int32_t), 10, 1); break;
+        case 'u': n += rtt_num(line + n, (int32_t)va_arg(ap, uint32_t), 10, 0); break;
+        case 'x': n += rtt_num(line + n, (int32_t)va_arg(ap, uint32_t), 16, 0); break;
+        case 'c': line[n++] = (char)va_arg(ap, int); break;
+        case 's': { const char *s = va_arg(ap, const char *); while (s && *s && n < sizeof line - 2) line[n++] = *s++; break; }
+        case '%': line[n++] = '%'; break;
+        case 0: p--; break;
+        default: line[n++] = '%'; line[n++] = *p; break;
+        }
+    }
+    va_end(ap);
+    vpy_rtt_write(line, n);
+}
+
+void vpy_debug_print(int32_t v) { vpy_log("%d\n", v); }
+void vpy_debug_print_labeled(const char *label, int32_t v) { vpy_log("%s: %d\n", label, v); }
+void vpy_debug_print_str(const char *s) { vpy_log("%s\n", s); }
+#else
+void vpy_log(const char *fmt, ...) { (void)fmt; }
+void vpy_debug_print(int32_t v) { (void)v; }
+void vpy_debug_print_labeled(const char *label, int32_t v) { (void)label; (void)v; }
+void vpy_debug_print_str(const char *s) { (void)s; }
+#endif

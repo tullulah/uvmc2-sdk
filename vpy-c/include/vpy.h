@@ -357,8 +357,25 @@ void vpy_enemy_fire_event_str(int idx, const char *event);
 #define J1_BUTTON_2()   vpy_j1_button(2)
 #define J1_BUTTON_3()   vpy_j1_button(3)
 #define J1_BUTTON_4()   vpy_j1_button(4)
-/* Debug print is a no-op on the minimal C runtime (no host console). */
+/* Debug print: RTT to the IDE on the Vectrex Studio cartridge (vpy_log, below); a no-op on
+ * the other targets (no host console). */
+#if defined(VPY_RP2350) && !defined(UVM2_PICO_RUNTIME)
+#define DEBUG_PRINT_LABELED(label, val) vpy_debug_print_labeled((label), (int32_t)(val))
+#else
 #define DEBUG_PRINT_LABELED(label, val) ((void)(val))
+#endif
+#endif
+
+/* Text for the IDE's debugger (RTT over the SWD probe, sdk_rp2350.c): on the Vectrex Studio
+ * cartridge it reaches the build output while a game is debugged there; elsewhere nothing.
+ * Never waits: with nobody reading, the text is dropped. vpy_log: %d %i %u %x %c %s. */
+#if defined(VPY_RP2350)
+void vpy_log(const char *fmt, ...);
+void vpy_debug_print(int32_t v);
+void vpy_debug_print_labeled(const char *label, int32_t v);
+void vpy_debug_print_str(const char *s);
+#else
+static inline void vpy_log(const char *fmt, ...) { (void)fmt; }
 #endif
 
 #ifdef __cplusplus
