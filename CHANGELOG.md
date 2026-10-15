@@ -1,0 +1,38 @@
+# Changelog
+
+Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
+entry says what changes for a game built with that version.
+
+## v1.4.0 — over USB: upload, run, debug; the reset button
+
+**The UVMC2's USB port uploads, runs and debugs games** — no card reader, no SWD probe.
+
+* **Debug monitor** (`UVM2_USB_MONITOR=1`): a game built with it loads `MONITOR.BIN` off the
+  card into the PSRAM and answers on USB while it runs: files onto the card, the game's
+  `DEBUG_PRINT` / `vpy_log` text, and a debugger (monitor-mode debug: breakpoints, steps,
+  pause, registers) — on its own port, and on a second one that speaks **gdb's remote
+  protocol**: `arm-none-eabi-gdb game.elf -ex "target remote <port>"`. A held game shows its
+  last picture with a pause sign. About 2 KB of SRAM; nothing without the flag.
+* **SD bridge**: from the multicart's menu, run from SRAM through BOOTSEL (the flash is never
+  written), it writes files to the card and shows the upload with the Vectrex Studio logo.
+* **`tools/uvmc2.py`** (Python stdlib + picotool, macOS/Linux): `deploy` (onto the card and
+  running), `upload`, `run`, `log`, `gdb`, `ports`. The monitor and the bridge come built in
+  `uvm2-sdk/prebuilt/`.
+* **The console's reset button**, on by default in dual-core games: one press starts the game
+  again, two within a second go back to the menu. It reads DDRB (Ralf's test: a reset puts it
+  back to 0, every frame sets it); the old T1 test misfired and "held 3 s" could never work —
+  the button gives the VIA one pulse, however long it is held. `UVM2_NO_RESET_BUTTON` turns it
+  off. The restart's copy of `.data` is kept in the PSRAM, so it costs no SRAM.
+* **`UVM2_DEBUG_CFLAGS` reaches uvm2 builds** (it only reached the rp2350 recipe): a debug
+  build is really `-Og`.
+* RTT for the Vectrex Studio cartridge's debugger (`vpy_log`, `DEBUG_PRINT`, never waiting);
+  `-g` in the cartridge recipe; one SD sector buffer shared by the SDK (1 KB of SRAM back);
+  `uvm2_list_rewind` / `uvm2_list_clear_frame`.
+* libvpy: `DRAW_VECTOR_ROT`, `PLAY_NOTE`, `DRAW_RECORDING`, `PLAY_SAMPLE` / `SAMPLE_POS`;
+  core 1 can run the game's work (`UVM2_CORE0_WORKER`, a BIOS's).
+
+Docs: the starter kit's `docs/13-usb-upload-and-debug.md`.
+
+## Earlier
+
+v1.1 … v1.3.4: see each tag's message (`git tag -n1`).

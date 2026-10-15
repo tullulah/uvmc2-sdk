@@ -55,6 +55,8 @@ arm-none-eabi-gdb build_uvm2/pico/game.elf -ex "target remote /dev/cu.usbmodemXX
 gdb attaches with no server in between (the monitor's second USB port speaks its remote
 protocol): break, step, next, finish, bt, print, set var, info registers, Ctrl-C, detach. A
 held game stays on screen with a pause sign. Breakpoints work from the game's first frame on.
+The console's reset button works in every dual-core game: one press starts it again, two go
+back to the menu. What each version changes: [CHANGELOG.md](CHANGELOG.md).
 `uvmc2.py --help` lists the rest (`upload`, `run`, `ports`); the protocol is in its docstring
 and in `uvm2-sdk/monitor/`.
 
