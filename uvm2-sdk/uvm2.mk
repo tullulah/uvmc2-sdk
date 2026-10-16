@@ -140,8 +140,12 @@ endif
 
 # The romset in PSRAM instead of SRAM: 23 KB only used at startup. See uvm2_romzip.c — it
 # goes through the UNCACHED alias, which is the only thing that does not corrupt the data.
+# The default for every .um2 (uvm2_pico.cmake); UVM2_ROMZIP_IN_PSRAM=0 keeps it in SRAM.
 ifeq ($(UVM2_ROMZIP_IN_PSRAM),1)
 UVM2_CFLAGS += -DUVM2_ROMZIP_IN_PSRAM=1
+endif
+ifeq ($(UVM2_ROMZIP_IN_PSRAM),0)
+UVM2_CFLAGS += -DUVM2_ROMZIP_IN_SRAM
 endif
 
 # BISECTION: install the stream but draw over SIO. See uvm2_bus.c.

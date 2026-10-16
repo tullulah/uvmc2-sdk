@@ -153,6 +153,17 @@ foreach(def ${UVM2_GAME_DEFS})
     target_compile_options(${UVM2_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:C>:-D${def}>")
 endforeach()
 
+# THE ROMSET BUFFER IN THE PSRAM, FOR EVERY .um2 (uvm2_romzip.c). uvm2_pico_main.c calls
+# uvm2_romzip_load() in every image, so its 23 KB buffer was linked into the SRAM of every game,
+# a romset or not -- unless the build said UVM2_ROMZIP_IN_PSRAM=1, which make only passed when
+# asked and vpy_cli never: return of the jedi linked on one machine (whose IDE passed it) and
+# came out 20 KB over on another. The PSRAM is where it belongs (written once at start-up,
+# through the uncached alias); UVM2_ROMZIP_IN_PSRAM=0 (make) / UVM2_ROMZIP_IN_SRAM keeps it in
+# SRAM, for bisecting.
+if(NOT "UVM2_ROMZIP_IN_SRAM" IN_LIST UVM2_GAME_DEFS AND NOT "${UVM2_GAME_DEFS}" MATCHES "UVM2_ROMZIP_IN_PSRAM")
+    target_compile_options(${UVM2_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:C>:-DUVM2_ROMZIP_IN_PSRAM=1>")
+endif()
+
 # RAW options from the game (not defines): `-include something.h`, warnings to silence...
 # The AAE ports need `-include src/aae_compat.h`, which does not fit as a define.
 foreach(opt ${UVM2_GAME_OPTS})

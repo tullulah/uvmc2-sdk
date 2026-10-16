@@ -3,6 +3,14 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.2 — the romset buffer in the PSRAM for every .um2
+
+* `uvm2_pico_main.c` loads a romset in every image, so the 23 KB buffer of `uvm2_romzip.c`
+  sat in the SRAM of every `make`-built `.um2`, a game with a romset or not, unless the build
+  passed `UVM2_ROMZIP_IN_PSRAM=1`. return of the jedi linked where an IDE passed it and came
+  out 20 KB over where one did not. It is now the PSRAM by default (`uvm2_pico.cmake`);
+  `UVM2_ROMZIP_IN_PSRAM=0` keeps it in SRAM.
+
 ## v1.4.1 — work that had stayed on one machine, now in the SDK
 
 Everything here was in use (return of the jedi, ScummVM) but only in a local checkout and in
