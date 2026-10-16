@@ -3,6 +3,30 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.1 — work that had stayed on one machine, now in the SDK
+
+Everything here was in use (return of the jedi, ScummVM) but only in a local checkout and in
+the SDK copies installed on that machine: a game using it built there and nowhere else.
+
+* **vpy3d scenes and scenery.** A version-2 `.vmesh` carries scenery lines and occluders,
+  drawn after the faces with optional depth fog (`vpy3d_set_scenery_fog`); a `.vscene`
+  places `.vmesh` pieces in a set (`vpy_scene`, `vpy3d_load_scene`, `vpy3d_draw_scene`).
+  `VPY3D_MESH_MAXE` sizes the per-edge scratch to the biggest mesh, not the whole pool.
+  Checked by `vpy-c/tools/scenery_check.c` and `scene_check.c`.
+* **Float on the FPU.** Both builds compile for the M33's FPU (`UVM2_FPU_FLAGS`,
+  `-fno-math-errno`, `-Wdouble-promotion`); README "Float". Cloth springs (`vpysoft.c`) moved
+  from 64-bit integers to float: tens of milliseconds a frame to a few.
+* **The jack's ring at the top of SRAM** (`UVM2_JACK_RING_TOP`): its 8 KB alignment no longer
+  pads `.bss`. The refill target never asks for more than the ring holds.
+* **SD:** `uvm2_sd_seek`; `uvm2_sd_dir_open` / `_next` / `_close` to list a folder;
+  `uvm2_sd_sim.c`, the card as a folder in the WASM simulator.
+* **Images in the PSRAM:** the Rust crate's `.bss` and the pico-sdk's spin locks stay in
+  SRAM (exclusive accesses never succeed over XIP: a black screen); an image a loader started
+  measures and records the clocks (`clock_get_hz()` read 0, the SD came up at the wrong rate).
+* `UVM2_TARGET_INCS`: include folders for the whole target.
+* **libvpy's note engine is linked only by a game that plays a note** (~420 bytes of SRAM back
+  for every other game).
+
 ## v1.4.0 — over USB: upload, run, debug; the reset button
 
 **The UVMC2's USB port uploads, runs and debugs games** — no card reader, no SWD probe.

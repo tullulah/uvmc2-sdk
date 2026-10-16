@@ -207,6 +207,11 @@ void vpy_frame_begin(void)
     v_readJoystick1Analog();  /* refresh currentJoy1X / currentJoy1Y */
 }
 
+/* The note engine's per-frame step, set by the first vpy_play_note: through a pointer so a
+ * game that never plays a note does not link the engine (its tables and state, ~420 bytes of
+ * SRAM in a .um2, which a full game like return of the jedi was short of). */
+static void (*s_note_tick)(void);
+
 void vpy_run(void (*setup)(void), void (*loop)(void))
 {
     vpy_init();
@@ -217,7 +222,7 @@ void vpy_run(void (*setup)(void), void (*loop)(void))
          * games don't have to call the sequencers manually. */
         vpy_music_update();
         vpy_sfx_update();
-        vpy_note_update();
+        if (s_note_tick) s_note_tick();     /* vpy_note_update, once a note has played */
         if (loop) loop();
     }
 }
@@ -953,6 +958,7 @@ static void note_period(int ch, int note)
 void vpy_play_note(const unsigned char *instr, int channel, int note)
 {
     if (!instr || channel < 0 || channel > 2) return;
+    s_note_tick = vpy_note_update;      /* vpy_run steps the engine from now on */
     vpy_note_ch_t *c = &s_note[channel];
     note = note_clamp(note);
     c->instr       = instr;
