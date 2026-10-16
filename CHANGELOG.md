@@ -3,6 +3,20 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.5 — a VPy game's USB debug monitor starts
+
+* A VPy game built with `UVM2_USB_MONITOR` (Vectrex Studio's Upload / Debug on Cartridge)
+  linked the monitor and never started it. VPy images boot through `uvm2_runtime_init`
+  (`UVM2_STEP_OWNS_INIT`), whose copy of `main()`'s bring-up had no PSRAM and no
+  `uvm2_monitor_load()`: `MONITOR.BIN` was never read off the card, the cartridge never showed
+  up on USB, and the IDE could not reach the game. That path now brings the PSRAM up under the
+  same condition as `main()` and loads the monitor, in the same order as the C path.
+* With dual core (every VPy game) the reset watch is on, so the PSRAM now comes up in every VPy
+  image, as it already did in every C one since v1.4.0. An image built without the monitor
+  gets nothing else new.
+* Still missing on the VPy path, and left for their own release: the reset button's restart
+  copy (`uvm2_restart_snapshot` / `uvm2_restart_keep`), the romset load and the stack paint.
+
 ## v1.4.4 — uvm2 builds on Windows
 
 * The Rust drawing layer builds on a Windows PC. `pio-proc`'s build tools pulled the newest

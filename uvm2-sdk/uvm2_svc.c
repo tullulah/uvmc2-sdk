@@ -31,6 +31,11 @@ int32_t  vx_probe_div(int32_t num, int32_t den);
 #endif
 #include "uvm2_psram.h"
 
+#ifdef UVM2_STEP_OWNS_INIT
+extern int uvm2_psram_ready;       /* uvm2_pico_main.c */
+void uvm2_monitor_load(void);      /* uvm2_monitor.c: the debug monitor, with UVM2_USB_MONITOR */
+#endif
+
 enum {
     SYS_RESET0REF     = 0,
     SYS_WAIT_RECAL    = 1,
@@ -214,6 +219,17 @@ void uvm2_runtime_init(void)
     /* After measuring E and with the bus already taken: the SM syncs against ~E. */
     uvm2_stream_start();
 #  endif
+    /* THE PSRAM AND THE USB DEBUG MONITOR, as main() brings them up on the C path. They were
+     * missing here, so a VPy game built with UVM2_USB_MONITOR linked uvm2_monitor_frame and
+     * not uvm2_monitor_load: the monitor was never read off the card, the cartridge never
+     * showed up on USB, and Debug on Cartridge could not reach the game (2026-10-17, SnowBros:
+     * no RP2350 device on the host, and the ELF without one PSRAM or monitor-load symbol).
+     * Same condition as main()'s, so a VPy image that needs none of it stays as it was. */
+#  if defined(UVM2_CMDS_IN_PSRAM) || defined(UVM2_PSRAM_START) || defined(UVM2_ROMZIP_IN_PSRAM) || defined(UVM2_USB_MONITOR) || (UVM2_RESET_WATCH && !defined(UVM2_RESET_WATCH_ONLY))
+    uvm2_qmi_bring_up();   /* the QSPI pins the bootrom leaves at FUNCSEL = NULL */
+    uvm2_psram_ready = uvm2_psram_init();
+#  endif
+    uvm2_monitor_load();   /* MONITOR.BIN off the card into the PSRAM; empty without the monitor */
 #  ifdef UVM2_DUAL_CORE
     /* Last, never before: core 1 owns the bus from here on, and must not start
      * until the VIA has been programmed and the 6809 is halted. */
