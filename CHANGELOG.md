@@ -3,6 +3,18 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.4 — uvm2 builds on Windows
+
+* The Rust drawing layer builds on a Windows PC. `pio-proc`'s build tools pulled the newest
+  `termcolor`, `is-terminal` and `parking_lot`, which link Windows' DLLs through `windows-sys`
+  0.61 (raw-dylib): on the `x86_64-pc-windows-gnu` host that needs `dlltool` and a PC
+  assembler, which a Windows machine without MinGW does not have. The lockfiles now hold
+  `winapi-util` 0.1.9, `is-terminal` 0.4.13 and `parking_lot` 0.12.3, on `windows-sys`
+  0.52/0.59 with import libraries prebuilt. Host tools only: the image is byte for byte the
+  same as v1.4.3's.
+* Vectrex Studio (Windows) sets the rest up: make with busybox, CMake + Ninja, Raspberry Pi's
+  prebuilt picotool, and Rust on the gnu host.
+
 ## v1.4.3 — the same image on every machine: Rust pinned, its paths remapped
 
 * `rust-toolchain.toml` pins Rust 1.91.1 (with the `thumbv8m.main-none-eabi` target): rustup
