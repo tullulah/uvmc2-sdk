@@ -759,3 +759,58 @@ uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max)
     if (!fail(fr)) f->ok = 0;                 /* loud: uvm2_sd_error and diag.fresult */
     return got;
 }
+
+/* ── A FOLDER ──────────────────────────────────────────────────────────────────────────── */
+#define UVM2_SD_DIR_MAGIC 0x52494444u    /* 'DDIR' */
+#define DIR_OF(d) ((DIR *)(void *)(d)->dir)
+_Static_assert(sizeof(((uvm2_sd_dir *)0)->dir) >= sizeof(DIR), "uvm2_sd_dir.dir is smaller than FatFs's DIR");
+
+void uvm2_sd_dir_close(uvm2_sd_dir *d)
+{
+    if (d->magic != UVM2_SD_DIR_MAGIC) return;
+    f_closedir(DIR_OF(d));
+    d->magic = 0;
+    if (uvm2_sd_diag.streams) uvm2_sd_diag.streams--;
+}
+
+int uvm2_sd_dir_open(const char *path, uvm2_sd_dir *d)
+{
+    uvm2_sd_dir_close(d);
+    d->magic = 0;
+    d->count = 0;
+    if (!begin()) return 0;
+    /* FatFs names the root "" (and takes "/" too); a trailing '/' on a sub-folder it does not. */
+    char p[128];
+    uint32_t n = 0;
+    while (path[n] && n < sizeof p - 1) { p[n] = path[n]; n++; }
+    if (path[n]) return fail(FR_INVALID_NAME);
+    while (n > 1 && p[n - 1] == '/') n--;
+    p[n] = 0;
+    if (!fail(f_opendir(DIR_OF(d), p))) return 0;
+    d->magic = UVM2_SD_DIR_MAGIC;
+    uvm2_sd_diag.streams++;
+    return 1;
+}
+
+int uvm2_sd_dir_next(uvm2_sd_dir *d, char *name, uint32_t max, uint32_t *size)
+{
+    if (max) name[0] = 0;
+    if (size) *size = 0;
+    if (d->magic != UVM2_SD_DIR_MAGIC) return UVM2_SD_DIR_END;
+    for (;;) {
+        FILINFO fi;
+        FRESULT fr = f_readdir(DIR_OF(d), &fi);
+        if (!fail(fr)) return UVM2_SD_DIR_END;              /* loud: uvm2_sd_error */
+        if (fi.fname[0] == 0) return UVM2_SD_DIR_END;       /* the end: not an error */
+        if (fi.fname[0] == '.' || (fi.fattrib & (AM_HID | AM_SYS))) continue;
+        uint32_t i = 0;
+        if (max) {
+            for (; fi.fname[i] && i < max - 1; i++) name[i] = fi.fname[i];
+            name[i] = 0;
+        }
+        const int folder = (fi.fattrib & AM_DIR) != 0;
+        if (size && !folder) *size = fi.fsize > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)fi.fsize;
+        d->count++;
+        return folder ? UVM2_SD_DIR_FOLDER : UVM2_SD_DIR_FILE;
+    }
+}

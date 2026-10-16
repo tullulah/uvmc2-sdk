@@ -86,8 +86,46 @@ void runtime_init_early_resets(void)
 
 int uvm2_psram_ready = -1;   /* 1 = the PSRAM answered, 0 = it did not, -1 = never tried */
 
+#if PICO_RUNTIME_SKIP_INIT_CLOCKS
+#include "hardware/clocks.h"
+#include "hardware/structs/clocks.h"
+/* THE CLOCKS A LOADER LEFT, WRITTEN DOWN AGAIN.
+ *
+ * An image started by a loader (a program in the PSRAM) skips clocks_init: the clocks are
+ * already running and reprogramming the PLL under a program that executes from the QSPI is
+ * asking for trouble. But clock_get_hz() does not measure anything: it returns a table that
+ * only clocks_init fills, so here every clock read 0 Hz. spi_set_baudrate with a 0 Hz input
+ * picks its smallest divider — the SD card's SPI ran at clk_peri/2 instead of 400 kHz and the
+ * card never came up ("NO SD" on the console while the loader had just read it); uvm2_jack's
+ * divider is computed from clk_sys the same way. The IDE's emulator traps the SD by symbol,
+ * so it never showed. Found 2026-10-11 with ScummVM.
+ *
+ * So each clock is measured with the frequency counter and recorded. The counter needs
+ * clk_ref first: clocks_init (the loader's) leaves it on the crystal, which is checked. */
+static void uvm2_clocks_report(void)
+{
+    if (clocks_hw->clk[clk_ref].selected != (1u << CLOCKS_CLK_REF_CTRL_SRC_VALUE_XOSC_CLKSRC))
+        return;                                     /* not on the crystal: nothing to anchor to */
+    clock_set_reported_hz(clk_ref, XOSC_HZ);
+    static const struct { uint8_t clk, src; } c[] = {
+        { clk_sys,  CLOCKS_FC0_SRC_VALUE_CLK_SYS  }, { clk_peri, CLOCKS_FC0_SRC_VALUE_CLK_PERI },
+        { clk_usb,  CLOCKS_FC0_SRC_VALUE_CLK_USB  }, { clk_adc,  CLOCKS_FC0_SRC_VALUE_CLK_ADC  },
+        { clk_hstx, CLOCKS_FC0_SRC_VALUE_CLK_HSTX },
+    };
+    for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+        /* The counter is good to about a kHz; the clocks here are whole MHz (150, 48...),
+         * and code that compares against 150000000 should see exactly that. */
+        const uint32_t khz = frequency_count_khz(c[i].src);
+        clock_set_reported_hz((clock_handle_t)c[i].clk, (khz + 500u) / 1000u * 1000000u);
+    }
+}
+#endif
+
 int main(void)
 {
+#if PICO_RUNTIME_SKIP_INIT_CLOCKS
+    uvm2_clocks_report();          /* before anything asks clock_get_hz() */
+#endif
 #ifdef UVM2_DUAL_CORE
     /* FIRST, before anything writes a global: the values a restart must start from. */
     uvm2_restart_snapshot();

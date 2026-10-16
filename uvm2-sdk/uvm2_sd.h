@@ -91,6 +91,33 @@ int      uvm2_sd_seek(uvm2_sd_file *f, uint32_t pos);
 /* Optional; see above. */
 void     uvm2_sd_close(uvm2_sd_file *f);
 
+/* ── A FOLDER, TO LIST WHAT IS IN IT ─────────────────────────────────────────────────────
+ *
+ * For a game that offers a choice of what is on the card (a menu of games, of saved games).
+ * Open, ask for the entries one by one, close. Like an open file, an open folder keeps the
+ * volume from being remounted (it counts in uvm2_sd_diag.streams), so close it when done.
+ *
+ * Hidden and system entries, and every name starting with '.', are skipped: the "." and
+ * ".." of a sub-folder, and the ._* and .Spotlight-V100 a Mac leaves behind. Names come as
+ * they are on the card (long names, original case), in the card's order, not sorted. */
+typedef struct {
+    uint32_t magic;      /* set while open; the IDE's emulator reads and writes it */
+    uint32_t count;      /* entries delivered so far                                */
+    /* FatFs's DIR, opaque for the same reason as uvm2_sd_file.fil. */
+    uint64_t dir[12];
+} uvm2_sd_dir;
+
+#define UVM2_SD_DIR_END     0   /* no more entries (or an error: uvm2_sd_error says which) */
+#define UVM2_SD_DIR_FILE    1
+#define UVM2_SD_DIR_FOLDER  2
+
+/* 1 if the folder is there. "" or "/" is the root. */
+int      uvm2_sd_dir_open(const char *path, uvm2_sd_dir *d);
+/* The next entry: its name into `name` (NUL-terminated, cut to max-1 bytes) and, when `size`
+ * is not NULL, its size in bytes (0 for a folder). Returns UVM2_SD_DIR_FILE, _FOLDER or _END. */
+int      uvm2_sd_dir_next(uvm2_sd_dir *d, char *name, uint32_t max, uint32_t *size);
+void     uvm2_sd_dir_close(uvm2_sd_dir *d);
+
 /* What the mount understood about the disk, so it can be inspected over SWD without guessing.
  * A MISSING can be an absent file or a misread volume, and from outside they look identical;
  * this separates them. It is read in one go:

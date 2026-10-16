@@ -194,6 +194,24 @@ SECTIONS
         /* The svc handler is in ASSEMBLY, not in the .c of the same name. */
         *uvm2_svc_entry.s.obj(.text*)
         . = ALIGN(4);
+        /* THE RUST CRATE'S .bss, IN SRAM TOO, and this one is not about speed: it does not
+         * WORK from the PSRAM. vectrex_bus keeps its batch index, its list fill and its
+         * counters in static atomics, and fetch_add is ldrex/strex — exclusive accesses, which
+         * never succeed over XIP memory (the reason .data is here, below). In the PSRAM the
+         * first push of the stream spins for ever: a black screen right after the loader, with
+         * no fault. The IDE's emulator does not model exclusives, so there it ran. Found
+         * 2026-10-11 with ScummVM, the first PSRAM image to use the bus stream: its .bss at
+         * 0x112aa3e0 held BATCH_IDX, STREAM_PUSHES... ~1.3 KB, initialised to zero by the
+         * copy of .data (no crt0 zeroing needed). */
+        *libvectrex_draw_cabi.a:*(.bss .bss.* COMMON)
+        /* AND THE pico-sdk's SPIN LOCKS, for the same reason. On the RP2350 they are software
+         * locks (PICO_USE_SW_SPIN_LOCKS, the hardware ones have an erratum): ldaexb/strexb on
+         * _sw_spin_locks. Every mutex, malloc (pico_malloc locks one), critical section,
+         * hardware claim (DMA channels, PIO), alarm and irq handler change takes one. In the
+         * PSRAM they spin for ever the first time the strexb fails: ScummVM, which mallocs at
+         * once, went black at "start" while the menu, which never does, ran. */
+        *(.bss._sw_spin_locks)
+        . = ALIGN(4);
         *(vtable)
         *(.data*)
         *(.sdata*)

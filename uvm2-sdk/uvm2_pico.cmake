@@ -198,6 +198,13 @@ endif()
 set_source_files_properties(${UVM2_GAME_SRCS} PROPERTIES
     INCLUDE_DIRECTORIES "${UVM2_GAME_INCS}")
 
+# ...EXCEPT the ones a library compiled INTO the target needs: TinyUSB (tinyusb_device) builds
+# its own sources here and looks for the program's tusb_config.h. UVM2_TARGET_INCS (uvm2.mk)
+# goes on the whole target, so name in it only folders that shadow nothing.
+if(UVM2_TARGET_INCS)
+    target_include_directories(${UVM2_NAME} PRIVATE ${UVM2_TARGET_INCS})
+endif()
+
 # Pre-included headers (`-include foo.h`). The AAE ports use them for their aae_compat.h, and
 # without them the game does not compile: dozens of "undeclared" symbols come out that look
 # like a sources problem and are not. They go on the GAME's sources, like the includes, so as

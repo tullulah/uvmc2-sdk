@@ -316,6 +316,9 @@ UVM2_GAME_INCS   = $(abspath $(patsubst -I%,%,$(filter -I%,$(UVM2_CFLAGS_GLUED))
 UVM2_GAME_DEFS   = $(subst $(quote),,$(patsubst -D%,%,$(filter -D%,$(UVM2_CFLAGS_GLUED))))
 UVM2_GAME_PREINC = $(abspath $(patsubst -include=%,%,$(filter -include=%,$(UVM2_CFLAGS_GLUED))))
 UVM2_GAME_LIBS   = $(patsubst -l%,%,$(filter -l%,$(UVM2_LDLIBS)))
+# Include folders for the WHOLE target, not just the game's sources (uvm2_pico.cmake): for a
+# library linked in that needs a header of the program's, like TinyUSB's tusb_config.h.
+UVM2_TARGET_INCS ?=
 
 # Dual core. MIND THE NAMES, which is what kept it switched off:
 #
@@ -359,6 +362,7 @@ uvm2: $(UVM2_DEPS) | $(UVM2_BUILD)
 	    -DUVM2_NAME=$(UVM2_NAME) \
 	    -DUVM2_GAME_SRCS="$(call list,$(UVM2_GAME_SRCS))" \
 	    -DUVM2_GAME_INCS="$(call list,$(UVM2_GAME_INCS))" \
+	    -DUVM2_TARGET_INCS="$(call list,$(abspath $(UVM2_TARGET_INCS)))" \
 	    -DUVM2_GAME_DEFS="$(call list,$(UVM2_GAME_DEFS))" \
 	    -DUVM2_GAME_PREINC="$(call list,$(UVM2_GAME_PREINC))" \
 	    -DUVM2_GAME_OPTS="$(call list,$(UVM2_DEBUG_CFLAGS))" \
