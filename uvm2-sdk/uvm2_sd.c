@@ -80,6 +80,11 @@ int uvm2_sd_error = UVM2_SD_OK;
  * exists so WRITING can be tested without risking anybody's card, against real FAT16, FAT32
  * and exFAT images that `fsck_msdos` / `fsck_exfat` then validate: tools/uvm2_sd_test.sh. */
 #ifndef UVM2_SD_HOST
+/* WITH -DUVM2_SD_FAKECARD only the BYTES are the test's: cs() and xfer() go to a simulated
+ * card (tools/uvm2_sd_card.c) and everything from command() down — start-up, CMD17, CMD18
+ * and its stop, CMD24 — is this file's own code. UVM2_SD_HOST swaps out the whole protocol
+ * for a file, so it cannot see a protocol bug; this can, without a console. */
+#ifndef UVM2_SD_FAKECARD
 #define PIN_SCK   34
 #define PIN_MOSI  35
 #define PIN_MISO  36
@@ -307,6 +312,22 @@ static void xfer_out(const unsigned char *buf, int n)
 
 #endif  /* UVM2_SD_BITBANG */
 
+#else   /* UVM2_SD_FAKECARD */
+
+void    uvm2_card_cs(int selected);
+uint8_t uvm2_card_xfer(uint8_t out);
+#define PIN_CS 39
+static int spi_timed_out;
+static void cs(int on) { uvm2_card_cs(on); }
+static void cfg_pin(int pin, int is_output) { (void)pin; (void)is_output; }
+static void sd_pins_init(void) { }
+static void sd_speed(int slow) { uvm2_sd_diag.baud = slow ? 400000u : 12500000u; }
+static uint8_t xfer(uint8_t out) { return uvm2_card_xfer(out); }
+static void xfer_in(unsigned char *buf, int n) { for (int i = 0; i < n; i++) buf[i] = xfer(0xFF); }
+static void xfer_out(const unsigned char *buf, int n) { for (int i = 0; i < n; i++) xfer(buf[i]); }
+
+#endif  /* UVM2_SD_FAKECARD */
+
 static uint8_t command(uint8_t idx, uint32_t arg, uint8_t crc)
 {
     /* One guard byte and the six-byte frame, sent together: over the peripheral that is one
@@ -390,6 +411,43 @@ static int read_block(uint32_t lba, unsigned char *buf)
     return 1;
 }
 
+/* READ A RUN OF BLOCKS (CMD18), for the f_read calls that cover whole sectors — FatFs hands
+ * those straight to the caller's buffer, up to the end of a cluster, in one disk_read.
+ * CMD17 pays a command frame, an R1 and the card's access latency on EVERY block; CMD18 pays
+ * them once and then streams token, 512 bytes, CRC, token... until it is told to stop.
+ *
+ * THE STOP (CMD12) HAS TWO TRAPS. The byte straight after its frame is a stuff byte, still
+ * part of the data the card was sending, so it can have bit 7 clear and pass for an R1 —
+ * command() would take it. And the card may then hold MISO low while it stops: leaving
+ * before it releases makes the next command fail without saying why, as with a write.
+ *
+ * Returns 0 on any failure, after stopping the card, and disk_read then reads the same run
+ * one block at a time and counts the retreat (uvm2_sd_diag.multi_fail): a card that will not
+ * do CMD18 gets slower, not broken, and the counter is what says it happened. */
+static void stop_transmission(void)
+{
+    const unsigned char frame[6] = { 0x40 | 12, 0, 0, 0, 0, 0x61 };
+    xfer_out(frame, 6);
+    xfer(0xFF);                                /* the stuff byte: discarded, never an R1 */
+    for (int i = 0; i < 10; i++) if (!(xfer(0xFF) & 0x80)) break;
+    for (int i = 0; i < 500000; i++) if (xfer(0xFF) == 0xFF) break;
+}
+static int read_blocks(uint32_t lba, unsigned char *buf, uint32_t count)
+{
+    cs(1);
+    if (command(18, s_sdhc ? lba : lba * 512u, 0xFF) != 0x00) { cs(0); return 0; }
+    for (uint32_t b = 0; b < count; b++, buf += 512) {
+        uint8_t t = 0xFF;
+        for (int i = 0; i < 200000 && t == 0xFF; i++) t = xfer(0xFF);
+        if (t != 0xFE) { stop_transmission(); cs(0); return 0; }
+        xfer_in(buf, 512);
+        xfer(0xFF); xfer(0xFF);               /* CRC, which we do not check */
+    }
+    stop_transmission();
+    cs(0);
+    return 1;
+}
+
 /* WRITE ONE BLOCK (CMD24). FatFs decides WHAT is written — FAT copies, FSInfo, exFAT bitmap
  * and entry-set checksums — and this only has to report honestly whether it landed. */
 static int write_block(uint32_t lba, const unsigned char *buf)
@@ -435,6 +493,18 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
     if (pdrv || !s_ready) return RES_NOTRDY;
     /* The card addresses 32 bits of sectors (2 TB). A GPT volume past that is not an SD card. */
     if (sector + count > 0x100000000ull) return RES_PARERR;
+/* -DUVM2_SD_SINGLE_BLOCK brings back one CMD17 per block, as UVM2_SD_BITBANG brings back the
+ * old transport: two builds that differ in nothing else are how a fault is pinned on CMD18. */
+#if !defined(UVM2_SD_HOST) && !defined(UVM2_SD_SINGLE_BLOCK)
+    if (count > 1) {
+        if (read_blocks((uint32_t)sector, buff, count)) {
+            uvm2_sd_diag.reads += count;
+            uvm2_sd_diag.multi++;
+            return RES_OK;
+        }
+        uvm2_sd_diag.multi_fail++;            /* and the same run again, one block at a time */
+    }
+#endif
     for (UINT i = 0; i < count; i++, buff += 512) {
         uvm2_sd_diag.reads++;
         if (!read_block((uint32_t)sector + i, buff)) return RES_ERROR;

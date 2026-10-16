@@ -9,7 +9,8 @@
  *     uvm2_sd_test IMG stream    PATH CHUNK OTHER OUT  open + next in CHUNK slices -> OUT,
  *                                                   reading OTHER whole half way through
  *
- * It prints `ok=<0|1> err=<uvm2_sd_error> n=<bytes> fs=<fs_type>` and exits 0 whatever the
+ * It prints `ok=<0|1> err=<uvm2_sd_error> n=<bytes> fs=<fs_type> multi=<CMD18 runs>
+ * multi_fail=<runs re-read with CMD17> csize=<sectors per cluster>` and exits 0 whatever the
  * outcome; tools/uvm2_sd_test.sh decides what was expected. Build:
  *
  *     cc -O2 -DUVM2_SD_HOST -I. -I../third_party/fatfs -o /tmp/uvm2_sd_test \
@@ -93,7 +94,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "bad arguments; see the top of uvm2_sd_test.c\n");
         return 2;
     }
-    printf("ok=%d err=%d n=%u fs=%u\n", ok, uvm2_sd_error, n, uvm2_sd_diag.fs_type);
+    printf("ok=%d err=%d n=%u fs=%u multi=%u multi_fail=%u csize=%u\n", ok, uvm2_sd_error, n,
+           uvm2_sd_diag.fs_type, uvm2_sd_diag.multi, uvm2_sd_diag.multi_fail, uvm2_sd_diag.csize);
     fclose(img);
     return 0;
 }
