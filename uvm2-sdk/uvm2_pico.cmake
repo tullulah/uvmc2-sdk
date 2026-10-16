@@ -332,11 +332,25 @@ elseif("UVM2_DUAL_CORE" IN_LIST UVM2_GAME_DEFS)
     set(VECTREX_CARGO_ENV ${CMAKE_COMMAND} -E env VECTREX_LIST_MAX=64)
 endif()
 
+# THE SAME BYTES ON EVERY MACHINE: the SDK's rust-toolchain.toml pins rustc (cargo runs in the
+# crate's folder so rustup finds it), and the paths Rust embeds (panic locations) are remapped,
+# so where the SDK and ~/.cargo live does not change the image's size. Left alone when the
+# build already sets its own Rust flags.
+if(NOT VECTREX_CARGO_ENV)
+    set(VECTREX_CARGO_ENV ${CMAKE_COMMAND} -E env)
+endif()
+get_filename_component(VECTREX_SDK_ROOT "${VECTREX_DRAW_DIR}/.." ABSOLUTE)
+if(NOT DEFINED ENV{RUSTFLAGS} AND NOT DEFINED ENV{CARGO_ENCODED_RUSTFLAGS} AND DEFINED ENV{HOME})
+    set(VECTREX_RUST_REMAP "--remap-path-prefix=$ENV{HOME}=~ --remap-path-prefix=${VECTREX_SDK_ROOT}=uvmc2-sdk")   # the last that matches wins
+    list(APPEND VECTREX_CARGO_ENV "RUSTFLAGS=${VECTREX_RUST_REMAP}")
+endif()
+
 add_custom_target(vectrex_draw_lib ALL
     COMMAND ${VECTREX_CARGO_ENV} ${CARGO_EXE} build --release --target ${VECTREX_DRAW_TARGET}
             --manifest-path "${VECTREX_DRAW_DIR}/cabi/Cargo.toml"
             --target-dir "${VECTREX_CARGO_TARGET_DIR}"
             ${VECTREX_CABI_FEATURES}
+    WORKING_DIRECTORY "${VECTREX_DRAW_DIR}/cabi"
     BYPRODUCTS ${VECTREX_DRAW_LIB}
     COMMENT "shared drawing layer (vectrex-draw)")
 add_dependencies(${UVM2_NAME} vectrex_draw_lib)

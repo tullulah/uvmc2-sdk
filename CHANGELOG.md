@@ -3,6 +3,18 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.3 — the same image on every machine: Rust pinned, its paths remapped
+
+* `rust-toolchain.toml` pins Rust 1.91.1 (with the `thumbv8m.main-none-eabi` target): rustup
+  installs it on first use. A newer rustc linked ~3 KB more of `core` into the drawing layer,
+  and return of the jedi, a few hundred bytes from full, linked on one machine and not on a
+  fresh one. Raise it on purpose, with a release.
+* The paths Rust embeds (panic locations) are remapped (`~`, `uvmc2-sdk`), so where the SDK
+  and `~/.cargo` live does not change the image's size. Not when the build sets its own
+  `RUSTFLAGS`.
+* Vectrex Studio pairs it with Arm GNU Toolchain 15.2.rel1 for uvm2 builds (downloaded by the
+  IDE when missing): the C side is one compiler everywhere too.
+
 ## v1.4.2 — the romset buffer in the PSRAM for every .um2
 
 * `uvm2_pico_main.c` loads a romset in every image, so the 23 KB buffer of `uvm2_romzip.c`

@@ -1,0 +1,9 @@
+# ONE RUST FOR EVERY MACHINE. The drawing layer (vectrex-draw, vectrex-bus) is linked into
+# every .um2, and a newer rustc pulls more of core into it: with 1.99 instead of 1.91 a game
+# grew ~3 KB of .rodata (formatting, unicode tables, panic locations), and return of the jedi,
+# a few hundred bytes from full, linked on one machine and not on another. rustup reads this
+# file and installs this toolchain and target on first use. Raise it on purpose, with a release.
+[toolchain]
+channel = "1.91.1"
+targets = ["thumbv8m.main-none-eabi"]
+profile = "minimal"
