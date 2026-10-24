@@ -131,6 +131,13 @@ if(DEFINED ENV{UVM2_LOAD_PSRAM} AND NOT "$ENV{UVM2_LOAD_PSRAM}" STREQUAL "0")
     target_compile_definitions(${UVM2_NAME} PRIVATE UVM2_PSRAM_IMAGE=1)
 endif()
 
+# The C heap's reservation, when the game sets UVM2_HEAP_SIZE (uvm2.mk). A definition on the
+# TARGET, not on the game's sources, because crt0.S is what reads it.
+if(DEFINED ENV{UVM2_HEAP_SIZE} AND NOT "$ENV{UVM2_HEAP_SIZE}" STREQUAL "")
+    message(STATUS "UVM2_HEAP_SIZE: C heap of $ENV{UVM2_HEAP_SIZE} bytes")
+    target_compile_definitions(${UVM2_NAME} PRIVATE PICO_HEAP_SIZE=$ENV{UVM2_HEAP_SIZE})
+endif()
+
 # The game keeps its own `main`; rename it so uvm2_pico_main.c can wrap it with
 # the runtime init. Scoped to the GAME sources only — as a global flag it also
 # renames the `main` in CMake's compiler-probe program and configuration fails.

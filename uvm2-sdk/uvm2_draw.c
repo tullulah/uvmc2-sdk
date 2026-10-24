@@ -2846,6 +2846,17 @@ static void artificial_delay(void)
 extern unsigned uvm2_input_count;
 #endif
 
+#if defined(UVM2_DUAL_CORE) && defined(UVM2_REPLAY_LAST)
+/* Whether uvm2_frame_begin would return at once: the executor is done with the buffer the
+ * next frame fills. For a caller on core 1 itself (a worker, uvm2_core1.c), which must not
+ * spin in uvm2_frame_begin: what it waits for is the pass core 1 is in. */
+int uvm2_frame_can_begin(void)
+{
+    __asm volatile ("dmb" ::: "memory");
+    return (int32_t)(uvm2_frame_done - (s_frame_no - 2u)) >= 0;
+}
+#endif
+
 void uvm2_frame_begin(void)
 {
 #if defined(UVM2_DUAL_CORE) && defined(UVM2_REPLAY_LAST)

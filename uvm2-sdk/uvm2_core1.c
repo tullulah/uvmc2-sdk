@@ -365,6 +365,231 @@ extern void uvm2_replay_extra(void) __attribute__((weak));
  * which the pass being replayed already satisfies, as long as it publishes at most one
  * list per call. It is not called while the program is inside a BIOS call (the hold). */
 void (*volatile uvm2_worker)(void);
+
+/* THE PASS IN CHUNKS, NOT AS ONE LIST (UVM2_WORKER_STREAM, 2026-10-20, Starblade).
+ *
+ * The worker needs this core free while the beam draws, and the list path gives that by
+ * holding the WHOLE pass as bus words: Starblade's pass is ~12k words (~6000 commands, a
+ * write each plus a park after most), 47 KB a buffer and two of them, in an image with
+ * a few hundred bytes of SRAM left. And the list does not go to the PSRAM (it always gave
+ * trouble).
+ *
+ * But the words are a pure function of the commands, which are ALREADY in SRAM (s_cmds):
+ * one 3-byte command is a write word and, when it has a delay, a park word. So the pass is
+ * converted a chunk at a time into two small buffers (512 bytes in all), each read by a DMA
+ * channel chained to the other: when a chunk ends the next one starts in hardware, and the
+ * end-of-transfer interrupt refills the buffer that just finished while the other plays
+ * (~0.17 ms). Converting a chunk takes a few us (Starblade: 48k bus cycles in 12k words).
+ *
+ * WHILE THE WORKER RUNS, THE PASS LOOPS: at the end of the commands it starts over. A
+ * worker that outlasts the beam (Starblade's drawing passes: 70 ms against a 32 ms pass)
+ * would otherwise leave the beam off until it returned, the flicker UVM2_REPLAY_LAST was
+ * written to remove. Starting over is what the replay does, minus the controllers and the
+ * PSG between passes, which wait for the worker. When it returns the loop is told to stop
+ * at the end of the commands, and the pass ends there as before.
+ *
+ * A LATE REFILL REPEATS A CHUNK, IT NEVER SENDS GARBAGE: each channel reads its buffer as a
+ * ring. The PIO's own stall flag counts what the bus waited for (uvm2_stream_starved; the UVM2
+ * emulator does not model it and reads 0). The first version, one channel re-armed from the
+ * interrupt, had only the FIFO's 4 words of slack and stalled ~11 times a second on the
+ * console (2026-10-24): see s_chunk.
+ *
+ * The pump is also safe to call by polling (uvm2_stream_pump); stream_end does, as a backstop.
+ * The UVM2 emulator models this interrupt since 2026-10-21 (DMA_IRQ_1, core 1); before that
+ * the stream only moved when polled and the beam starved between polls. */
+#include "hardware/dma.h"
+#include "hardware/pio.h"
+#include "hardware/irq.h"
+#include "hardware/sync.h"
+#include "hardware/structs/sio.h"
+#ifndef UVM2_STREAM_CHUNK_LOG2
+#define UVM2_STREAM_CHUNK_LOG2 6u   /* 64 words: 256 bytes a buffer, ~0.17 ms of bus each */
+#endif
+#define UVM2_STREAM_CHUNK (1u << UVM2_STREAM_CHUNK_LOG2)
+/* TWO CHANNELS, CHAINED (2026-10-24, the first console run). With one channel re-armed from its
+ * own interrupt, the re-arm had what the PIO's FIFO holds, 4 words (~2.7 us), and on the
+ * console it missed ~11 times a second (uvm2_stream_starved, the PIO's TXSTALL): core 1
+ * stalled on a PSRAM miss while core 0 competes for the same QMI, and a stall with the ramp
+ * open is a glitch on the screen. The UVM2 emulator charges no PSRAM time and never saw it.
+ * Now channel A chains to B and B to A, so the next chunk starts in hardware the moment the
+ * previous one ends; the interrupt only refills the buffer that just finished, and has a whole
+ * chunk (~0.17 ms) to do it in. Each channel reads its buffer as a RING (the buffer aligned to
+ * its size): a refill late even past that would replay a stale chunk of real bus words, never
+ * memory beyond it. At the end of the commands the running channel's chain is cut. */
+static uint32_t s_chunk[2][UVM2_STREAM_CHUNK] __attribute__((aligned(UVM2_STREAM_CHUNK * 4u)));
+static uint32_t s_chunk_n[2];
+static int      s_ch[2] = { 0, -1 };   /* A is vectrex-bus's channel (PIO0 SM0's TX); B claimed */
+static const uint8_t *s_sc_cmds;    /* the pass's commands */
+static uint32_t s_sc_count, s_sc_at; /* how many, the next one to convert */
+static uint32_t s_sc_cycles;        /* bus cycles of one pass of the commands */
+static uint32_t s_sc_park;          /* the park of the last word emitted: what the bus may still
+                                       be doing when the FIFO is already empty */
+static volatile int s_sc_last;      /* the buffer whose chunk ends the pass (its chain cut), -1 */
+static int      s_sc_first;         /* the pass's first chunk is still the one to end */
+static volatile int s_sc_loop;      /* 1: start over at the end of the commands */
+static volatile int s_sc_active;    /* a chunk is in flight */
+uint32_t uvm2_stream_chunks, uvm2_stream_starved, uvm2_stream_loops;
+/* passes started, and the microseconds with no pass going out: from the end of one (its last
+ * chunk sent) to the start of the next. What the beam spends without a list. */
+uint32_t uvm2_stream_passes, uvm2_stream_gap_us, uvm2_stream_end_us, uvm2_stream_last_park;
+static uint32_t s_sc_end_us;
+
+/* the next commands as words into b; 0 words when the commands are done and not looping */
+static uint32_t stream_fill(uint32_t *b)
+{
+    uint32_t n = 0;
+    while (n + 2u <= UVM2_STREAM_CHUNK) {
+        if (s_sc_at >= s_sc_count) {
+            if (!s_sc_loop || n) break;   /* a loop starts in a buffer of its own */
+            s_sc_at = 0;
+            uvm2_stream_loops++;
+        }
+        const uint8_t *c = s_sc_cmds + 3u * s_sc_at++;
+        uint32_t v     = (uint32_t)c[0] | ((uint32_t)c[1] << 8) | ((uint32_t)c[2] << 16);
+        uint32_t delay = UVM2_CMD_DELAY(v);
+        b[n++] = vbus_word(UVM2_VIA_WORD(UVM2_CMD_REG_DATA(v)));
+        s_sc_park = delay;
+        if (delay) b[n++] = vbus_repeat(delay);
+    }
+    return n;
+}
+
+/* buffer k's channel, reading its buffer as a ring, chained to the other (or to itself: no
+ * chain); triggered only to start the pass */
+static void stream_arm(int k, int chain, bool trigger)
+{
+    const uint ch = (uint)s_ch[k];
+    dma_channel_config c = dma_channel_get_default_config(ch);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_ring(&c, false, UVM2_STREAM_CHUNK_LOG2 + 2u);
+    channel_config_set_dreq(&c, pio_get_dreq(pio0, 0, true));
+    channel_config_set_chain_to(&c, chain ? (uint)s_ch[k ^ 1] : ch);
+    dma_channel_configure(ch, &c, &pio0->txf[0], s_chunk[k], s_chunk_n[k], trigger);
+}
+
+/* buffer k's chunk has gone out (its channel finished, the other one already running it its
+ * place): refill it, and arm it again for when the other finishes, or end the pass */
+static void stream_done(int k)
+{
+    /* STARVED = the state machine stalled on an empty FIFO (FDEBUG.TXSTALL, sticky). Not
+     * "the FIFO is empty": a park word keeps the bus busy for its whole length with the FIFO
+     * already empty, and counting that read 119 starvations in a run with none. */
+    /* NOT AT THE FIRST: the state machine sat stalled waiting for the pass, and the flag,
+     * cleared when the pass was armed, set itself again before the first word arrived (a
+     * stall a pass, or nearly: 22 in 141 passes on the console). From the first chunk's end
+     * on, a stall is the bus really waiting. */
+    if (s_sc_first) s_sc_first = 0;
+    else if (pio0->fdebug & (1u << (PIO_FDEBUG_TXSTALL_LSB + 0u))) uvm2_stream_starved++;
+    pio0->fdebug = 1u << (PIO_FDEBUG_TXSTALL_LSB + 0u);
+    uvm2_stream_chunks++;
+    if (s_sc_last == k) { s_sc_active = 0; s_sc_end_us = time_us_32(); return; }   /* the pass is over */
+    if (s_sc_last >= 0) return;          /* the other one ends it: nothing more to send */
+    s_chunk_n[k] = stream_fill(s_chunk[k]);
+    if (s_chunk_n[k]) { stream_arm(k, 1, false); return; }
+    /* nothing after the chunk now running: cut its chain (to itself), in ONE write: cleared
+     * first and set after, it would point at channel 0 in between */
+    s_sc_last = k ^ 1;
+    {   io_rw_32 *ctrl = &dma_channel_hw_addr((uint)s_ch[k ^ 1])->al1_ctrl;
+        *ctrl = (*ctrl & ~DMA_CH0_CTRL_TRIG_CHAIN_TO_BITS) |
+                ((uint32_t)s_ch[k ^ 1] << DMA_CH0_CTRL_TRIG_CHAIN_TO_LSB); }
+}
+
+static void stream_service(void)
+{
+    for (int i = 0; i < 2; i++) {
+        /* the one that started first ends first: A's flag, then B's, in the order they ran
+         * is not guaranteed here, so each is taken as it is seen; at most one is pending
+         * unless a whole chunk was missed */
+        const uint32_t bit = 1u << s_ch[i];
+        if (dma_hw->ints1 & bit) { dma_hw->ints1 = bit; if (s_sc_active) stream_done(i); }
+    }
+}
+
+static void __not_in_flash_func(stream_isr)(void) { stream_service(); }
+
+/* By polling, as a backstop: interrupts off so it never runs inside the handler. */
+void uvm2_stream_pump(void)
+{
+    if (!s_sc_active) return;
+    const uint32_t save = save_and_disable_interrupts();
+    stream_service();
+    restore_interrupts(save);
+}
+
+void uvm2_bus_return_to_stream(void);   /* uvm2_bus.c: the bus back from SIO to the PIO */
+static void stream_begin(const uint8_t *cmds, uint32_t count)
+{
+    static int s_irq_on;
+    if (!s_irq_on) {   /* on this core: the handler runs where the worker does. EXCLUSIVE: the
+                        * shared-handler chain is ~0.8 KB of SRAM, and nothing else in the
+                        * SDK takes DMA_IRQ_1 (the jack's channel runs without interrupts) */
+        /* B: the lowest free channel above A. Not dma_claim_unused_channel: it would hand
+         * out channel 0, which vectrex-bus drives without claiming */
+        for (uint ch = 1; ch < NUM_DMA_CHANNELS; ch++)
+            if (!dma_channel_is_claimed(ch)) { dma_channel_claim(ch); s_ch[1] = (int)ch; break; }
+        if (!dma_channel_is_claimed(0)) dma_channel_claim(0);
+        irq_set_exclusive_handler(DMA_IRQ_1, stream_isr);
+        irq_set_priority(DMA_IRQ_1, 0);   /* the highest: its deadline is the bus's */
+        irq_set_enabled(DMA_IRQ_1, true);
+        s_irq_on = 1;
+    }
+    uvm2_bus_return_to_stream();
+    vbus_flush();                                   /* whatever single accesses left queued */
+    while (dma_channel_is_busy((uint)s_ch[0]) || dma_channel_is_busy((uint)s_ch[1])) { }
+    s_sc_cmds = cmds; s_sc_count = count; s_sc_at = 0; s_sc_park = 0;
+    s_sc_cycles = 0;
+    if (!count) return;                             /* an empty list would loop on nothing */
+    for (uint32_t i = 0; i < count; i++) {          /* what one pass costs, for the stats */
+        const uint8_t *c = cmds + 3u * i;
+        s_sc_cycles += 1u + UVM2_CMD_DELAY((uint32_t)c[0] | ((uint32_t)c[1] << 8) | ((uint32_t)c[2] << 16));
+    }
+    s_sc_loop = 1;
+    s_chunk_n[0] = stream_fill(s_chunk[0]);
+    s_chunk_n[1] = stream_fill(s_chunk[1]);
+    if (!s_chunk_n[0]) return;
+    s_sc_last = s_chunk_n[1] ? -1 : 0;
+    if (s_chunk_n[1]) stream_arm(1, 1, false);
+    if (s_sc_end_us) uvm2_stream_gap_us += time_us_32() - s_sc_end_us;
+    uvm2_stream_passes++;
+    s_sc_active = 1;
+    s_sc_first = 1;
+    dma_hw->ints1 = (1u << s_ch[0]) | (1u << s_ch[1]);
+    hw_set_bits(&dma_hw->inte1, (1u << s_ch[0]) | (1u << s_ch[1]));
+    stream_arm(0, s_chunk_n[1] != 0, true);         /* the pass starts */
+}
+
+/* FOR A WORKER THAT DOES NOT RETURN AT ONCE (Starblade's drawing, a coroutine): it publishes
+ * its list, asks the pass to end at the end of its commands instead of looping, and goes on
+ * with its next frame until it sees the pass over; then it returns, and the loop serves the
+ * new list without having waited the rest of the pass out. */
+int  uvm2_stream_running(void) { return s_sc_active; }
+uint32_t uvm2_stream_ended_us(void) { return s_sc_end_us; }
+void uvm2_stream_finish(void)  { s_sc_loop = 0; }
+
+/* stop at the end of the commands, wait for the bus to be done with all of it */
+static uint32_t stream_end(void)
+{
+    const uint32_t t0 = time_us_32();
+    s_sc_loop = 0;
+    while (s_sc_active) uvm2_stream_pump();
+    hw_clear_bits(&dma_hw->inte1, (1u << s_ch[0]) | (1u << s_ch[1]));
+    while (!((pio0->fstat >> PIO_FSTAT_TXEMPTY_LSB) & 1u)) { }
+    /* AN EMPTY FIFO IS NOT A FREE BUS: the last word may be a park still running. Its
+     * periods, plus two, counted on E (SIO bit 31) as vectrex-bus's drain does. The LAST
+     * word's, not the longest of the pass (vectrex-bus's PARK_MAX is per drain, i.e. per
+     * batch): a long park in the middle of the list would be waited out at every end. */
+    for (uint32_t i = 0; i < s_sc_park + 2u; i++) {
+        uint32_t g = 0;
+        while (sio_hw->gpio_in & (1u << 31)) { if (++g > 100000u) break; }
+        g = 0;
+        while (!(sio_hw->gpio_in & (1u << 31))) { if (++g > 100000u) break; }
+    }
+    uvm2_stream_last_park = s_sc_park;
+    uvm2_stream_end_us += time_us_32() - t0;
+    return s_sc_cycles;
+}
 #endif
 static void core1_main(void)
 {
@@ -483,12 +708,18 @@ static void core1_main(void)
 #ifdef UVM2_CORE0_WORKER
         void (*const work)(void) = uvm2_worker;
         if (work) {
+#ifdef UVM2_WORKER_STREAM
+            stream_begin(uvm2_frame_buffer(served), uvm2_frame_length(served));
+            if (!uvm2_replay_hold) work();    /* the pass loops by DMA while the game works */
+            cycles = stream_end();            /* and the bus is done before anything else */
+#else
             vbus_list_begin();
             cycles = uvm2_exec(uvm2_frame_buffer(served), uvm2_frame_length(served));
             vbus_list_end();
             vbus_list_fire();                 /* the beam draws by DMA from here */
             if (!uvm2_replay_hold) work();    /* ...while the game works on this core */
             vbus_list_wait();                 /* and the bus is done before anything else */
+#endif
         } else
 #endif
         cycles = uvm2_exec(uvm2_frame_buffer(served), uvm2_frame_length(served));

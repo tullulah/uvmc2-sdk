@@ -131,6 +131,14 @@ ifneq ($(UVM2_LIST_MAX),)
 export UVM2_LIST_MAX := $(UVM2_LIST_MAX)
 endif
 
+# THE C HEAP'S RESERVATION, in bytes (the pico-sdk's PICO_HEAP_SIZE, 2 KB by default). It is
+# read by crt0.S, which the game's defines do not reach (they are C only: see uvm2_pico.cmake),
+# so it goes through the environment like UVM2_LIST_MAX. Only for an image that links no
+# malloc (check with nm): Starblade's 2 KB were reserved for nobody.
+ifneq ($(UVM2_HEAP_SIZE),)
+export UVM2_HEAP_SIZE := $(UVM2_HEAP_SIZE)
+endif
+
 # An artificial delay between frames, in us. It separates TIME from the PSRAM. See
 # uvm2_draw.c. (UVM2_PSRAM_START, below, powers the PSRAM up without using it, which
 # isolates "the chip is active" from "the list lives there".)
