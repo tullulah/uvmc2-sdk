@@ -651,6 +651,18 @@ static void core1_main(void)
                     reset_poll();                 /* first: it decides whether input is read */
 #endif
 #ifndef UVM2_NO_INPUT
+                    /* NOT THROUGH A VIA THAT WAS JUST RESET. Before the first frame nothing
+                     * has programmed it on a restart: the console's reset button put DDRB
+                     * back to 0 (see reset_poll), so the reads below write port B into
+                     * nothing, the PSG is never selected and port A reads 0x00 — which on
+                     * the active-low buttons is ALL PRESSED. uvm2_config_boot_combo read that
+                     * as buttons 2+3 held and opened the calibration wizard on every single
+                     * press of reset (kuroishi, 2026-10-28). From the launcher it never
+                     * showed: the UVMC2's firmware leaves the VIA set up. 0x9F is what every
+                     * list sets at its start (uvm2_draw.c, via_setup). Only before the first
+                     * frame: after it, DDRB at 0 is reset_poll's signal and must stay one. */
+                    if (uvm2_frame_done == 0u && uvm2_via_read(UVM2_VIA_DDRB) == 0)
+                        uvm2_via_write(UVM2_VIA_DDRB, 0x9F);
                     if (!INPUT_HELD()) {
                         uvm2_cached_buttons = uvm2_read_buttons();
                         uvm2_cached_axes    = uvm2_read_axes();
