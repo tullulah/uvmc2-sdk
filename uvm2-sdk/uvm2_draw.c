@@ -3117,6 +3117,19 @@ void uvm2_frame_end(void)
     /* One press of the console's reset button: the game starts again from here, the game's
      * core putting its globals back (uvm2_core1.c, reset_poll). */
     { extern void uvm2_restart_if_asked(void); uvm2_restart_if_asked(); }
+    /* AND WHILE IT IS WAITING TO KNOW whether a second press follows (one restarts the game,
+     * two go to the UVMC2's menu: up to UVM2_RESET_DOUBLE_US), the game is not shown going
+     * on — its frame is dropped and the screen says what is happening. The text is
+     * uvm2_print_text's (a re-zero per glyph: nothing to calibrate first), nine letters at
+     * scale 5, 7*5/2 = 17 units each, centred. */
+    {
+        extern volatile uint32_t uvm2_restart_pending;
+        extern void uvm2_print_text(int x, int y, const char *str, int scale, int intensity);
+        if (uvm2_restart_pending) {
+            uvm2_list_clear_frame();
+            uvm2_print_text(-(9 * ((7 * 5) >> 1)) / 2, 8, "RESETTING", 5, 100);
+        }
+    }
 #endif
 
     /* DO NOT PUBLISH AN EMPTY FRAME.

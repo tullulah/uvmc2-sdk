@@ -230,6 +230,11 @@ static uint32_t s_snap_n;               /* bytes copied to core 1's stack (0: no
 static int      s_snap_ok;              /* and kept in the PSRAM */
 volatile uint32_t uvm2_restart_refused;
 volatile uint32_t uvm2_restart_asked;   /* core 1 saw one press and its wait ran out */
+/* ONE PRESS SEEN AND THE WAIT FOR A SECOND STILL RUNNING. The game went on being drawn for
+ * that second, so a reset looked like a flicker and then the game carrying on — and then,
+ * out of nowhere, starting again (kuroishi, 2026-10-28). While this is set, uvm2_frame_end
+ * throws the game's frame away and shows RESETTING instead. */
+volatile uint32_t uvm2_restart_pending;
 __attribute__((optimize("Os"))) void uvm2_restart_snapshot(void)
 {
 #ifdef UVM2_RESET_WATCH_ONLY
@@ -296,6 +301,7 @@ __attribute__((optimize("Os"))) static void reset_poll(void)
             if ((pending && now - first_at < UVM2_RESET_DOUBLE_US) || !s_snap_ok)
                 rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
             pending = 1;
+            uvm2_restart_pending = 1;
             first_at = now;
 #endif
         }
