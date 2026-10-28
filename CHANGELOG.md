@@ -3,6 +3,24 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.6 — one press of reset restarts the game, and not into the calibration wizard
+
+* One press of the console's reset restarted the game into the calibration wizard instead of
+  the game. The reset clears the VIA (DDRB back to 0) and nothing programs it until the first
+  frame's list; core 1's button refresh before that frame read through it with port B going
+  nowhere, the PSG never selected and port A reading 0x00 — all buttons pressed — and
+  `uvm2_config_boot_combo` took that for buttons 2+3 held. Before the first frame a DDRB of 0
+  is now set to 0x9F before the read; after it, DDRB at 0 stays the reset watch's signal. From
+  the UVMC2's menu it never showed: its firmware leaves the VIA set up.
+* The simulator's `v_simSaveData` declares its dependency on `UTF8ToString` (`EM_JS_DEPS`).
+  Without it the build linked and the first save threw "UTF8ToString is not defined", which
+  in the simulator stops `main()` while the jack audio, made by the IDE, plays on. Games that
+  exported it themselves as a workaround can stop.
+* Opt-in, nothing changes without them: `UVM2_WORKER_STREAM`, a core-1 worker's pass fed to
+  the PIO in chunks by two chained DMA channels (`uvm2_stream_finish`,
+  `uvm2_stream_running`, `uvm2_frame_can_begin`), and `UVM2_HEAP_SIZE`, the C heap's
+  reservation for an image that links no malloc.
+
 ## v1.4.5 — a VPy game's USB debug monitor starts
 
 * A VPy game built with `UVM2_USB_MONITOR` (Vectrex Studio's Upload / Debug on Cartridge)
