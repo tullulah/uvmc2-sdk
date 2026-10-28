@@ -3,6 +3,15 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.7 — the reset's second of waiting shows RESETTING
+
+* After one press of the console's reset the SDK waits up to `UVM2_RESET_DOUBLE_US` (1 s) for a
+  second (two presses go back to the UVMC2's menu). The game went on being drawn meanwhile, so
+  a reset looked like a flicker, the game carrying on, and then a restart. Now the game's frame
+  is dropped while the press is pending and the screen says RESETTING
+  (`uvm2_restart_pending`, `uvm2_frame_end`). The game's code still runs; only what it draws
+  is replaced.
+
 ## v1.4.6 — one press of reset restarts the game, and not into the calibration wizard
 
 * One press of the console's reset restarted the game into the calibration wizard instead of
