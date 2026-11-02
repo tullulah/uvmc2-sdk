@@ -474,6 +474,8 @@ static int32_t s_drift_ax, s_drift_ay;   /* see the drift compensation, below */
 void vx_ramp_params_chain(int32_t dx, int32_t dy, int32_t *vx, int32_t *vy, uint32_t *t1);
 void vx_chain_reset(void);
 void vx_debt_reset(void);
+void vx_debt_park(void);     /* after a jump: its own rounding out of the chain's way */
+void vx_debt_unpark(void);   /* before a jump: what was parked, back to be absorbed */
 /* The jump's half of the debt model: how much to absorb into the dark stretch, and the
  * ledger entry for each ramp actually emitted. See `move_one`, which is the only caller. */
 void vx_debt_take(int32_t dx, int32_t dy, uint32_t q, int32_t *ax, int32_t *ay);
@@ -2005,6 +2007,7 @@ static void split(int dx, int dy, void (*emit_piece)(int, int))
 
 /* HOW FAR A START RAMP TRAVELS, in internal units: rate 1 for 8 T1 counts. It is not a chosen
  * number — it comes from the same constants as the rest of the drawing. */
+int32_t vx_ramp_dist(int32_t v, uint32_t t1, int32_t f);   /* vectrex-draw: travel WITH the tail */
 static int start_step(void)
 {
     int q = (8 * (1 << UVM2_Q_BITS)) / (int)DRAW_SCALE;
@@ -2048,6 +2051,7 @@ static void move_one(int dx, int dy)
     const int dx_asked_ = dx, dy_asked_ = dy;
     {
         int32_t ax_ = 0, ay_ = 0;
+        vx_debt_unpark();       /* the previous jump's own rounding: absorbed here, see ramp.rs */
         vx_debt_take(dx, dy, UVM2_Q_BITS, &ax_, &ay_);
         dx += ax_;
         dy += ay_;
@@ -2146,16 +2150,28 @@ static void move_one(int dx, int dy)
              * MEASURED in captured #45: it asks for -20.25 units; at t1 = 26 the exact rate is
              * -124.6. Rounding gives -125, truncating -124, and with -124 the residue is -0.10,
              * which at t1 = 8 is the -2 the capture shows. */
+            /* WHAT THE MAIN RAMP TRAVELS COUNTS ITS TAIL, through the model's own helper.
+             *
+             * This was v * t1 / DRAW_SCALE, written when that was the model's rule. The
+             * model has since learnt the ramp's physical tail (T1_EXTRA_Q8: every ramp
+             * travels v * (t1 + 2.5)), and the ledger that `vx_debt_record` keeps below
+             * counts it — so this block and the ledger disagreed by the tail. On a jump at
+             * rate 124 that is ~310 units: the priming unit pushed the beam on by the tail
+             * the long ramp was going to travel anyway, the jump landed past its target,
+             * and the ledger charged the overshoot to the FIRST LIT STROKE after it. Seen
+             * as a deformed first letter on every text row reached by a fast jump — the S
+             * of SETTINGS in kuroishi's menu with its top bar 290 units low in the
+             * emulator, and on the console the first letter of the credits trembling.
+             * `vx_ramp_dist` is the same arithmetic the ledger uses, inverted; one rule, not
+             * a second copy of it in C. */
             {
-                const long rec = ((long)px_ * (long)pt1_ * (1L << UVM2_Q_BITS)) / (long)DRAW_SCALE;
+                const long rec = vx_ramp_dist(px_, pt1_, (int32_t)UVM2_Q);
                 if ((dx > 0 && rec > dx) || (dx < 0 && rec < dx)) px_ += (px_ > 0 ? -1 : 1);
-                const long rey = ((long)py_ * (long)pt1_ * (1L << UVM2_Q_BITS)) / (long)DRAW_SCALE;
+                const long rey = vx_ramp_dist(py_, pt1_, (int32_t)UVM2_Q);
                 if ((dy > 0 && rey > dy) || (dy < 0 && rey < dy)) py_ += (py_ > 0 ? -1 : 1);
             }
-            /* What the main ramp travels, in internal units (the same rounding as the
-             * model's own travel helper: v * t1 / DRAW_SCALE). */
-            const int rec_x = (int)(((long)px_ * (long)pt1_ * (1L << UVM2_Q_BITS)) / (long)DRAW_SCALE);
-            const int rec_y = (int)(((long)py_ * (long)pt1_ * (1L << UVM2_Q_BITS)) / (long)DRAW_SCALE);
+            const int rec_x = (int)vx_ramp_dist(px_, pt1_, (int32_t)UVM2_Q);
+            const int rec_y = (int)vx_ramp_dist(py_, pt1_, (int32_t)UVM2_Q);
             const int res_x = dx - rec_x, res_y = dy - rec_y;
             if (res_x || res_y) {
                 int32_t ax, ay; uint32_t at1;
@@ -2283,6 +2299,9 @@ if (forced) { vx = px_; vy = py_; t1 = pt1_; } else {
          * actually travels. */
         vx_debt_record(dx_asked_ - res_tot_x_, dy_asked_ - res_tot_y_,
                        UVM2_Q_BITS, vx, vy, t1);
+        /* What the ledger holds now is this jump's own rounding. Not for the first lit
+         * stroke behind it to pay: parked for the next jump. See JUMP_DEBT_PARKS. */
+        vx_debt_park();
         s_ramps_from_zero++;
         uvm2_stats.moves++;
         uvm2_stats.ramp_cycles += t1;

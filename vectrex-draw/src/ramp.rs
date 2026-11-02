@@ -993,6 +993,57 @@ pub extern "C" fn vx_debt_record(dx: i32, dy: i32, q: u32, vx: i32, vy: i32, t1:
 pub extern "C" fn vx_debt_reset() {
     DEBT_X.store(0, Ordering::Relaxed);
     DEBT_Y.store(0, Ordering::Relaxed);
+    PARKED_X.store(0, Ordering::Relaxed);
+    PARKED_Y.store(0, Ordering::Relaxed);
+}
+
+/* ── A JUMP'S OWN ROUNDING IS NOT CHARGED TO THE FIRST STROKE ────────────────────────
+ *
+ * The jump absorbs the debt it finds (`vx_debt_take`), and what is left in the ledger after
+ * it is the jump's OWN rounding: integer rates over a long t1, up to half a rate step times
+ * (t1 + 2.5). Left in the ledger, the next ramp to ask for "delta + debt" is the first LIT
+ * stroke behind the jump, and it pays all of it. That stroke is the first stroke of a letter
+ * or of an object, so the residue does not come out as a position error but as a SHAPE
+ * error, on that one stroke only.
+ *
+ * MEASURED in kuroishi's credits on the UVM2 emulator: the first letter of each row is
+ * reached by a jump at rate 120-123, and its first strokes came out (0,84)(39,0) in one
+ * frame and (0,86)(36,0) or (0,88)(40,0) in the next — the roll moves, the jump's length
+ * changes, its rounding changes, and the first letter is redrawn a little different every
+ * frame while the rest of the row is not. On the console that is the first letter of every
+ * credit TREMBLING.
+ *
+ * So the jump's own residue is PARKED: taken out of the ledger the chain pays from and put
+ * back in front of the NEXT jump, which absorbs it in the dark like any other debt — or
+ * thrown away at the next re-zero. The cost is that the object behind the jump sits up to
+ * that half step off, all of it together: a uniform sub-unit offset in place of a deformed
+ * first stroke. The chain's own debt (strokes inside a chain) is untouched and is still paid
+ * in the chain.
+ *
+ * `JUMP_DEBT_PARKS` = 0 restores the old behaviour, to compare. */
+#[used]
+#[no_mangle]
+pub static JUMP_DEBT_PARKS: AtomicU32 = AtomicU32::new(1);
+static PARKED_X: AtomicI32 = AtomicI32::new(0);
+static PARKED_Y: AtomicI32 = AtomicI32::new(0);
+
+/// After a jump: move what the ledger holds (the jump's own rounding) out of the chain's way.
+#[no_mangle]
+pub extern "C" fn vx_debt_park() {
+    if JUMP_DEBT_PARKS.load(Ordering::Relaxed) == 0 { return; }
+    PARKED_X.store((PARKED_X.load(Ordering::Relaxed) + DEBT_X.swap(0, Ordering::Relaxed))
+                       .clamp(-4000, 4000), Ordering::Relaxed);
+    PARKED_Y.store((PARKED_Y.load(Ordering::Relaxed) + DEBT_Y.swap(0, Ordering::Relaxed))
+                       .clamp(-4000, 4000), Ordering::Relaxed);
+}
+
+/// Before a jump: put what was parked back in the ledger, for this jump to absorb.
+#[no_mangle]
+pub extern "C" fn vx_debt_unpark() {
+    DEBT_X.store((DEBT_X.load(Ordering::Relaxed) + PARKED_X.swap(0, Ordering::Relaxed))
+                     .clamp(-4000, 4000), Ordering::Relaxed);
+    DEBT_Y.store((DEBT_Y.load(Ordering::Relaxed) + PARKED_Y.swap(0, Ordering::Relaxed))
+                     .clamp(-4000, 4000), Ordering::Relaxed);
 }
 
 /// What the ramp REALLY travels, in thousandths: v * t1 / DRAW_SCALE with its fraction.
