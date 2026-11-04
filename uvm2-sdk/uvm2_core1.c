@@ -81,6 +81,41 @@ extern uint32_t          uvm2_frame_length(uint32_t frame);
  * has ended is impossible. */
 static uint32_t s_cycle_us;
 
+/* HOW MUCH LIST FITS IN THE PERIOD, MEASURED, for uvm2_draw.c's frame_filler.
+ *
+ * The filler used to pad every list to `uvm2_pacer_cycles`, which is the WHOLE period at the
+ * nominal 1.5 MHz. That cannot fit: this loop also reads the controllers, drains the PSG and
+ * ticks the audio between lists, and the bus does not run at exactly 1.5 MHz. Measured on a
+ * console with Boxing Bugs at 38 Hz (2026-11-04): a list padded to 39,473 cycles replayed in
+ * 26,630-26,818 us and the controllers took 743-912 us more, against a 26,315 us period. Every
+ * frame overran (`overrun` rose 187 in 187 frames) and the game ran free at 36.3 fps, not 38.
+ * The stair of jump durations, the first suspect, moved nothing: the list was always padded to
+ * the same length, whatever the drawing cost.
+ *
+ * So each pass measures what would have fitted: the period minus what was not the list,
+ * converted to list cycles at the speed THIS list actually ran at. The filler pads to the
+ * lowest such figure over the last window of a second's frames (and the window before), so a
+ * slow input read or a busier PSG seen recently is already allowed for. There is no margin
+ * constant: the jitter is in the minimum. A refresh change starts the measurement again. */
+extern volatile uint32_t uvm2_filler_cap;     /* uvm2_draw.c; list cycles, 0 = the period */
+static void filler_cap_measure(uint32_t pass_us, uint32_t exec_us, uint32_t list_cycles)
+{
+    static uint32_t s_pacer, s_cur = UINT32_MAX, s_prev = UINT32_MAX, s_n;
+    const uint32_t pacer = uvm2_pacer_cycles;
+    if (pacer != s_pacer) {                       /* new refresh (or free): start over */
+        s_pacer = pacer; s_cur = s_prev = UINT32_MAX; s_n = 0; uvm2_filler_cap = 0;
+    }
+    if (pacer == 0u || exec_us == 0u || list_cycles == 0u) return;
+    const uint32_t period_us = (pacer * 2u) / 3u;
+    const uint32_t other_us  = pass_us - exec_us;
+    const uint32_t fit = other_us < period_us
+        ? (uint32_t)((uint64_t)(period_us - other_us) * list_cycles / exec_us) : 0u;
+    if (fit < s_cur) s_cur = fit;
+    if (++s_n >= UVM2_BUS_HZ / pacer) { s_prev = s_cur; s_cur = UINT32_MAX; s_n = 0; }
+    const uint32_t cap = s_cur < s_prev ? s_cur : s_prev;
+    uvm2_filler_cap = cap < pacer ? cap : pacer;
+}
+
 #ifdef UVM2_REPLAY_LAST
 /* A REDRAW MUST NOT RUN WHILE THE PROGRAM IS INSIDE THE BIOS. On our own cartridge the
  * program's core reads the SD card inside some calls (SYS_LAUNCH loads the game, its ROM
@@ -743,6 +778,7 @@ static void core1_main(void)
         cycles = uvm2_exec(uvm2_frame_buffer(served), uvm2_frame_length(served));
 #endif
         uint32_t t1 = time_us_32();
+        const uint32_t list_cycles = cycles;   /* before the SAR's are added: see the pacer */
         uvm2_stats.us_exec = t1 - t0;
         /* AND THE SAME NUMBER IN A FIELD THAT DOES NOT SHARE A WRITER. `us_exec` is also
          * written by uvm2_svc.c with something ELSE, so reading it does not say whose it
@@ -882,6 +918,7 @@ static void core1_main(void)
             static uint32_t s_end_us;
             const uint32_t now = time_us_32();
             if (s_end_us) s_cycle_us = now - s_end_us;   /* how long this pass lasted */
+            filler_cap_measure(now - t0, t1 - t0, list_cycles);
             if (uvm2_pacer_cycles == 0u) {
                 s_end_us = now;
             } else {

@@ -3157,9 +3157,16 @@ static void measure_period(void)
  * is there, with 1 it is gone, nothing else changed that was seen. 1 is the default; the knob
  * stays so the next console can be compared the same way. */
 volatile uint8_t uvm2_filler_clamp = 1;
+/* What the filler pads to, in list cycles, measured by core 1 (uvm2_core1.c,
+ * filler_cap_measure). 0 = not measured (single core, or a new refresh): the period. */
+volatile uint32_t uvm2_filler_cap;
 static void frame_filler(void)
 {
-    const uint32_t target = uvm2_pacer_cycles;
+    /* TO WHAT FITS, NOT TO THE NOMINAL PERIOD: core 1 measures it (uvm2_core1.c,
+     * filler_cap_measure, which has the numbers). Single core, or before the first
+     * measurement, it is 0 and the period rules as before. */
+    const uint32_t cap = uvm2_filler_cap;
+    const uint32_t target = cap && cap < uvm2_pacer_cycles ? cap : uvm2_pacer_cycles;
     if (target == 0u) return;                   /* no fixed pace, no leftover */
     const uint32_t HDR = 3u+1u + 6u+1u + 3u+1u + 6u+1u + 0u+1u + 212u+1u;   /* 236 */
     const uint32_t ALT = 6u+1u + 0u+1u + 41u+1u;                            /*  50 */

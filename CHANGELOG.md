@@ -3,6 +3,18 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.12 — a game with a fixed refresh reaches it
+
+* Fixed: a dual-core game with a fixed refresh (`UVM2_HZ`, `uvm2_set_refresh`) ran below it.
+  Between frames the SDK pads the list with a filler, and it padded to the whole period at a
+  nominal 1.5 MHz; but the console's bus is a little slower than that, and core 1 also reads
+  the controllers between lists, so no frame ever fitted and the game ran free. Measured with
+  Boxing Bugs at 38 Hz: 36.3 fps, every frame counted in `uvm2_stats.overrun`. Now core 1
+  measures each frame how much list really fits in the period (the lowest over the last
+  second) and the filler pads to that: the same game holds 38.0. Nothing to change in a game;
+  rebuilding is enough. `uvm2_filler_cap` holds the measured figure (0 = not measured yet, or
+  single core, where the period rules as before).
+
 ## v1.4.11 — the buttons can be remapped and saved; the picture fits the tube upright and turned
 
 * New: the OPTIONS screen has a CONTROLS line. It lists the game's four buttons by name and
