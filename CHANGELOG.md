@@ -3,6 +3,21 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.10 — the Vectrex Studio intro card
+
+* New: a game with the OPTIONS screen (`UVM2_SETTING_OPTIONS`) shows the Vectrex Studio card
+  before it (`uvm2_intro.c`): the logo turns twice as it fades in, holds over the wordmark with
+  STUDIO and GAMES, and fades out, to the Vectrex Studio jingle on the jack; ~4.2 s, as long as
+  the jingle. Any button skips to the fade. It follows the SCREEN setting. The jingle is inside
+  the image (16 kHz IMA ADPCM, `uvm2_intro_data.h`, made by `tools/gen_intro.py`): ~36 KB of
+  SRAM in all.
+* **Optional:** `make uvm2 UVM2_INTRO=0` (or `UVM2_INTRO = 0` in the game's Makefile) compiles
+  it out (`UVM2_NO_INTRO`) and gives the 36 KB back. Games without the OPTIONS screen never
+  show it.
+* `uvm2_jack_init()` can be called more than once: a second call restarts what the first set
+  up (a cleared ring, the same state machine and DMA channel) instead of claiming new ones. The
+  card starts the jack and leaves it stopped; the game's own init starts it again.
+
 ## v1.4.9 — the refresh starts at the game's own rate
 
 * `uvm2_setting_hz` starts at the game's `UVM2_HZ` (50 when that is 0 or unset, as before)

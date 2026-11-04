@@ -101,6 +101,11 @@ static uint32_t s_ring[RING_WORDS] __attribute__((aligned(RING_WORDS * 4)));
 static int      s_ok, s_dma = -1, s_sm = -1;
 static uint32_t s_clk, s_div_q8;   /* what it believed and what it set: uvm2_jack.h */
 static uint32_t s_w;                        /* next word the CPU will write   */
+/* SET UP ONCE. More than one owner asks for the jack: the SDK's intro card plays its jingle
+ * before the game, and the game's own sound init asks again. A second set-up would claim a
+ * second state machine and a second DMA channel, both feeding the same pins. So the second
+ * call RESTARTS what the first built (uvm2_jack_set) and answers what it answered. */
+static int      s_inited;
 
 /* side-set: bit 0 = WS (GPIO44), bit 1 = BCK (GPIO45). Two instructions per bit:
  * BCK low while the data bit changes, BCK high to latch it. 16 bits with WS=0,
@@ -110,6 +115,8 @@ static const pio_program_t s_program = { .instructions = s_prog, .length = 8, .o
 
 int uvm2_jack_init(void)
 {
+    if (s_inited) return uvm2_jack_set(1);
+    s_inited = 1;
     PIO pio = pio2;
     if (pio_set_gpio_base(pio, 16) != 0) return 0;
     const uint ss = 2;
@@ -227,12 +234,14 @@ uint32_t uvm2_jack_base(void)    { return pio_get_gpio_base(pio2); }
 /* Start or stop the whole machine: with it stopped, no PIO2 state machine runs
  * and no DMA channel moves beside the bus stream (a clean A/B test against the
  * Vectrex's own sound chip). Starting it the first time does the set-up. */
-static int s_inited;
 int uvm2_jack_set(int on)
 {
     if (on) {
-        if (!s_inited) { s_inited = 1; return uvm2_jack_init(); }
+        if (!s_inited) return uvm2_jack_init();
         if (!s_ok && s_dma >= 0 && s_sm >= 0) {
+            /* What was left in the ring would play again before the new owner's first
+             * write reached it: a fragment of the last sound, out of nowhere. */
+            for (uint32_t i = 0; i < RING_WORDS; i++) s_ring[i] = 0;
             dma_channel_set_read_addr((uint)s_dma, s_ring, false);
             dma_channel_set_trans_count((uint)s_dma, dma_encode_endless_transfer_count(), true);
             pio_sm_set_enabled(pio2, (uint)s_sm, true);

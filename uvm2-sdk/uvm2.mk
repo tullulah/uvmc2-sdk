@@ -69,6 +69,20 @@ UVM2_BUILD   ?= build_uvm2
 # brightness and not smoothness — do not confuse the two.
 UVM2_HZ ?= 50
 UVM2_CFLAGS += -DUVM2_HZ=$(UVM2_HZ)
+#
+# ---- THE VECTREX STUDIO INTRO CARD -----------------------------------------
+#
+#   make uvm2                 the card, in a game that has the OPTIONS screen (default)
+#   make uvm2 UVM2_INTRO=0    no card: the OPTIONS screen (or the game) comes straight away
+#
+# A game with UVM2_SETTING_OPTIONS shows the Vectrex Studio card with its jingle on the jack
+# for ~4 s before that screen (uvm2_intro.c); any button skips it. It costs ~36 KB of the
+# image's SRAM, most of it the jingle: UVM2_INTRO=0 compiles it out and gives them back. Set it
+# in the game's Makefile to keep it off. A game without the OPTIONS screen never shows it.
+UVM2_INTRO ?= 1
+ifeq ($(UVM2_INTRO),0)
+UVM2_CFLAGS += -DUVM2_NO_INTRO
+endif
 # SUBUNITS FOR EVERYONE. The geometry travels in 1/16 of a unit end to end:
 # v_directDraw32 (sdk_rp2350.c) calls uvm2_draw_move_abs_q4/delta_q4 and the SDK
 # (uvm2_draw.c, UVM2_Q_BITS=4) splits, re-zeroes and calibrates in that unit. It is what was

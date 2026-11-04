@@ -252,6 +252,7 @@ int uvm2_options_menu(void)
 void uvm2_options_boot(void)
 {
     if (!(uvm2_config_game_settings() & UVM2_SETTING_OPTIONS)) return;
+    uvm2_intro();               /* the Vectrex Studio card, every launch (uvm2_intro.c) */
     if (!uvm2_setting_menu) {
         /* START IN GAME: only a HELD button 4 opens it. Each wait is a real frame (one
          * command), or the count would run out in microseconds: an empty frame returns at

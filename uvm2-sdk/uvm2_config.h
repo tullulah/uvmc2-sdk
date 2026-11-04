@@ -154,6 +154,10 @@ const char *uvm2_config_title_get(void);
  *  for a second at launch -- otherwise there would be no way back once it is turned off. */
 int  uvm2_options_menu(void);
 void uvm2_options_boot(void);
+/** The Vectrex Studio card with its jingle (uvm2_intro.c): uvm2_options_boot() shows it first,
+ *  so only games with the OPTIONS screen have it. `make uvm2 UVM2_INTRO=0` (UVM2_NO_INTRO)
+ *  compiles it out and makes this a no-op. */
+void uvm2_intro(void);
 unsigned uvm2_config_game_settings(void);
 
 /** Fills `c` with what the knobs are worth RIGHT NOW. */

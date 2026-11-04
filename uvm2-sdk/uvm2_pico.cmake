@@ -83,6 +83,7 @@ add_executable(${UVM2_NAME}
     ${UVM2_SDK_DIR}/uvm2_config.c
     ${UVM2_SDK_DIR}/uvm2_wizard.c
     ${UVM2_SDK_DIR}/uvm2_options.c
+    ${UVM2_SDK_DIR}/uvm2_intro.c
     ${UVM2_SDK_DIR}/uvm2_input.c
     ${UVM2_SDK_DIR}/uvm2_led.c
     ${UVM2_SDK_DIR}/uvm2_text.c
@@ -257,6 +258,7 @@ set_source_files_properties(
     ${UVM2_SDK_DIR}/uvm2_monitor.c
     ${UVM2_SDK_DIR}/uvm2_romzip.c
     ${UVM2_SDK_DIR}/uvm2_jack.c
+    ${UVM2_SDK_DIR}/uvm2_intro.c
     PROPERTIES COMPILE_OPTIONS "-Os")
 # hardware_flash: it is NOT for writing to flash — nothing there is touched. It is for
 # flash_devinfo_set_cs_size() and flash_do_cmd(), which are the only way to ask the BOOTROM for
