@@ -22,7 +22,7 @@
  *     SCREEN VERTICAL / HORIZONTAL     UVM2_SETTING_ROTATE (horizontal arcade machines):
  *                                      how the CONSOLE stands; HORIZONTAL turns the drawing
  *     SOUND JACK / VECTREX             UVM2_SETTING_AUDIO  (games with sound on the jack)
- *     REFRESH 50 HZ / 60 HZ / MAX      always
+ *     REFRESH <game's> / 50 / 60 / MAX always (the game's own rate first: UVM2_HZ)
  *     BRIGHTNESS 100                   always, percent (a gain on every intensity, uvm2_draw.c)
  *     CALIBRATE                        always (the SDK's calibration screen)
  *     START IN MENU / START IN GAME    always
@@ -84,6 +84,37 @@ static const char *bright_label(void)
     return line;
 }
 
+/* "REFRESH 38 HZ" / "REFRESH MAX", for whatever rate is set. */
+static const char *refresh_label(void)
+{
+    static char line[20];
+    const char *t = "REFRESH ";
+    int p = 0, v = (int)uvm2_setting_hz, k = 0;
+    char d[4];
+    while (*t) line[p++] = *t++;
+    if (v == 0) { t = "MAX"; while (*t) line[p++] = *t++; line[p] = 0; return line; }
+    do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 3);
+    while (k) line[p++] = d[--k];
+    t = " HZ";
+    while (*t) line[p++] = *t++;
+    line[p] = 0;
+    return line;
+}
+
+/* THE REFRESH CHOICES: the game's own first (Armor Attack's 38), then 50 and 60 if they are
+ * not that, then flat out. Cycled in either direction. */
+static int refresh_step(int dir)
+{
+    int opts[4], n = 0, at = 0;
+    const int native = uvm2_config_native_hz();
+    opts[n++] = native;
+    if (native != 50) opts[n++] = 50;
+    if (native != 60) opts[n++] = 60;
+    opts[n++] = 0;
+    for (int i = 0; i < n; i++) if (opts[i] == uvm2_setting_hz) at = i;
+    return opts[(at + n + dir) % n];
+}
+
 static const char *label(int opt)
 {
     switch (opt) {
@@ -94,8 +125,7 @@ static const char *label(int opt)
      * cabinet) and on the console "HORIZONTAL" was the default and changed nothing. */
     case OPT_SCREEN:    return uvm2_setting_rotate ? "SCREEN HORIZONTAL" : "SCREEN VERTICAL";
     case OPT_SOUND:     return uvm2_setting_audio ? "SOUND VECTREX" : "SOUND JACK";
-    case OPT_REFRESH:   return uvm2_setting_hz == 60 ? "REFRESH 60 HZ"
-                             : uvm2_setting_hz == 0  ? "REFRESH MAX" : "REFRESH 50 HZ";
+    case OPT_REFRESH:   return refresh_label();
     case OPT_BRIGHT:    return bright_label();
     case OPT_CALIBRATE: return "CALIBRATE";
     default:            return uvm2_setting_menu ? "START IN MENU" : "START IN GAME";
@@ -110,8 +140,7 @@ static int change(int opt, int dir)
     case OPT_SOUND:   uvm2_setting_audio  = !uvm2_setting_audio;  return 1;
     case OPT_START:   uvm2_setting_menu   = !uvm2_setting_menu;   return 1;
     case OPT_REFRESH:
-        if (dir > 0) uvm2_setting_hz = uvm2_setting_hz == 50 ? 60 : uvm2_setting_hz == 60 ? 0 : 50;
-        else         uvm2_setting_hz = uvm2_setting_hz == 50 ? 0 : uvm2_setting_hz == 0 ? 60 : 50;
+        uvm2_setting_hz = refresh_step(dir);
         return 1;
     case OPT_BRIGHT: {
         int32_t v = uvm2_setting_bright + dir * BRIGHT_STEP;

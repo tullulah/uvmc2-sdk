@@ -71,7 +71,16 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(aspect_q8, 0), FIELD(win_x, 0), FIELD(win_y, 0),
     FIELD(bright_pct, UVM2_SETTING_BRIGHT),
 };
-volatile int32_t uvm2_setting_hz = 50, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
+/* THE REFRESH STARTS AT THE GAME'S OWN, UVM2_HZ: 50 for most, but an arcade machine can have
+ * its own (Armor Attack runs at 38 Hz, and at 50 it played 32% fast). 0 there means "flat
+ * out", which keeps 50 as the starting setting, as it always was. */
+#if defined(UVM2_HZ) && UVM2_HZ > 0
+#define UVM2_HZ_NATIVE UVM2_HZ
+#else
+#define UVM2_HZ_NATIVE 50
+#endif
+volatile int32_t uvm2_setting_hz = UVM2_HZ_NATIVE, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
+int uvm2_config_native_hz(void) { return UVM2_HZ_NATIVE; }
 volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
 /* the screen's shape: 1:1 and the 15500 square every vpy3d game was composed in */
 #define SCREEN_ASPECT_DEFAULT 256
@@ -181,7 +190,9 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
     NEG_RATE_Y = c->neg_rate_y;
     uvm2_drift_x = c->drift_x;
     uvm2_drift_y = c->drift_y;
-    uvm2_setting_hz   = (c->hz == 60) ? 60 : (c->hz == 0) ? 0 : 50;   /* 50, 60 or 0 = flat out (unlocked) */
+    /* 0 = flat out (unlocked); otherwise any rate a monitor of the time could have had. It
+     * was 50, 60 or 0 only, which could not hold a game's own 38. */
+    uvm2_setting_hz   = (c->hz == 0) ? 0 : (c->hz >= 20 && c->hz <= 100) ? c->hz : UVM2_HZ_NATIVE;
     uvm2_setting_menu = c->start_menu ? 1 : 0;
     uvm2_setting_rotate = c->rotate ? 1 : 0;
     uvm2_draw_rotate((int)uvm2_setting_rotate);

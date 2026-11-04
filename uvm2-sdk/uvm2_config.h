@@ -107,6 +107,9 @@ struct uvm2_config {
     int32_t bright_pct;
 };
 extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu, uvm2_setting_rotate;
+/* The refresh the game was built for (UVM2_HZ; 50 when that is 0 or unset): what
+ * uvm2_setting_hz starts at, and the OPTIONS screen's first REFRESH choice. */
+int uvm2_config_native_hz(void);
 /* The audio one is declared separately: `sdk_rp2350.c` does not define it, because the debug
  * board has no jack and the choice does not exist there. Whoever reads it fences itself off
  * with its own UVM2-only guard. */
