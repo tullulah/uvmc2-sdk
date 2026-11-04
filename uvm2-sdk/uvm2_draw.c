@@ -2346,6 +2346,76 @@ static int s_rotate;
 void uvm2_draw_rotate(int enable) { s_rotate = enable ? 1 : 0; }
 int  uvm2_draw_rotated(void)  { return s_rotate; }
 
+/* ── THE GAME'S PICTURE, FITTED (uvm2_view_field, see uvm2_draw.h) ──────────────────────── */
+
+/* THE TUBE WHEN THE CONSOLE NEVER SAID: what one console showed, measured by photograph
+ * (uvm2_config.h, over aspect_q8: "about +-18000 x +-20500"). Used only when win_x, win_y and
+ * aspect_q8 are all still at their stock values (15500, 15500, 256), which describe a safe
+ * square that every vpy3d game was composed in, not the tube. */
+#ifndef UVM2_VIEW_REF_WIN_X
+#define UVM2_VIEW_REF_WIN_X 18000
+#endif
+#ifndef UVM2_VIEW_REF_WIN_Y
+#define UVM2_VIEW_REF_WIN_Y 20500
+#endif
+#define VIEW_WIN_STOCK    15500
+#define VIEW_ASPECT_STOCK 256
+
+static struct {
+    int on, x0, x1, y0, y1, aw, ah;
+    int32_t key_rot, key_wx, key_wy, key_asp;     /* what the scales were computed for */
+    int32_t cx, cy;
+    int64_t sx_q16, sy_q16;
+} s_view = { .key_rot = -1 };
+
+void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah)
+{
+    if (x1 <= x0 || y1 <= y0) { s_view.on = 0; return; }
+    if (aw <= 0 || ah <= 0) { aw = x1 - x0; ah = y1 - y0; }   /* square units: its own shape */
+    s_view.x0 = x0; s_view.x1 = x1; s_view.y0 = y0; s_view.y1 = y1;
+    s_view.aw = aw; s_view.ah = ah;
+    s_view.key_rot = -1;
+    s_view.on = 1;
+}
+
+/* THE SCALES, for the orientation and calibration in force. Lengths are in y units; an x
+ * unit is k = aspect_q8/256 of them wide (vpy3d multiplies x by aspect_q8 to make a circle
+ * round, so a physical length L along x takes L*k x units). */
+static void view_setup(void)
+{
+    int32_t wx = uvm2_screen_win_x, wy = uvm2_screen_win_y, asp = uvm2_screen_aspect_q8;
+    s_view.key_rot = s_rotate; s_view.key_wx = wx; s_view.key_wy = wy; s_view.key_asp = asp;
+    if (wx == VIEW_WIN_STOCK && wy == VIEW_WIN_STOCK && asp == VIEW_ASPECT_STOCK) {
+        wx = UVM2_VIEW_REF_WIN_X; wy = UVM2_VIEW_REF_WIN_Y;
+    }
+    if (asp <= 0) asp = VIEW_ASPECT_STOCK;
+    /* The tube's width and height, physical, in y units x 256. */
+    const int64_t tw = (int64_t)2 * wx * 256 * 256 / asp, th = (int64_t)2 * wy * 256;
+    /* Upright the picture's width goes across (tw); turned, along (th). */
+    const int64_t along = s_rotate ? th : tw, across = s_rotate ? tw : th;
+    int64_t pw = across * s_view.aw / s_view.ah;        /* as wide as the other side allows */
+    if (pw > along) pw = along;                         /* or as the side itself allows */
+    const int64_t ph = pw * s_view.ah / s_view.aw;
+    /* Back to units: the game's x lies along the device's x upright and along its y turned
+     * (uvm2_draw.c's ROTATE swaps them after this). */
+    const int64_t span_x = s_rotate ? pw / 256 : pw * asp / (256 * 256);
+    const int64_t span_y = s_rotate ? ph * asp / (256 * 256) : ph / 256;
+    s_view.sx_q16 = (span_x << 16) / (s_view.x1 - s_view.x0);
+    s_view.sy_q16 = (span_y << 16) / (s_view.y1 - s_view.y0);
+    s_view.cx = (s_view.x0 + s_view.x1) / 2;
+    s_view.cy = (s_view.y0 + s_view.y1) / 2;
+}
+
+void uvm2_view_map(int32_t *x, int32_t *y)
+{
+    if (!s_view.on) return;
+    if (s_view.key_rot != s_rotate || s_view.key_wx != uvm2_screen_win_x ||
+        s_view.key_wy != uvm2_screen_win_y || s_view.key_asp != uvm2_screen_aspect_q8)
+        view_setup();
+    *x = (int32_t)(((int64_t)(*x - s_view.cx) * s_view.sx_q16) >> 16);
+    *y = (int32_t)(((int64_t)(*y - s_view.cy) * s_view.sy_q16) >> 16);
+}
+
 #define ROTATE(X, Y) do { if (s_rotate) { const int rotate_t_ = (X); (X) = (Y); (Y) = -rotate_t_; } } while (0)
 
 void uvm2_draw_move(int dx, int dy){ ROTATE(dx, dy); split(dx * UVM2_Q, dy * UVM2_Q, move_one); }

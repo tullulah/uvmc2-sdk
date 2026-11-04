@@ -183,6 +183,7 @@ void uvm2_draw_delta_q4(int dx_q4, int dy_q4);
 void uvm2_draw_delta_patterned(int dx, int dy, const unsigned char *gaps, int n);
 int uvm2_draw_sweep_sr(int dx, int dy, const unsigned char *pattern, int n, int step);
 void uvm2_draw_intensity(int z);
+void uvm2_view_map(int32_t *x, int32_t *y);   /* uvm2_draw.c: the game's picture fitted */
 /* uvm2_smp.c, inside the image on the .um2 (on the cartridge it is reached
  * through the BIOS table). */
 void uvm2_smp_play(const void *data, unsigned voice, int loop);
@@ -276,6 +277,8 @@ void v_directDraw32(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b)
 #endif
     }
 #else
+    /* The game's picture fitted to the tube, if it declared one (uvm2_view_field). */
+    uvm2_view_map(&x0, &y0); uvm2_view_map(&x1, &y1);
     uvm2_draw_intensity((int)b);
     uvm2_draw_move_abs_q4(VS_Q4(x0), VS_Q4(y0));
     uvm2_draw_delta_q4(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0));
@@ -308,6 +311,7 @@ void v_directGapped(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
     UVM2_API->draw_delta_patterned(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0),
                                    gaps, n);
 #else
+    uvm2_view_map(&x0, &y0); uvm2_view_map(&x1, &y1);
     uvm2_draw_intensity((int)b);
     uvm2_draw_move_abs_q4(VS_Q4(x0), VS_Q4(y0));
     uvm2_draw_delta_patterned(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0), gaps, n);
@@ -336,6 +340,7 @@ int v_directSweepSR(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
     return UVM2_API->draw_sweep_sr(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0),
                                      pattern, n, step);
 #else
+    uvm2_view_map(&x0, &y0); uvm2_view_map(&x1, &y1);
     uvm2_draw_intensity((int)b);
     uvm2_draw_move_abs_q4(VS_Q4(x0), VS_Q4(y0));
     return uvm2_draw_sweep_sr(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0), pattern, n, step);

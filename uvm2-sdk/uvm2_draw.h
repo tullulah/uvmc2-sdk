@@ -44,6 +44,25 @@ void uvm2_draw_intensity(int brightness);
 void uvm2_draw_rotate(int enable);
 int  uvm2_draw_rotated(void);
 
+/* ── THE GAME'S PICTURE, FITTED TO THE TUBE, IN EITHER ORIENTATION ───────────────────────
+ *
+ * A game declares the box it draws in (x0..x1, y0..y1, in the units v_directDraw32 takes)
+ * and the SHAPE that box had on its own monitor, aw:ah (4:3 for a landscape arcade cabinet;
+ * 0:0 = the box's own proportions, when its units were square). From then on everything
+ * v_directDraw32 draws is scaled and centred so that picture is as large as the tube shows
+ * WITHOUT CHANGING ITS SHAPE: upright, its width across the tube; with SCREEN HORIZONTAL
+ * (uvm2_draw_rotate, the console on its side), its width along the tube.
+ *
+ * "What the tube shows" is the console's calibration (uvm2_config.h: win_x, win_y, aspect_q8,
+ * the calibration screen's WIN X / WIN Y / ASPECT). A console that never set them keeps the
+ * stock 15500 square, which is a safe area and not the tube: that one gets
+ * UVM2_VIEW_REF_WIN_X/Y instead, the tube measured on a console by photograph.
+ *
+ * Without a call nothing changes. UVMC2 only (the calibration lives there). */
+#define UVM2_HAS_VIEW_FIT 1     /* from v1.4.11: a game can test for it */
+void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah);
+void uvm2_view_map(int32_t *x, int32_t *y);
+
 /* SYS_MOVE / SYS_DRAW_DELTA — relative, blanked and lit respectively. */
 void uvm2_draw_move(int dx, int dy);
 void uvm2_draw_delta(int dx, int dy);

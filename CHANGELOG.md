@@ -3,7 +3,7 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
-## v1.4.11 — the buttons can be remapped, and the map is saved
+## v1.4.11 — the buttons can be remapped and saved; the picture fits the tube upright and turned
 
 * New: the OPTIONS screen has a CONTROLS line. It lists the game's four buttons by name and
   the console button that does each; pick a line with the stick and press the button you want
@@ -18,6 +18,13 @@ entry says what changes for a game built with that version.
   so combinations a game reads (button 2 + 3) follow it, and the SDK's own screens (OPTIONS,
   calibration, the HUD combo) keep the console's buttons as wired. UVMC2 only: on the debug
   cartridge the BIOS answers the buttons and does not know the map.
+* New: `uvm2_view_field(x0, x1, y0, y1, aw, ah)`. A game declares the box it draws in (the
+  units `v_directDraw32` takes) and the shape that box had on its own monitor (4:3; 0:0 for
+  the box's own); from then on its picture is scaled and centred to be as large as the tube
+  shows without changing shape: upright with its width across the tube, with SCREEN
+  HORIZONTAL with its width along it. The tube is the console's calibration (WIN X, WIN Y,
+  ASPECT); a console still on the stock 15500 square gets the photographed one, +-18000 x
+  +-20500 (`UVM2_VIEW_REF_WIN_X/Y`). `UVM2_HAS_VIEW_FIT` says the SDK has it. UVMC2 only.
 
 ## v1.4.10 — the Vectrex Studio intro card
 
