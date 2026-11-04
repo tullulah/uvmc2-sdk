@@ -3,6 +3,28 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.8 — a standard OPTIONS screen, a brightness that reaches every vector, straighter first strokes
+
+* New, opt-in: the SDK's OPTIONS screen (`uvm2_options.c`). A game declares
+  `UVM2_SETTING_OPTIONS` in `uvm2_config_game()` (from `uvm2_game_settings`, so it is loaded
+  before the game) and the runtime shows it before the game's `main`: PLAY, SCREEN
+  VERTICAL/HORIZONTAL (if the game also declares `UVM2_SETTING_ROTATE`), SOUND JACK/VECTREX (if
+  it declares `UVM2_SETTING_AUDIO`), REFRESH 50/60/MAX, BRIGHTNESS, CALIBRATE and START IN
+  MENU/IN GAME. With START IN GAME it stays closed unless button 4 is held for a second at
+  launch. Changes are saved to `config/<NAME>.CFG` as they are made; a failed save is shown.
+  `uvm2_config_title()` sets the name it shows. SCREEN names how the console stands:
+  HORIZONTAL is the console on its side, the drawing turned 90 degrees.
+* New setting `UVM2_SETTING_BRIGHT` (`bright_pct`, percent, default 100): a gain applied in
+  `uvm2_draw_intensity` to every intensity a game asks for. The calibration's BRIGHT is only the
+  last intensity set, which a game that sets its own per vector overrides at once.
+  `uvm2_draw_intensity_current()` still returns what the game asked for.
+* `uvm2_setting_rotate` is declared in `uvm2_config.h`. The REFRESH setting is applied by the
+  OPTIONS screen on its way out; games that do not use the screen apply it as before (or not).
+* A jump's own rounding no longer bends the first stroke after it: the soft start subtracts
+  what its priming unit really travels, and the debt a jump leaves is parked until the next jump
+  instead of being paid by the first lit strokes of the object it lands on. Measured on
+  kuroishi's S: deformation 290 -> 4. `JUMP_DEBT_PARKS` (default 1) turns it off.
+
 ## v1.4.7 — the reset's second of waiting shows RESETTING
 
 * After one press of the console's reset the SDK waits up to `UVM2_RESET_DOUBLE_US` (1 s) for a
