@@ -153,6 +153,9 @@ extern volatile int32_t uvm2_setting_bright;
  *
  * uvm2_config_buttons() NAMES the game's four for the CONTROLS screen ("FIRE", "TURRET L",
  * ...). Optional: without it they read BUTTON 1..4. Call it from uvm2_game_settings. */
+/* Defined from v1.4.11 on, so a game can name its buttons and still build against an older
+ * SDK: `#ifdef UVM2_HAS_BUTTON_MAP uvm2_config_buttons(...); #endif`. */
+#define UVM2_HAS_BUTTON_MAP 1
 extern volatile int32_t uvm2_setting_buttons;
 int     uvm2_buttons_set(int32_t map);
 uint8_t uvm2_buttons_remap(uint8_t pressed);
