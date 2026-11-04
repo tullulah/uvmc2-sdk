@@ -3,6 +3,15 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.9 — the refresh starts at the game's own rate
+
+* `uvm2_setting_hz` starts at the game's `UVM2_HZ` (50 when that is 0 or unset, as before)
+  and holds 0 (flat out) or any rate from 20 to 100; it held only 50, 60 or 0, so a game whose
+  arcade ran at another rate could not keep it once the OPTIONS screen applied the setting
+  (Armor Attack, 38 Hz, played 32% fast). The OPTIONS screen's REFRESH line offers the game's
+  own rate first, then 50, 60 and MAX ("REFRESH 38 HZ"). `uvm2_config_native_hz()` says which
+  it is. Games built at 50 behave exactly as before.
+
 ## v1.4.8 — a standard OPTIONS screen, a brightness that reaches every vector, straighter first strokes
 
 * New, opt-in: the SDK's OPTIONS screen (`uvm2_options.c`). A game declares
