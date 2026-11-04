@@ -105,6 +105,12 @@ struct uvm2_config {
      * last intensity set, which a game that sets its own per vector overrides at once.
      * Appended like the others: a file without it keeps 100. */
     int32_t bright_pct;
+    /* THE BUTTON MAP, per game: which PHYSICAL button each of the game's four does, written
+     * as four digits so the file reads as what it is -- 1234 is as the console wires them,
+     * 2134 swaps 1 and 2 (the game's button 1 is pressed with button 2). Applied where the
+     * game reads its buttons (uvm2_svc.c), so the SDK's own screens keep the physical ones.
+     * Appended like the others: 0, from a file without it, is 1234. UVMC2 only. */
+    int32_t buttons;
 };
 extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu, uvm2_setting_rotate;
 /* The refresh the game was built for (UVM2_HZ; 50 when that is 0 or unset): what
@@ -131,9 +137,27 @@ enum {
      * brings MENU, HZ and BRIGHT with it -- they are what the screen is made of -- and shows
      * ROTATE and AUDIO only if the game declares them too. */
     UVM2_SETTING_OPTIONS = 32u,
+    /* The button map (uvm2_setting_buttons), and the OPTIONS screen's CONTROLS line that
+     * edits it. Declared by OPTIONS. */
+    UVM2_SETTING_BUTTONS = 64u,
 };
 /* Brightness gain in percent, 100 = exactly what the game asks for. */
 extern volatile int32_t uvm2_setting_bright;
+
+/* ── THE BUTTON MAP ─────────────────────────────────────────────────────────────────────
+ *
+ * uvm2_setting_buttons is the four digits (1234 = as wired). uvm2_buttons_set() takes a new
+ * map and returns 0, changing nothing, if it is not the four buttons each once.
+ * uvm2_buttons_remap() turns what the console reads (1 = pressed, controller 1 in bits 0-3)
+ * into what the game should see; controller 2's bits pass through.
+ *
+ * uvm2_config_buttons() NAMES the game's four for the CONTROLS screen ("FIRE", "TURRET L",
+ * ...). Optional: without it they read BUTTON 1..4. Call it from uvm2_game_settings. */
+extern volatile int32_t uvm2_setting_buttons;
+int     uvm2_buttons_set(int32_t map);
+uint8_t uvm2_buttons_remap(uint8_t pressed);
+void    uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4);
+const char *uvm2_config_button_name(int i);   /* i = 0..3 */
 
 /** Declares the game's name (8.3, no extension: "MHAVOC") and which of its own settings it
  *  uses. Call it BEFORE uvm2_config_load. Its settings go in `config/<NAME>.CFG`, layered on

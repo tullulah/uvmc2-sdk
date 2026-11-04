@@ -70,6 +70,7 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(audio, UVM2_SETTING_AUDIO),
     FIELD(aspect_q8, 0), FIELD(win_x, 0), FIELD(win_y, 0),
     FIELD(bright_pct, UVM2_SETTING_BRIGHT),
+    FIELD(buttons, UVM2_SETTING_BUTTONS),
 };
 /* THE REFRESH STARTS AT THE GAME'S OWN, UVM2_HZ: 50 for most, but an arcade machine can have
  * its own (Armor Attack runs at 38 Hz, and at 50 it played 32% fast). 0 there means "flat
@@ -89,6 +90,51 @@ volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it alr
 #define SCREEN_WIN_DEFAULT    15500
 volatile int32_t uvm2_screen_aspect_q8 = SCREEN_ASPECT_DEFAULT;
 volatile int32_t uvm2_screen_win_x = SCREEN_WIN_DEFAULT, uvm2_screen_win_y = SCREEN_WIN_DEFAULT;
+
+/* ── THE BUTTON MAP (see uvm2_config.h) ──────────────────────────────────────────────── */
+volatile int32_t uvm2_setting_buttons = 1234;
+static uint8_t   s_btn_phys[4] = { 0, 1, 2, 3 };   /* the game's button i is physical bit [i] */
+static uint8_t   s_btn_identity = 1;
+static const char *s_btn_name[4];
+
+int uvm2_buttons_set(int32_t map)
+{
+    uint8_t phys[4], seen = 0;
+    int32_t v = map;
+    for (int i = 3; i >= 0; i--) {                    /* the last digit is the game's button 4 */
+        const int d = (int)(v % 10);
+        v /= 10;
+        if (d < 1 || d > 4 || (seen & (1u << (d - 1)))) return 0;
+        seen |= (uint8_t)(1u << (d - 1));
+        phys[i] = (uint8_t)(d - 1);
+    }
+    if (v != 0) return 0;                             /* more than four digits */
+    for (int i = 0; i < 4; i++) s_btn_phys[i] = phys[i];
+    s_btn_identity = map == 1234;
+    uvm2_setting_buttons = map;
+    return 1;
+}
+
+uint8_t uvm2_buttons_remap(uint8_t pressed)
+{
+    if (s_btn_identity) return pressed;
+    uint8_t out = (uint8_t)(pressed & 0xF0u);         /* controller 2 as it is */
+    for (int i = 0; i < 4; i++)
+        if (pressed & (1u << s_btn_phys[i])) out |= (uint8_t)(1u << i);
+    return out;
+}
+
+void uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4)
+{
+    s_btn_name[0] = b1; s_btn_name[1] = b2; s_btn_name[2] = b3; s_btn_name[3] = b4;
+}
+
+const char *uvm2_config_button_name(int i)
+{
+    static const char *const plain[4] = { "BUTTON 1", "BUTTON 2", "BUTTON 3", "BUTTON 4" };
+    if (i < 0 || i > 3) return "";
+    return s_btn_name[i] ? s_btn_name[i] : plain[i];
+}
 
 /* The default is to have no settings of one's own, which is what 43 of the 44 ports want.
  * See the note on uvm2_game_settings in the header for why the hook exists at all. */
@@ -120,7 +166,8 @@ void uvm2_config_game(const char *name, unsigned settings)
     const char *d = "config/";
     /* The OPTIONS screen is made of these three; declaring it declares them. */
     if (settings & UVM2_SETTING_OPTIONS)
-        settings |= UVM2_SETTING_MENU | UVM2_SETTING_HZ | UVM2_SETTING_BRIGHT;
+        settings |= UVM2_SETTING_MENU | UVM2_SETTING_HZ | UVM2_SETTING_BRIGHT
+                  | UVM2_SETTING_BUTTONS;
     s_game_settings = settings;
     if (!name || !*name) { s_game_path[0] = 0; return; }
     while (*d) s_game_path[p++] = *d++;
@@ -171,6 +218,7 @@ UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
     c->win_x      = uvm2_screen_win_x;
     c->win_y      = uvm2_screen_win_y;
     c->bright_pct = uvm2_setting_bright;
+    c->buttons    = uvm2_setting_buttons;
 }
 
 UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
@@ -205,6 +253,8 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
     if (c->win_y > 0)     uvm2_screen_win_y = c->win_y;
     if (c->bright_pct >= UVM2_BRIGHT_MIN && c->bright_pct <= UVM2_BRIGHT_MAX)
         uvm2_setting_bright = c->bright_pct;
+    /* 0 is "an old file": the map stays as wired. Anything that is not a map is refused. */
+    if (c->buttons) uvm2_buttons_set(c->buttons);
 }
 
 /* ── THE TEXT FILE ON THE SD ────────────────────────────────────────────────────────

@@ -3,6 +3,22 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.11 — the buttons can be remapped, and the map is saved
+
+* New: the OPTIONS screen has a CONTROLS line. It lists the game's four buttons by name and
+  the console button that does each; pick a line with the stick and press the button you want
+  for it (the line that had that button takes this one's, so the four stay four). DEFAULTS
+  puts them back as wired. Saved per game in `config/<NAME>.CFG` as `buttons`, four digits:
+  `1234` is as wired, `2134` swaps 1 and 2. Every game with `UVM2_SETTING_OPTIONS` has it
+  (`UVM2_SETTING_BUTTONS`).
+* `uvm2_config_buttons("FIRE", "THRUST", ...)` names a game's four buttons for that screen;
+  without it they read BUTTON 1..4. `uvm2_buttons_set()` / `uvm2_buttons_remap()` for a game
+  that wants to do it itself.
+* The map is applied where a game reads its buttons (`SYS_READ_BUTTONS`, `SYS_READ_BTN_RAW`),
+  so combinations a game reads (button 2 + 3) follow it, and the SDK's own screens (OPTIONS,
+  calibration, the HUD combo) keep the console's buttons as wired. UVMC2 only: on the debug
+  cartridge the BIOS answers the buttons and does not know the map.
+
 ## v1.4.10 — the Vectrex Studio intro card
 
 * New: a game with the OPTIONS screen (`UVM2_SETTING_OPTIONS`) shows the Vectrex Studio card

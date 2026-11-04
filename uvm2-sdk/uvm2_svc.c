@@ -486,12 +486,15 @@ void uvm2_svc_dispatch(uint32_t *frame)
      *       Port B position) and J2 at bits 0-3.
      * Returning one where the other is expected leaves every button reading as
      * held down, which is exactly how this went wrong the first time. */
+    /* THE GAME SEES ITS OWN BUTTONS, the map in its config applied (uvm2_buttons_remap):
+     * here and only here, so the SDK's screens, which read uvm2_cached_buttons, keep the
+     * console's own. */
     case SYS_READ_BUTTONS:
-        frame[0] = (uint32_t)(uint8_t)~UVM2_BUTTONS;
+        frame[0] = (uint32_t)uvm2_buttons_remap((uint8_t)~UVM2_BUTTONS);
         break;
 
     case SYS_READ_BTN_RAW: {
-        uint8_t  b  = UVM2_BUTTONS;
+        uint8_t  b  = (uint8_t)~uvm2_buttons_remap((uint8_t)~UVM2_BUTTONS);
         uint32_t j1 = (uint32_t)(((b & 0x0Fu) << 4) | 0x0Fu);
         uint32_t j2 = (uint32_t)(((b >> 4) & 0x0Fu) | 0xF0u);
         frame[0] = (j1 << 8) | j2;

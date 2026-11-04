@@ -24,6 +24,8 @@
  *     SOUND JACK / VECTREX             UVM2_SETTING_AUDIO  (games with sound on the jack)
  *     REFRESH <game's> / 50 / 60 / MAX always (the game's own rate first: UVM2_HZ)
  *     BRIGHTNESS 100                   always, percent (a gain on every intensity, uvm2_draw.c)
+ *     CONTROLS                         always: which console button does each of the game's
+ *                                      four (controls_menu, saved as `buttons`)
  *     CALIBRATE                        always (the SDK's calibration screen)
  *     START IN MENU / START IN GAME    always
  *
@@ -60,7 +62,41 @@ extern volatile uint32_t uvm2_cached_axes;
 #define BRIGHT_LO   50
 #define BRIGHT_HI  200
 
-enum { OPT_PLAY, OPT_SCREEN, OPT_SOUND, OPT_REFRESH, OPT_BRIGHT, OPT_CALIBRATE, OPT_START };
+enum { OPT_PLAY, OPT_SCREEN, OPT_SOUND, OPT_REFRESH, OPT_BRIGHT, OPT_CONTROLS, OPT_CALIBRATE,
+       OPT_START };
+
+/* ── THE STICK, AS A MENU READS IT ──────────────────────────────────────────────────────
+ *
+ * Its rest is MEASURED over the first eight frames, as the calibration screen does
+ * (uvm2_wizard.c): this console's Y does not rest at zero, and assuming it did left the menu
+ * unable to re-arm after one step. And one step per push: the stick has to come back to the
+ * centre, and stay there three frames, before it moves anything again. */
+struct nav { int cx, cy, acc_x, acc_y, acc_n, armed_x, armed_y, calm; };
+
+/* One frame of it: 0 while it is still measuring the rest, else 1 with the steps taken. */
+static int nav_read(struct nav *v, int *step_x, int *step_y)
+{
+    const uint32_t axes = uvm2_cached_axes;
+    int jx = (int8_t)(axes >> 24), jy = (int8_t)(axes >> 16);
+    *step_x = *step_y = 0;
+    if (v->acc_n < 8) {
+        v->acc_x += jx; v->acc_y += jy;
+        if (++v->acc_n == 8) {
+            v->cx = v->acc_x / 8; v->cy = v->acc_y / 8;
+            if (v->cx > 40) v->cx = 40;  if (v->cx < -40) v->cx = -40;
+            if (v->cy > 40) v->cy = 40;  if (v->cy < -40) v->cy = -40;
+        }
+        return 0;
+    }
+    jx -= v->cx; jy -= v->cy;
+    if (jx > -35 && jx < 35 && jy > -35 && jy < 35) {
+        if (v->calm < 3) v->calm++;
+        if (v->calm >= 3) v->armed_x = v->armed_y = 1;
+    } else v->calm = 0;
+    if (v->armed_y && (jy >= 60 || jy <= -60)) { v->armed_y = 0; *step_y = jy >= 60 ? -1 : +1; }
+    if (v->armed_x && (jx >= 60 || jx <= -60)) { v->armed_x = 0; *step_x = jx >= 60 ? +1 : -1; }
+    return 1;
+}
 
 static void text_centred(int y, const char *s)
 {
@@ -127,6 +163,7 @@ static const char *label(int opt)
     case OPT_SOUND:     return uvm2_setting_audio ? "SOUND VECTREX" : "SOUND JACK";
     case OPT_REFRESH:   return refresh_label();
     case OPT_BRIGHT:    return bright_label();
+    case OPT_CONTROLS:  return "CONTROLS";
     case OPT_CALIBRATE: return "CALIBRATE";
     default:            return uvm2_setting_menu ? "START IN MENU" : "START IN GAME";
     }
@@ -154,15 +191,85 @@ static int change(int opt, int dir)
     }
 }
 
+/* ── CONTROLS: THE GAME'S FOUR BUTTONS, AND WHICH ONE OF THE CONSOLE'S DOES EACH ──────────
+ *
+ *     FIRE         BUTTON 2
+ *     TURRET L     BUTTON 1      the game's names (uvm2_config_buttons), then the
+ *     ...                        physical button that does it
+ *     DEFAULTS
+ *     BACK
+ *
+ * Stick up/down picks a line; PRESSING A BUTTON on a game line gives that button to it, and
+ * the line that had it gets this line's old one -- a swap, so the four stay four. Any button
+ * on DEFAULTS puts them back as wired, on BACK leaves. Every button does the same thing here
+ * because every button is what is being assigned. Returns 1 if the map changed. */
+#define C_NAME  (-110)     /* the game's name for the button */
+#define C_PHYS    30       /* "BUTTON n" */
+static int controls_menu(struct nav *nv)
+{
+    const int n = 6;                                  /* 4 buttons, DEFAULTS, BACK */
+    const int start = uvm2_setting_buttons;
+    int sel = 0;
+    uint8_t before = 0xFF;                            /* the press that opened this */
+    char phys[4][9];
+    for (;;) {
+        int32_t m = uvm2_setting_buttons;
+        for (int i = 3; i >= 0; i--) {
+            const char *t = "BUTTON ";
+            int p = 0;
+            while (*t) phys[i][p++] = *t++;
+            phys[i][p++] = (char)('0' + m % 10);
+            phys[i][p] = 0;
+            m /= 10;
+        }
+        uvm2_draw_rotate((int)uvm2_setting_rotate);
+        uvm2_frame_begin();
+        uvm2_draw_intensity(INK);
+        text_centred(TOP + 40, "CONTROLS");
+        for (int i = 0; i < n; i++) {
+            const int y = TOP - i * ROW;
+            if (i == sel) uvm2_print_text(C_NAME - 16, y, ">", TEXT, INK);
+            if (i < 4) {
+                uvm2_print_text(C_NAME, y, uvm2_config_button_name(i), TEXT, INK);
+                uvm2_print_text(C_PHYS, y, phys[i], TEXT, INK);
+            } else uvm2_print_text(C_NAME, y, i == 4 ? "DEFAULTS" : "BACK", TEXT, INK);
+        }
+        text_centred(TOP - n * ROW - 14, sel < 4 ? "PRESS ITS BUTTON" : "ANY BUTTON");
+        uvm2_frame_end();
+
+        const uint8_t b = (uint8_t)(~uvm2_cached_buttons & 0x0F);
+        const uint8_t pressed = (uint8_t)(b & ~before);
+        before = b;
+        int sx, sy;
+        if (!nav_read(nv, &sx, &sy)) continue;
+        if (sy) sel = (sel + n + sy) % n;
+        if (!pressed) continue;
+        if (sel == 5) break;
+        if (sel == 4) { uvm2_buttons_set(1234); continue; }
+        /* The lowest button pressed is the one given; whoever had it takes this line's. */
+        int phys_b = 0;
+        while (!(pressed & (1u << phys_b))) phys_b++;
+        int digits[4];
+        int32_t m2 = uvm2_setting_buttons;
+        for (int i = 3; i >= 0; i--) { digits[i] = (int)(m2 % 10); m2 /= 10; }
+        for (int i = 0; i < 4; i++)
+            if (digits[i] == phys_b + 1) digits[i] = digits[sel];
+        digits[sel] = phys_b + 1;
+        uvm2_buttons_set(digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3]);
+    }
+    return uvm2_setting_buttons != start;
+}
+
 int uvm2_options_menu(void)
 {
     const unsigned mine = uvm2_config_game_settings();
-    int opts[8], n = 0;
+    int opts[10], n = 0;
     opts[n++] = OPT_PLAY;
     if (mine & UVM2_SETTING_ROTATE) opts[n++] = OPT_SCREEN;
     if (mine & UVM2_SETTING_AUDIO)  opts[n++] = OPT_SOUND;
     opts[n++] = OPT_REFRESH;
     opts[n++] = OPT_BRIGHT;
+    if (mine & UVM2_SETTING_BUTTONS) opts[n++] = OPT_CONTROLS;
     opts[n++] = OPT_CALIBRATE;
     opts[n++] = OPT_START;
 
@@ -176,11 +283,7 @@ int uvm2_options_menu(void)
     uvm2_set_refresh(0u);
 
     int sel = 0, dirty = 0, save_failed = 0;
-    /* The stick's rest is MEASURED over the first eight frames, as the calibration screen
-     * does (uvm2_wizard.c): this console's Y does not rest at zero, and assuming it did left
-     * the menu unable to re-arm after one step. */
-    int cx = 0, cy = 0, acc_x = 0, acc_y = 0, acc_n = 0;
-    int armed_y = 0, armed_x = 0, calm = 0;
+    struct nav nv = { 0 };
     /* EDGES START AS "PRESSED": a button already down when the screen appears -- button 4
      * from the launch -- has to be released before it counts. */
     uint8_t before = 0xFF;
@@ -202,28 +305,8 @@ int uvm2_options_menu(void)
         const uint8_t b = (uint8_t)~uvm2_cached_buttons;      /* 1 = pressed */
         const uint8_t pressed = (uint8_t)(b & ~before);
         before = b;
-        const uint32_t axes = uvm2_cached_axes;
-        int jx = (int8_t)(axes >> 24), jy = (int8_t)(axes >> 16);
-        if (acc_n < 8) {
-            acc_x += jx; acc_y += jy;
-            if (++acc_n == 8) {
-                cx = acc_x / 8; cy = acc_y / 8;
-                if (cx > 40) cx = 40;  if (cx < -40) cx = -40;
-                if (cy > 40) cy = 40;  if (cy < -40) cy = -40;
-            }
-            continue;
-        }
-        jx -= cx; jy -= cy;
-
-        /* One step per push: the stick has to come back to the centre, and stay there three
-         * frames, before it moves anything again. */
-        if (jx > -35 && jx < 35 && jy > -35 && jy < 35) {
-            if (calm < 3) calm++;
-            if (calm >= 3) armed_x = armed_y = 1;
-        } else calm = 0;
-        int step_y = 0, step_x = 0;
-        if (armed_y && (jy >= 60 || jy <= -60)) { armed_y = 0; step_y = jy >= 60 ? -1 : +1; }
-        if (armed_x && (jx >= 60 || jx <= -60)) { armed_x = 0; step_x = jx >= 60 ? +1 : -1; }
+        int step_x, step_y;
+        if (!nav_read(&nv, &step_x, &step_y)) continue;
         if (step_y) sel = (sel + n + step_y) % n;
 
         const int opt = opts[sel];
@@ -231,6 +314,10 @@ int uvm2_options_menu(void)
         if (step_x && change(opt, step_x)) dirty = 1;
         if (pressed & 0x01) {
             if (opt == OPT_PLAY) go = 1;
+            else if (opt == OPT_CONTROLS) {
+                if (controls_menu(&nv)) dirty = 1;
+                before = 0xFF;
+            }
             else if (opt == OPT_CALIBRATE) {
                 uvm2_config_wizard();             /* saves on its own */
                 uvm2_set_refresh(0u);
