@@ -520,12 +520,75 @@ void v_playSFX(const unsigned char *vsfx)   { sys_play_sfx(vsfx); }
 
 #include <stddef.h>
 #ifndef UVM2_PICO_RUNTIME
-void *memset(void *d, int c, size_t n)  { unsigned char *p = d; while (n--) *p++ = (unsigned char)c; return d; }
-void *memcpy(void *d, const void *s, size_t n) { unsigned char *pd = d; const unsigned char *ps = s; while (n--) *pd++ = *ps++; return d; }
-void *memmove(void *d, const void *s, size_t n) {
-    unsigned char *pd = d; const unsigned char *ps = s;
-    if (pd < ps) { while (n--) *pd++ = *ps++; }
-    else { pd += n; ps += n; while (n--) *--pd = *--ps; }
+/* A WORD AT A TIME where the pointers allow it. A byte a loop, these were 4.3% (memset) of
+ * Metal Gear Solid's frame on the debug cart, clearing its 150 KB depth buffer, and its
+ * texture scrolls copied through them (2026-10-31, sampled PC). Copies are forward words when
+ * both ends share their alignment mod 4, halfwords mod 2, bytes otherwise; a word read before
+ * its write keeps the forward copy right for memmove when d < s, and backward when d > s.
+ * (The loops must not become calls to themselves: -fno-tree-loop-distribute-patterns, and
+ * the attribute for builds that forget it.) */
+#if defined(__GNUC__) && !defined(__clang__)
+#define MEM_NO_LDP __attribute__((optimize("no-tree-loop-distribute-patterns")))
+#else
+#define MEM_NO_LDP
+#endif
+MEM_NO_LDP void *memset(void *d, int c, size_t n)
+{
+    unsigned char *p = d;
+    const uint32_t w = (uint32_t)(unsigned char)c * 0x01010101u;
+    while (n && ((uintptr_t)p & 3)) { *p++ = (unsigned char)c; n--; }
+    uint32_t *q = (uint32_t *)p;
+    for (; n >= 16; n -= 16) { q[0] = w; q[1] = w; q[2] = w; q[3] = w; q += 4; }
+    for (; n >= 4; n -= 4) *q++ = w;
+    p = (unsigned char *)q;
+    while (n--) *p++ = (unsigned char)c;
+    return d;
+}
+MEM_NO_LDP static void mem_fwd(unsigned char *pd, const unsigned char *ps, size_t n)
+{
+    if ((((uintptr_t)pd ^ (uintptr_t)ps) & 3) == 0) {
+        while (n && ((uintptr_t)pd & 3)) { *pd++ = *ps++; n--; }
+        uint32_t *qd = (uint32_t *)pd;
+        const uint32_t *qs = (const uint32_t *)ps;
+        for (; n >= 16; n -= 16) {
+            const uint32_t a = qs[0], b = qs[1], c = qs[2], e = qs[3];
+            qd[0] = a; qd[1] = b; qd[2] = c; qd[3] = e;
+            qd += 4; qs += 4;
+        }
+        for (; n >= 4; n -= 4) *qd++ = *qs++;
+        pd = (unsigned char *)qd; ps = (const unsigned char *)qs;
+    } else if ((((uintptr_t)pd ^ (uintptr_t)ps) & 1) == 0) {
+        if (n && ((uintptr_t)pd & 1)) { *pd++ = *ps++; n--; }
+        uint16_t *hd = (uint16_t *)pd;
+        const uint16_t *hs = (const uint16_t *)ps;
+        for (; n >= 2; n -= 2) *hd++ = *hs++;
+        pd = (unsigned char *)hd; ps = (const unsigned char *)hs;
+    }
+    while (n--) *pd++ = *ps++;
+}
+MEM_NO_LDP static void mem_back(unsigned char *pd, const unsigned char *ps, size_t n)
+{
+    pd += n; ps += n;
+    if ((((uintptr_t)pd ^ (uintptr_t)ps) & 3) == 0) {
+        while (n && ((uintptr_t)pd & 3)) { *--pd = *--ps; n--; }
+        uint32_t *qd = (uint32_t *)pd;
+        const uint32_t *qs = (const uint32_t *)ps;
+        for (; n >= 4; n -= 4) *--qd = *--qs;
+        pd = (unsigned char *)qd; ps = (const unsigned char *)qs;
+    } else if ((((uintptr_t)pd ^ (uintptr_t)ps) & 1) == 0) {
+        if (n && ((uintptr_t)pd & 1)) { *--pd = *--ps; n--; }
+        uint16_t *hd = (uint16_t *)pd;
+        const uint16_t *hs = (const uint16_t *)ps;
+        for (; n >= 2; n -= 2) *--hd = *--hs;
+        pd = (unsigned char *)hd; ps = (const unsigned char *)hs;
+    }
+    while (n--) *--pd = *--ps;
+}
+void *memcpy(void *d, const void *s, size_t n) { mem_fwd(d, s, n); return d; }
+void *memmove(void *d, const void *s, size_t n)
+{
+    if ((unsigned char *)d < (const unsigned char *)s) mem_fwd(d, s, n);
+    else if ((unsigned char *)d > (const unsigned char *)s) mem_back(d, s, n);
     return d;
 }
 #endif
