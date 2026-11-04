@@ -24,6 +24,9 @@ entry says what changes for a game built with that version.
   what its priming unit really travels, and the debt a jump leaves is parked until the next jump
   instead of being paid by the first lit strokes of the object it lands on. Measured on
   kuroishi's S: deformation 290 -> 4. `JUMP_DEBT_PARKS` (default 1) turns it off.
+* Debug cartridge: `memset`, `memcpy` and `memmove` (`sdk_rp2350.c`) work a word at a time
+  where the pointers allow it, instead of a byte at a time; they were 4.3% of a heavy game's
+  frame clearing a large buffer. UVMC2 images are unchanged (they link the pico-sdk's).
 
 ## v1.4.7 — the reset's second of waiting shows RESETTING
 
