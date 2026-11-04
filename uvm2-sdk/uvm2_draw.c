@@ -1064,16 +1064,28 @@ void uvm2_draw_reset(void)
  * SET_INTENSITY is travelled with an unknown Z. The right order closes that gap: set Z, and
  * THEN release the clamp. */
 static int s_z_last = UVM2_Z_PRIME;   /* otherwise frame_begin undoes the Z priming */
+static int s_z_req  = UVM2_Z_PRIME;   /* the same before the brightness gain */
 
 /** The brightness last asked for. `uvm2_config_current` needs it, since it has to be able
  *  to READ the knobs and not only write them. */
-int uvm2_draw_intensity_current(void) { return s_z_last; }
+int uvm2_draw_intensity_current(void) { return s_z_req; }
+
+/* THE BRIGHTNESS GAIN (UVM2_SETTING_BRIGHT), in percent. Applied HERE because every
+ * intensity a game asks for comes through this one function, so one multiply reaches every
+ * game, whatever it draws with. Defined here and not in uvm2_config.c so that a build which
+ * has the drawing and not the settings still links. */
+volatile int32_t uvm2_setting_bright = 100;
 
 void uvm2_draw_intensity(int brightness)
 {
     if (brightness < 0)   brightness = 0;
     if (brightness > 127) brightness = 127;
-    s_z_last = brightness;
+    s_z_req = brightness;                 /* what the game asked for: what config reads */
+    if (uvm2_setting_bright != 100) {
+        brightness = (brightness * (int)uvm2_setting_bright + 50) / 100;
+        if (brightness > 127) brightness = 127;
+    }
+    s_z_last = brightness;                /* what the beam gets, and what re-primes Z */
     set_z(brightness, UVM2_HOLD_DELAY);
 }
 

@@ -69,11 +69,14 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(hz, UVM2_SETTING_HZ), FIELD(start_menu, UVM2_SETTING_MENU), FIELD(rotate, UVM2_SETTING_ROTATE),
     FIELD(audio, UVM2_SETTING_AUDIO),
     FIELD(aspect_q8, 0), FIELD(win_x, 0), FIELD(win_y, 0),
+    FIELD(bright_pct, UVM2_SETTING_BRIGHT),
 };
 volatile int32_t uvm2_setting_hz = 50, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
 volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
 /* the screen's shape: 1:1 and the 15500 square every vpy3d game was composed in */
 #define SCREEN_ASPECT_DEFAULT 256
+#define UVM2_BRIGHT_MIN 20
+#define UVM2_BRIGHT_MAX 300
 #define SCREEN_WIN_DEFAULT    15500
 volatile int32_t uvm2_screen_aspect_q8 = SCREEN_ASPECT_DEFAULT;
 volatile int32_t uvm2_screen_win_x = SCREEN_WIN_DEFAULT, uvm2_screen_win_y = SCREEN_WIN_DEFAULT;
@@ -89,10 +92,26 @@ static unsigned s_game_settings;
 
 unsigned uvm2_config_game_settings(void) { return s_game_settings; }
 
+static const char *s_game_title;
+void uvm2_config_title(const char *title) { s_game_title = title; }
+const char *uvm2_config_title_get(void)
+{
+    /* Without a title, the config name: "config/ALPHAONE.CFG" -> "ALPHAONE". */
+    static char from_path[16];
+    int p = 0, k = 7;                                   /* past "config/" */
+    if (s_game_title) return s_game_title;
+    while (s_game_path[k] && s_game_path[k] != '.' && p < 15) from_path[p++] = s_game_path[k++];
+    from_path[p] = 0;
+    return from_path;
+}
+
 void uvm2_config_game(const char *name, unsigned settings)
 {
     int p = 0;
     const char *d = "config/";
+    /* The OPTIONS screen is made of these three; declaring it declares them. */
+    if (settings & UVM2_SETTING_OPTIONS)
+        settings |= UVM2_SETTING_MENU | UVM2_SETTING_HZ | UVM2_SETTING_BRIGHT;
     s_game_settings = settings;
     if (!name || !*name) { s_game_path[0] = 0; return; }
     while (*d) s_game_path[p++] = *d++;
@@ -142,6 +161,7 @@ UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
     c->aspect_q8  = uvm2_screen_aspect_q8;
     c->win_x      = uvm2_screen_win_x;
     c->win_y      = uvm2_screen_win_y;
+    c->bright_pct = uvm2_setting_bright;
 }
 
 UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
@@ -172,6 +192,8 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
     if (c->aspect_q8 > 0) uvm2_screen_aspect_q8 = c->aspect_q8;
     if (c->win_x > 0)     uvm2_screen_win_x = c->win_x;
     if (c->win_y > 0)     uvm2_screen_win_y = c->win_y;
+    if (c->bright_pct >= UVM2_BRIGHT_MIN && c->bright_pct <= UVM2_BRIGHT_MAX)
+        uvm2_setting_bright = c->bright_pct;
 }
 
 /* ── THE TEXT FILE ON THE SD ────────────────────────────────────────────────────────

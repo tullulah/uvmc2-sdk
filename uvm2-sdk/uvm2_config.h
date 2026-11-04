@@ -100,8 +100,13 @@ struct uvm2_config {
     int32_t aspect_q8;
     int32_t win_x;
     int32_t win_y;
+    /* BRIGHTNESS AS A GAIN, per game, in percent: every intensity the game asks for is
+     * multiplied by it in uvm2_draw_intensity. `bright` above is not that -- it is only the
+     * last intensity set, which a game that sets its own per vector overrides at once.
+     * Appended like the others: a file without it keeps 100. */
+    int32_t bright_pct;
 };
-extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu;
+extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu, uvm2_setting_rotate;
 /* The audio one is declared separately: `sdk_rp2350.c` does not define it, because the debug
  * board has no jack and the choice does not exist there. Whoever reads it fences itself off
  * with its own UVM2-only guard. */
@@ -118,13 +123,34 @@ enum {
     UVM2_SETTING_MENU   = 2u,  /* menu on power-up */
     UVM2_SETTING_ROTATE = 4u,  /* drawing rotated 90 degrees */
     UVM2_SETTING_AUDIO  = 8u,  /* where the sound comes out: jack or console */
+    UVM2_SETTING_BRIGHT = 16u, /* brightness gain, percent (uvm2_setting_bright) */
+    /* THE SDK'S STANDARD OPTIONS SCREEN (uvm2_options.c), shown before the game's main. It
+     * brings MENU, HZ and BRIGHT with it -- they are what the screen is made of -- and shows
+     * ROTATE and AUDIO only if the game declares them too. */
+    UVM2_SETTING_OPTIONS = 32u,
 };
+/* Brightness gain in percent, 100 = exactly what the game asks for. */
+extern volatile int32_t uvm2_setting_bright;
 
 /** Declares the game's name (8.3, no extension: "MHAVOC") and which of its own settings it
  *  uses. Call it BEFORE uvm2_config_load. Its settings go in `config/<NAME>.CFG`, layered on
  *  top of `config/uvm2.cfg`, which is the console's. Without calling this you get a single
  *  file and no game settings, which is how this used to behave. */
 void uvm2_config_game(const char *name, unsigned settings);
+/** The name the OPTIONS screen shows as its title ("ALPHA ONE"). Optional: without it the
+ *  screen shows the config name given to uvm2_config_game. Call it from uvm2_game_settings. */
+void uvm2_config_title(const char *title);
+const char *uvm2_config_title_get(void);
+
+/** THE STANDARD OPTIONS SCREEN (uvm2_options.c). PLAY, then whichever of SCREEN (ROTATE),
+ *  SOUND (AUDIO), REFRESH, BRIGHTNESS the game has, CALIBRATE, and START IN MENU / IN GAME.
+ *  Stick up/down picks, left/right or button 1 changes, button 1 on PLAY (or button 4
+ *  anywhere) starts the game. Saves to config/<NAME>.CFG when something changed.
+ *  The runtime calls uvm2_options_boot() before the game's main when the game declared
+ *  UVM2_SETTING_OPTIONS: the screen opens if START IN MENU is set, or if button 4 is held
+ *  for a second at launch -- otherwise there would be no way back once it is turned off. */
+int  uvm2_options_menu(void);
+void uvm2_options_boot(void);
 unsigned uvm2_config_game_settings(void);
 
 /** Fills `c` with what the knobs are worth RIGHT NOW. */

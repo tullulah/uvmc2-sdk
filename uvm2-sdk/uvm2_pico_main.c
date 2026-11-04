@@ -186,6 +186,10 @@ int main(void)
     /* Buttons 2+3 held at start: the calibration wizard, before the game. It needs core 1
      * running — the wizard draws frames and the buttons come from core 1's cache. */
     uvm2_config_boot_combo();
+    /* And the game's OPTIONS screen, if it declared one (UVM2_SETTING_OPTIONS): after the
+     * settings are loaded, before the game starts, so SOUND and SCREEN never have to change
+     * under a running game. */
+    uvm2_options_boot();
 #  endif
 #endif
     /* UVM2_STEP_OWNS_INIT: a diagnostic image that brings the machine up itself,

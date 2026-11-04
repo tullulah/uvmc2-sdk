@@ -82,6 +82,7 @@ add_executable(${UVM2_NAME}
     ${UVM2_SDK_DIR}/uvm2_hud.c
     ${UVM2_SDK_DIR}/uvm2_config.c
     ${UVM2_SDK_DIR}/uvm2_wizard.c
+    ${UVM2_SDK_DIR}/uvm2_options.c
     ${UVM2_SDK_DIR}/uvm2_input.c
     ${UVM2_SDK_DIR}/uvm2_led.c
     ${UVM2_SDK_DIR}/uvm2_text.c
