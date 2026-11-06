@@ -7,7 +7,8 @@
  *
  * THE JINGLE IS INSIDE THE IMAGE: uvm2_intro_data.h, made by tools/gen_intro.py, as 16 kHz IMA
  * ADPCM (~34 KB; the reasons are in the generator). It is doubled to the jack's 32 kHz here by
- * putting the midpoint between each two samples.
+ * putting the midpoint between each two samples. Or, with UVM2_INTRO=sd, it is the file
+ * VSJINGLE.BIN on the card, and the image keeps only the picture (see jingle_load below).
  *
  * THE CARD LASTS AS LONG AS THE JINGLE: the hold is what the song leaves between the spin and
  * the fade, so a new recording moves the card with it. Any button skips to the fade, and the
@@ -92,10 +93,51 @@ _Static_assert(VS_JINGLE_RATE * 2 == UVM2_JACK_RATE, "the jingle is doubled to t
 
 static struct { uint32_t pos; int pred, idx, prev; } s_dec;
 
+/* WHERE THE JINGLE'S BYTES ARE. In the image (VS_JINGLE), or -- UVM2_INTRO=sd, uvm2.mk -- read
+ * off the card: VSJINGLE.BIN at its root, the generator's same bytes, into PSRAM for as long as
+ * the card plays. That gives a game the ~34 KB back, for one whose image has no room for them
+ * (aae_esb). Written through the uncached alias, as the romset is (uvm2_romzip.c: through the
+ * cache the data comes back corrupt), and read back there too: once, at 16 kHz, the cache has
+ * nothing to add. A missing, short or different file (its FNV-1a against VS_JINGLE_FNV1A) is a
+ * silent card, never a noise: s_jingle stays NULL. */
+#ifdef UVM2_INTRO_JINGLE_SD
+#include "uvm2_sd.h"
+#define JINGLE_FILE   "VSJINGLE.BIN"
+/* In the gap between the sample bundle's 1 MB (+6 MB) and the monitor's window (+7.75 MB). */
+#define JINGLE_PSRAM  ((uint8_t *)0x15780000u)
+extern int uvm2_psram_ready;
+static const uint8_t *s_jingle;
+static void jingle_load(void)
+{
+    s_jingle = 0;
+    if (uvm2_psram_ready != 1) return;
+#ifdef UVM2_REPLAY_LAST
+    /* Not under a redraw: core 1 replays the last picture with the debug monitor, and a card
+     * read while it drives the bus comes back as garbage (uvm2_core1.c). */
+    extern volatile uint32_t uvm2_replay_hold, uvm2_replaying;
+    uvm2_replay_hold = 1u;
+    __asm volatile ("dmb" ::: "memory");
+    while (uvm2_replaying) { }
+#endif
+    const uint32_t n = uvm2_sd_read(JINGLE_FILE, JINGLE_PSRAM, VS_JINGLE_BYTES);
+#ifdef UVM2_REPLAY_LAST
+    __asm volatile ("dmb" ::: "memory");
+    uvm2_replay_hold = 0u;
+#endif
+    if (n != VS_JINGLE_BYTES) return;
+    uint32_t h = 0x811C9DC5u;
+    for (uint32_t i = 0; i < n; i++) h = (h ^ JINGLE_PSRAM[i]) * 0x01000193u;
+    if (h == VS_JINGLE_FNV1A) s_jingle = JINGLE_PSRAM;
+}
+#else
+static const uint8_t *const s_jingle = VS_JINGLE;
+static void jingle_load(void) { }
+#endif
+
 static int adpcm_next(void)
 {
-    if (s_dec.pos >= VS_JINGLE_SAMPLES) return 0;
-    const uint8_t byte = VS_JINGLE[s_dec.pos >> 1];
+    if (s_dec.pos >= VS_JINGLE_SAMPLES || !s_jingle) return 0;
+    const uint8_t byte = s_jingle[s_dec.pos >> 1];
     const int code = (s_dec.pos & 1) ? byte >> 4 : byte & 15;
     s_dec.pos++;
     const int step = STEP[s_dec.idx];
@@ -177,6 +219,7 @@ void uvm2_intro(void)
 
     uvm2_draw_rotate((int)uvm2_setting_rotate);
     uvm2_set_refresh(TICK_HZ);
+    jingle_load();
     const int jack = uvm2_jack_init();
     s_dec.pos = 0; s_dec.pred = 0; s_dec.idx = 0; s_dec.prev = 0;
     /* EDGES START AS "PRESSED": the button that launched the game is still down. */

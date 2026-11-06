@@ -3,6 +3,19 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.13 — the intro card's jingle can live on the card instead of in the image
+
+* New: `UVM2_INTRO=sd` (uvm2.mk). The Vectrex Studio card is the same, but its jingle (~34 KB
+  of IMA ADPCM, most of the card's ~36 KB) is no longer compiled into the image: the card reads
+  it from `VSJINGLE.BIN` at the root of the SD card into PSRAM while it plays. It is for a game
+  whose image has no room left for the jingle: The Empire Strikes Back did not link on v1.4.12
+  (38696 bytes over) and now shows the card with its sound. The file is `uvm2-sdk/VSJINGLE.BIN`
+  in this release; put it on the card next to the games. Without it, or with a file that is not
+  exactly those bytes (size and FNV-1a checked), the card plays silent; it never plays noise.
+  Every other game is unchanged: the default `UVM2_INTRO=1` keeps the jingle in the image.
+* `tools/gen_intro.py` takes a fourth argument to write that file, and the header marks the
+  jingle's size and checksum (`VS_JINGLE_BYTES`, `VS_JINGLE_FNV1A`).
+
 ## v1.4.12 — a game with a fixed refresh reaches it
 
 * Fixed: a dual-core game with a fixed refresh (`UVM2_HZ`, `uvm2_set_refresh`) ran below it.

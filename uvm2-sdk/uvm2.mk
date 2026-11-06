@@ -79,9 +79,16 @@ UVM2_CFLAGS += -DUVM2_HZ=$(UVM2_HZ)
 # for ~4 s before that screen (uvm2_intro.c); any button skips it. It costs ~36 KB of the
 # image's SRAM, most of it the jingle: UVM2_INTRO=0 compiles it out and gives them back. Set it
 # in the game's Makefile to keep it off. A game without the OPTIONS screen never shows it.
+#   make uvm2 UVM2_INTRO=sd   the card, but its jingle read off the card (VSJINGLE.BIN, at the
+#                             root, from uvm2-sdk/VSJINGLE.BIN): the image keeps ~2 KB of it
+#                             instead of ~36. For an image with no room for the jingle; without
+#                             the file the card plays silent.
 UVM2_INTRO ?= 1
 ifeq ($(UVM2_INTRO),0)
 UVM2_CFLAGS += -DUVM2_NO_INTRO
+endif
+ifeq ($(UVM2_INTRO),sd)
+UVM2_CFLAGS += -DUVM2_INTRO_JINGLE_SD
 endif
 # SUBUNITS FOR EVERYONE. The geometry travels in 1/16 of a unit end to end:
 # v_directDraw32 (sdk_rp2350.c) calls uvm2_draw_move_abs_q4/delta_q4 and the SDK

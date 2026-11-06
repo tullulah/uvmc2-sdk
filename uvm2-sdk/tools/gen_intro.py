@@ -3,7 +3,10 @@
 a sine table for the logo's turn, and the jingle as IMA ADPCM.
 
     python3 tools/gen_intro.py <vs_logo.vec> <vs_wordmark.vec> <jingle (mp3/wav/...)> \\
-        > uvm2_intro_data.h
+        [VSJINGLE.BIN] > uvm2_intro_data.h
+
+With a fourth argument it also writes the jingle's ADPCM bytes alone to that file: the one a
+game built with UVM2_INTRO=sd reads off the card instead of carrying them (uvm2.mk).
 
 The sources are the kuroishi cartridge's (hardware/uvm2/kuroishi: assets/vectors/ and
 resources/VectrexStudio.mp3), where the card was drawn first.
@@ -84,6 +87,13 @@ def emit_paths(sym, paths):
     return out
 
 
+def fnv1a(data):
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
 def main():
     if len(sys.argv) < 4:
         raise SystemExit(__doc__)
@@ -109,10 +119,15 @@ def main():
              f"IMA ADPCM, low nibble first. {spec_note(spec)} */")
     o.append(f"#define VS_JINGLE_RATE {RATE}")
     o.append(f"#define VS_JINGLE_SAMPLES {len(pcm)}u")
+    o.append(f"#define VS_JINGLE_BYTES {len(adp)}u")
+    o.append(f"#define VS_JINGLE_FNV1A 0x{fnv1a(adp):08X}u   /* of the bytes, for VSJINGLE.BIN */")
+    o.append("#ifndef UVM2_INTRO_JINGLE_SD   /* with it, the bytes come off the card (uvm2_intro.c) */")
     o.append(f"static const uint8_t VS_JINGLE[{len(adp)}] = {{")
     for k in range(0, len(adp), 24):
         o.append("    " + ",".join(f"0x{b:02x}" for b in adp[k:k + 24]) + ",")
-    o.append("};\n\n#endif")
+    o.append("};\n#endif\n\n#endif")
+    if len(sys.argv) > 4:
+        open(sys.argv[4], "wb").write(bytes(adp))
     print("\n".join(o))
     print(f"jingle {len(adp)} bytes, peak {int(np.abs(pcm.astype(int)).max())}, "
           f"{spec_note(spec)}", file=sys.stderr)
