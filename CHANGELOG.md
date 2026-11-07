@@ -3,6 +3,30 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.14 — raster images and filled shapes, the way Exidy's vector boards draw them
+
+* New: `DRAW_RASTER(img, x, y, pw, ph, shear, b)` (vpy.h). An image as rows of runs -- so many
+  pixels at one brightness, 0 for a gap -- drawn as Top Gunner draws its title and explosions:
+  the beam sweeps a row changing only its brightness, and the rows alternate direction, so
+  between two rows there is only a short jump. `pw`/`ph` are the pixel's size in device units
+  (the same data drawn bigger or smaller), `shear` slants the rows in whole-pixel steps (the
+  title's italic). Runs of one brightness next to each other become one stroke when the image
+  is level. Checked against the arcade's own strokes: a captured explosion comes out line for
+  line, its shading included. The format is in vpy.h.
+* New: `DRAW_FILLED_POLYGON(xy, n, b)` and `FILL_STYLE(spacing, slant)`. Any simple polygon,
+  concave too, filled with slanted parallel lines as one continuous path, joined along its own
+  edge so the beam hardly ever turns off. By default the arcade's: lines 96 device units apart,
+  slanting 1/8. `vpy_draw_filled_polygon_dev` takes device units.
+* Changed: `DRAW_FILLED_RECT` is now that fill (it was an outline with level lines 3 units
+  apart, each one a separate stroke). Same call; a game using it looks different after
+  rebuilding: slanted, continuous lines, and fewer moves.
+* New: `FILL_ROWS(n)`: one row in every `n` of both (1 = all, the default). Less light and
+  fewer lines, the shapes and their levels kept -- what Top Gunner's port settled on at 2 on
+  the console. The raster's rows are counted through the frame, so an image drawn in several
+  pieces is thinned evenly across them.
+* `vpy-c/tools/fill_check.c` checks the shapes (nothing outside them, 96-99% of the strokes
+  chained) and the raster's rows.
+
 ## v1.4.13 — the intro card's jingle can live on the card instead of in the image
 
 * New: `UVM2_INTRO=sd` (uvm2.mk). The Vectrex Studio card is the same, but its jingle (~34 KB
