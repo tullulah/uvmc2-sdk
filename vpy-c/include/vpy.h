@@ -87,6 +87,7 @@ void vpy_draw_circle(int cx, int cy, int r, int b);
 void vpy_draw_rect(int x, int y, int w, int h, int b);           /* x,y = lower-left */
 void vpy_draw_filled_rect(int x, int y, int w, int h, int b);    /* the fill below, 4 corners */
 void vpy_draw_polygon(const int *xy, int n, int b);              /* n vertices, xy[2n] */
+void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b);    /* 16-segment ellipse */
 
 /* ---- filled shapes: the serpentine raster ----------------------------------
  * A polygon filled with parallel lines, slanted and close together, drawn as ONE
@@ -133,7 +134,6 @@ void vpy_fill_rows(int n);
  * Cost: one stroke per run of a new brightness, plus a jump per row. */
 void vpy_draw_raster(const unsigned char *img, int x, int y, int pw, int ph, int shear_q8, int b);
 void vpy_draw_raster_dev(const unsigned char *img, int32_t x, int32_t y, int pw, int ph, int shear_q8, int b);
-void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b);    /* 16-segment ellipse */
 
 /* ---- compiled vector sprites (.vec) --------------------------------------
  * `data` is a vector path stream compiled from a .vec by

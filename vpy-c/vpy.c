@@ -42,6 +42,7 @@ typedef struct {
 } vpy_stroke_t;
 
 static vpy_stroke_t     s_sb[VPY_SB_MAX];
+static int              s_raster_row;   /* DRAW_RASTER's rows this frame: see vpy_fill_rows */
 static int              s_nsb;
 static uint8_t          s_pri = VPY_PRI_NORMAL;
 static uint8_t          s_zero_next;   /* next stroke starts from a fresh zero */
@@ -125,6 +126,7 @@ void vpy_flush(void)
     if (s_stats.strokes > s_stats.peak) s_stats.peak = s_stats.strokes;
     s_stats.frames++;
     s_nsb = 0;
+    s_raster_row = 0;                                /* the raster's rows count per frame */
 }
 
 int vpy_pending_strokes(void) { return s_nsb; }
@@ -300,6 +302,12 @@ void vpy_draw_polygon(const int *xy, int n, int b)
 
 static int32_t s_fill_sp = VPY_FILL_SPACING, s_fill_slant = VPY_FILL_SLANT;
 static int     s_fill_rows = 1;                  /* one row in every n (vpy_fill_rows) */
+/* THE RASTER'S ROWS ARE COUNTED THROUGH THE FRAME, not per image: an image is often drawn as
+ * several pieces (a letter's bar, then its stem), and counting from each piece's first row
+ * dropped -- or kept -- both rows where two pieces meet: the letters came out cut (seen on the
+ * console with FILL_ROWS 2). So the count runs on from one DRAW_RASTER to the next, in the order
+ * they are drawn, as the arcade's board would, and starts again each frame (vpy_flush). The
+ * counter itself is declared with the stroke buffer, above vpy_flush. */
 
 void vpy_fill_rows(int n) { s_fill_rows = n > 1 ? n : 1; }
 
@@ -415,13 +423,14 @@ void vpy_draw_raster_dev(const unsigned char *img, int32_t x, int32_t y, int pw,
     if (!img || pw <= 0 || ph <= 0 || b <= 0) return;
     const int h = img[1];
     const unsigned char *p = img + 2;
-    int kept = 0;                                    /* rows drawn: the serpentine alternates on these */
     for (int r = 0; r < h; r++) {
         const int start = p[0], n = p[1];
         const unsigned char *runs = p + 2;
         p += 2 + 2 * n;
-        if (n == 0 || r % s_fill_rows) continue;
-        const int back = kept++ & 1;                 /* this row right to left */
+        if (n == 0) continue;
+        const int row = s_raster_row++;              /* through the frame, see s_raster_row */
+        if (row % s_fill_rows) continue;
+        const int back = (row / s_fill_rows) & 1;    /* the serpentine alternates on the rows drawn */
         /* the row's strokes left to right: [a, e) at one brightness, gaps as level 0 */
         int32_t sa[64], se[64]; uint8_t sl[64];
         int ns = 0, edge = start;
