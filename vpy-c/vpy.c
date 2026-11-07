@@ -259,9 +259,8 @@ void vpy_draw_rect(int x, int y, int w, int h, int b)
 
 void vpy_draw_filled_rect(int x, int y, int w, int h, int b)
 {
-    vpy_draw_rect(x, y, w, h, b);
-    for (int yy = y + 3; yy < y + h; yy += 3)
-        raw_line(x, yy, x + w, yy, b);
+    const int xy[8] = { x, y, x + w, y, x + w, y + h, x, y + h };
+    vpy_draw_filled_polygon(xy, 4, b);
 }
 
 void vpy_draw_polygon(const int *xy, int n, int b)
@@ -270,6 +269,201 @@ void vpy_draw_polygon(const int *xy, int n, int b)
     for (int i = 0; i < n - 1; i++)
         raw_line(xy[2*i], xy[2*i+1], xy[2*i+2], xy[2*i+3], b);
     raw_line(xy[2*(n-1)], xy[2*(n-1)+1], xy[0], xy[1], b);  /* close */
+}
+
+/* ---- the serpentine raster (see vpy.h) -------------------------------------
+ *
+ * HOW. Skew the plane so the slanted lines become rows: u = y - x*slant. Each row
+ * is a constant u, so where it crosses the polygon is the usual scanline problem on
+ * a polygon that is still straight-edged (a skew maps lines to lines). A row's
+ * crossings, sorted, pair up into spans. The spans are then chained: start at an
+ * unused span, step to the next row, take the unused span that overlaps it, and so
+ * on -- a run that only ever goes one row at a time, so it is one continuous path.
+ * Each span is drawn the other way from the one before; the join from one span's
+ * end to the next one's start lies along the polygon's edge and is drawn lit (the
+ * edge comes out traced), unless it is long (a nearly flat edge), where it is left
+ * as a jump.
+ *
+ * INTEGER ONLY, 32-bit only, like the rest of libvpy: a crossing is x0 + slope *
+ * (u - u0) with the slope in Q8, and slope * (u - u0) never exceeds |dx| * 256 --
+ * 16.4M for the whole device range -- because (u - u0) never exceeds the edge's
+ * own du. */
+#ifndef VPY_FILL_MAX_V
+#define VPY_FILL_MAX_V    32
+#endif
+#ifndef VPY_FILL_MAX_ROWS
+#define VPY_FILL_MAX_ROWS 256
+#endif
+#define VPY_FILL_MAX_SPANS 4                 /* per row; a row crossing more is cut */
+#define VPY_FILL_SPACING   96                /* device units: Top Gunner's */
+#define VPY_FILL_SLANT     32                /* Q8: 1/8, Top Gunner's */
+
+static int32_t s_fill_sp = VPY_FILL_SPACING, s_fill_slant = VPY_FILL_SLANT;
+static int     s_fill_rows = 1;                  /* one row in every n (vpy_fill_rows) */
+
+void vpy_fill_rows(int n) { s_fill_rows = n > 1 ? n : 1; }
+
+void vpy_fill_style(int spacing, int slant_q8)
+{
+    s_fill_sp = spacing > 0 ? spacing : VPY_FILL_SPACING;
+    s_fill_slant = slant_q8;
+}
+
+static int16_t fill_a[VPY_FILL_MAX_ROWS][VPY_FILL_MAX_SPANS];
+static int16_t fill_b[VPY_FILL_MAX_ROWS][VPY_FILL_MAX_SPANS];
+static uint8_t fill_n[VPY_FILL_MAX_ROWS];
+static uint8_t fill_used[VPY_FILL_MAX_ROWS];  /* bit per span */
+
+static int32_t fill_y(int32_t x, int32_t u) { return u + ((x * s_fill_slant) >> 8); }
+
+void vpy_draw_filled_polygon_dev(const int32_t *xy, int n, int b)
+{
+    int32_t U[VPY_FILL_MAX_V], X[VPY_FILL_MAX_V], slope[VPY_FILL_MAX_V];
+    if (n < 3 || b <= 0) return;
+    if (n > VPY_FILL_MAX_V) n = VPY_FILL_MAX_V;
+    int32_t umin = 0, umax = 0;
+    for (int i = 0; i < n; i++) {
+        X[i] = xy[2 * i];
+        U[i] = xy[2 * i + 1] - ((X[i] * s_fill_slant) >> 8);
+        if (i == 0 || U[i] < umin) umin = U[i];
+        if (i == 0 || U[i] > umax) umax = U[i];
+    }
+    for (int i = 0; i < n; i++) {                       /* edge i -> i+1, Q8 dx/du */
+        const int j = (i + 1) % n;
+        const int32_t du = U[j] - U[i];
+        slope[i] = du ? ((X[j] - X[i]) * 256) / du : 0;
+    }
+    int32_t sp = s_fill_sp * s_fill_rows;           /* one row in n: n times the spacing */
+    if ((umax - umin) / sp >= VPY_FILL_MAX_ROWS) sp = (umax - umin) / (VPY_FILL_MAX_ROWS - 1) + 1;
+    int rows = 0;
+    for (int32_t u = umax - sp / 2; u > umin && rows < VPY_FILL_MAX_ROWS; u -= sp, rows++) {
+        int32_t xs[2 * VPY_FILL_MAX_SPANS];
+        int nx = 0;
+        for (int i = 0; i < n && nx < 2 * VPY_FILL_MAX_SPANS; i++) {
+            const int j = (i + 1) % n;
+            const int32_t u0 = U[i], u1 = U[j];
+            if (u0 == u1) continue;
+            const int lo = u0 < u1 ? i : j;            /* half-open [lo, hi): no double vertex */
+            const int32_t ulo = U[lo], uhi = u0 < u1 ? u1 : u0;
+            if (u < ulo || u >= uhi) continue;
+            const int32_t x = X[lo] + ((slope[i] * (u - ulo)) >> 8);
+            int k = nx++;
+            while (k > 0 && xs[k - 1] > x) { xs[k] = xs[k - 1]; k--; }
+            xs[k] = x;
+        }
+        fill_n[rows] = 0;
+        fill_used[rows] = 0;
+        for (int k = 0; k + 1 < nx; k += 2) {
+            fill_a[rows][fill_n[rows]] = (int16_t)xs[k];
+            fill_b[rows][fill_n[rows]] = (int16_t)xs[k + 1];
+            fill_n[rows]++;
+        }
+    }
+    /* Longer joins are jumps. Along an edge the rows cross at a slant, consecutive rows end
+     * spacing/slant apart (768 at the arcade's 96 and 1/8), so that much more is allowed. */
+    const int32_t sl = s_fill_slant < 0 ? -s_fill_slant : s_fill_slant;
+    const int32_t link_max = 4 * sp + (sl ? 2 * sp * 256 / sl : 0);
+    for (int r0 = 0; r0 < rows; r0++) {
+        for (int s0 = 0; s0 < fill_n[r0]; s0++) {
+            if (fill_used[r0] & (1u << s0)) continue;
+            int r = r0, sidx = s0, right = 1;            /* this span drawn left to right */
+            int have = 0;
+            int32_t ex = 0, ey = 0;
+            for (;;) {
+                fill_used[r] |= (uint8_t)(1u << sidx);
+                const int32_t u = umax - sp / 2 - (int32_t)r * sp;
+                const int32_t a = fill_a[r][sidx], c = fill_b[r][sidx];
+                const int32_t x0 = right ? a : c, x1 = right ? c : a;
+                const int32_t y0 = fill_y(x0, u), y1 = fill_y(x1, u);
+                if (have) {
+                    const int32_t dx = x0 - ex;
+                    if ((dx < 0 ? -dx : dx) <= link_max) sb_push_dev(ex, ey, x0, y0, b);
+                }
+                sb_push_dev(x0, y0, x1, y1, b);
+                ex = x1; ey = y1; have = 1;
+                if (r + 1 >= rows) break;                /* the next row: an unused span over this one */
+                int next = -1;
+                for (int k = 0; k < fill_n[r + 1]; k++)
+                    if (!(fill_used[r + 1] & (1u << k)) && fill_a[r + 1][k] <= c && fill_b[r + 1][k] >= a) { next = k; break; }
+                if (next < 0) break;
+                r++; sidx = next; right = !right;
+            }
+        }
+    }
+}
+
+/* ---- raster images (see vpy.h) ---------------------------------------------
+ * A row is walked in its drawing direction; consecutive runs of the same brightness
+ * become one stroke when the image is level (the data often splits a run, and an
+ * unchanged brightness is not worth a stroke: Top Gunner's explosion goes from 1141
+ * strokes to 79), a gap ends the stroke, and each
+ * stroke starts where the last one ended, so the beam does not move between them.
+ *
+ * THE SLANT GOES IN STEPS, like the arcade's: each stroke rises its length times the
+ * shear, ROUNDED TO WHOLE PIXELS (pw). A short run rises nothing and comes out flat --
+ * the little foot at the start of each row of Top Gunner's title -- and a long one
+ * climbs in whole steps; a continuous slant looks smoother and is not what it draws. */
+static int32_t raster_rise(int32_t len_dev, int pw, int shear_q8)
+{
+    const int32_t r = (len_dev * shear_q8) / 256;
+    const int32_t q = (r >= 0 ? r + pw / 2 : r - pw / 2) / pw;
+    return q * pw;
+}
+
+void vpy_draw_raster_dev(const unsigned char *img, int32_t x, int32_t y, int pw, int ph, int shear_q8, int b)
+{
+    if (!img || pw <= 0 || ph <= 0 || b <= 0) return;
+    const int h = img[1];
+    const unsigned char *p = img + 2;
+    int kept = 0;                                    /* rows drawn: the serpentine alternates on these */
+    for (int r = 0; r < h; r++) {
+        const int start = p[0], n = p[1];
+        const unsigned char *runs = p + 2;
+        p += 2 + 2 * n;
+        if (n == 0 || r % s_fill_rows) continue;
+        const int back = kept++ & 1;                 /* this row right to left */
+        /* the row's strokes left to right: [a, e) at one brightness, gaps as level 0 */
+        int32_t sa[64], se[64]; uint8_t sl[64];
+        int ns = 0, edge = start;
+        for (int k = 0; k < n && ns < 64; k++) {
+            const int len = runs[2 * k], lv = runs[2 * k + 1];
+            /* merged only when level: with a slant the run boundaries are where the steps go */
+            if (ns && !shear_q8 && sl[ns - 1] == lv && se[ns - 1] == edge) se[ns - 1] += len;
+            else { sa[ns] = edge; se[ns] = edge + len; sl[ns] = (uint8_t)lv; ns++; }
+            edge += len;
+        }
+        /* the rise up to each stroke's left end, in whole pixels, from the row's start */
+        int32_t rise[65];
+        rise[0] = 0;
+        for (int k = 0; k < ns; k++) {
+            const int32_t gap = k ? (sa[k] - se[k - 1]) * pw : 0;
+            rise[k] = (k ? rise[k - 1] + raster_rise((se[k - 1] - sa[k - 1]) * pw, pw, shear_q8) : 0)
+                    + raster_rise(gap, pw, shear_q8);
+        }
+        const int32_t ry = y - (int32_t)r * ph + (((int32_t)start * pw * shear_q8) / 256);  /* rows go down */
+        for (int i = 0; i < ns; i++) {
+            const int k = back ? ns - 1 - i : i;         /* serpentine: every other drawn row back */
+            if (sl[k] == 0) continue;
+            const int32_t xa = x + sa[k] * pw, xe = x + se[k] * pw;
+            const int32_t ya = ry + rise[k], ye = ya + raster_rise((se[k] - sa[k]) * pw, pw, shear_q8);
+            const int br = sl[k] * b / 127;
+            if (back) sb_push_dev(xe, ye, xa, ya, br);
+            else       sb_push_dev(xa, ya, xe, ye, br);
+        }
+    }
+}
+
+void vpy_draw_raster(const unsigned char *img, int x, int y, int pw, int ph, int shear_q8, int b)
+{
+    vpy_draw_raster_dev(img, (int32_t)x * VPY_SCALE, (int32_t)y * VPY_SCALE, pw, ph, shear_q8, b);
+}
+
+void vpy_draw_filled_polygon(const int *xy, int n, int b)
+{
+    int32_t d[2 * VPY_FILL_MAX_V];
+    if (n > VPY_FILL_MAX_V) n = VPY_FILL_MAX_V;
+    for (int i = 0; i < 2 * n; i++) d[i] = (int32_t)xy[i] * VPY_SCALE;
+    vpy_draw_filled_polygon_dev(d, n, b);
 }
 
 void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b)

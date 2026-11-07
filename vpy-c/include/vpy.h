@@ -85,8 +85,54 @@ void vpy_move(int x, int y);
 void vpy_draw_line(int x0, int y0, int x1, int y1, int b);
 void vpy_draw_circle(int cx, int cy, int r, int b);
 void vpy_draw_rect(int x, int y, int w, int h, int b);           /* x,y = lower-left */
-void vpy_draw_filled_rect(int x, int y, int w, int h, int b);
+void vpy_draw_filled_rect(int x, int y, int w, int h, int b);    /* the fill below, 4 corners */
 void vpy_draw_polygon(const int *xy, int n, int b);              /* n vertices, xy[2n] */
+
+/* ---- filled shapes: the serpentine raster ----------------------------------
+ * A polygon filled with parallel lines, slanted and close together, drawn as ONE
+ * continuous path: each line runs the other way from the one before, and they are
+ * joined along the polygon's own edge, lit. The beam hardly ever turns off, so on a
+ * Vectrex it costs its lines and almost nothing else; the slant is what a CRT's
+ * scan lines look like when the beam keeps falling while it sweeps. The technique
+ * is the one Exidy's vector boards fill with (Top Gunner's title, its explosions),
+ * written again from what it draws.
+ *
+ * Any simple polygon, convex or not (a concave one is drawn as several runs), up to
+ * VPY_FILL_MAX_V vertices. Vertices are absolute, as vpy_draw_polygon's.
+ * The style is global until changed:
+ *   spacing  distance between lines, in DEVICE units (127 to a VPy unit); 0 = 96,
+ *            the arcade's. More lines than VPY_FILL_MAX_ROWS widen it on their own.
+ *   slant    rise per unit across, Q8 (32 = 1/8, the arcade's; 0 = horizontal).
+ * Cost: about two strokes per line (the line and its join). On the slow 6809
+ * target this does not exist; it is for the RP2350 cartridges and the PiTrex. */
+void vpy_draw_filled_polygon(const int *xy, int n, int b);              /* VPy units */
+void vpy_draw_filled_polygon_dev(const int32_t *xy, int n, int b);      /* device units */
+void vpy_fill_style(int spacing, int slant_q8);                         /* 0, 0 = the arcade's */
+/* FEWER ROWS: one row in every `n` of DRAW_RASTER and of the filled shapes (1 = all, the
+ * default). Less light and fewer lines, the shapes and their levels kept -- what Top Gunner's
+ * port settled on at 2 for its title and explosions (aae_topgunnr, VERTIGO_FILL_ROWS). On a
+ * filled shape it is the same as `n` times the spacing. Global until changed. */
+void vpy_fill_rows(int n);
+
+/* ---- raster images: rows of runs, drawn the way Exidy's boards draw them ----
+ * An image is rows of RUNS: so many pixels at one brightness. The beam goes along a
+ * row without stopping, only changing brightness between runs, and the rows go the
+ * other way each time (serpentine), so from one row to the next there is only a
+ * short jump. It is how Top Gunner draws its title and its explosions -- shaded
+ * images on a vector monitor -- written again from what it draws.
+ *
+ * The data (a `const unsigned char[]`):
+ *   width, height                     in pixels
+ *   then each row, top to bottom:     start pixel, run count,
+ *                                     then per run: length (pixels), brightness 0..127
+ *                                     (0 = a gap: the row continues further on)
+ * Placed with its top-left at (x, y), VPy units. A pixel is `pw` x `ph` DEVICE units
+ * (127 to a VPy unit; Top Gunner's explosion is 24 x 48). `shear_q8` slants the rows,
+ * rise per unit across in Q8 (32 = 1/8, its title's italic; 0 = level). Brightness
+ * is the image's own, scaled by `b` (127 = as stored).
+ * Cost: one stroke per run of a new brightness, plus a jump per row. */
+void vpy_draw_raster(const unsigned char *img, int x, int y, int pw, int ph, int shear_q8, int b);
+void vpy_draw_raster_dev(const unsigned char *img, int32_t x, int32_t y, int pw, int ph, int shear_q8, int b);
 void vpy_draw_ellipse(int cx, int cy, int rx, int ry, int b);    /* 16-segment ellipse */
 
 /* ---- compiled vector sprites (.vec) --------------------------------------
@@ -300,6 +346,10 @@ void vpy_enemy_fire_event_str(int idx, const char *event);
 #define DRAW_RECT       vpy_draw_rect
 #define DRAW_FILLED_RECT vpy_draw_filled_rect
 #define DRAW_POLYGON    vpy_draw_polygon
+#define DRAW_FILLED_POLYGON vpy_draw_filled_polygon
+#define FILL_STYLE      vpy_fill_style
+#define DRAW_RASTER     vpy_draw_raster
+#define FILL_ROWS       vpy_fill_rows
 #define DRAW_ELLIPSE    vpy_draw_ellipse
 #define DRAW_VECTOR     vpy_draw_vector
 #define DRAW_VECTOR_EX  vpy_draw_vector_ex
