@@ -116,9 +116,10 @@ SECTIONS
         __reset_start = .;
         KEEP (*(.reset))
         __reset_end = .;
-        /* The three hot-path files are EXCLUDED here and picked up below, in .data, which
-         * lives in SRAM. Without the exclusion, this generic rule would claim them. */
-        *(EXCLUDE_FILE(*uvm2_bus.c.obj *uvm2_draw.c.obj *uvm2_svc.c.obj *uvm2_svc_entry.s.obj) .text*)
+        /* The hot-path files (and the Rust crates, and core 1's loop) are EXCLUDED here and
+         * picked up below, in .data, which lives in SRAM. Without the exclusion, this generic
+         * rule would claim them: the first rule that matches wins. */
+        *(EXCLUDE_FILE(*uvm2_bus.c.obj *uvm2_draw.c.obj *uvm2_svc.c.obj *uvm2_svc_entry.s.obj *uvm2_core1.c.obj *libvectrex_draw_cabi.a:*) .text*)
         . = ALIGN(4);
         *(.init)
         *(.fini)
@@ -193,6 +194,15 @@ SECTIONS
         *uvm2_svc.c.obj(.text*)
         /* The svc handler is in ASSEMBLY, not in the .c of the same name. */
         *uvm2_svc_entry.s.obj(.text*)
+        /* AND THE RUST CRATES' CODE, and core 1's loop. uvm2_exec (above, in SRAM) calls
+         * vbus_push and its kin once PER COMMAND, and they are the crate's: left in .text they
+         * ran from the PSRAM, so the hottest loop on core 1 fetched its instructions through
+         * the 16 KB XIP cache that core 0's game keeps evicting. MGS, 2026-11-09: a list that
+         * was the same byte for byte frame after frame drew still, then in bursts every edge
+         * lit up brighter and the picture rose 4-5 units -- the write landing a period late,
+         * as described above. ~6 KB of the crate, plus uvm2_core1.c. */
+        *libvectrex_draw_cabi.a:*(.text*)
+        *uvm2_core1.c.obj(.text*)
         . = ALIGN(4);
         /* THE RUST CRATE'S .bss, IN SRAM TOO, and this one is not about speed: it does not
          * WORK from the PSRAM. vectrex_bus keeps its batch index, its list fill and its
