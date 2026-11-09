@@ -206,6 +206,10 @@ int  vpy3d_quad(int a, int b, int c, int d);
 int  vpy3d_tri(int a, int b, int c);
 int  vpy3d_mesh_end(int hard_cos_q14);        /* 0 on overflow: the mesh is left EMPTY (draws nothing) */
 void vpy3d_mesh_open(vpy_mesh *m, int open);  /* mark a plate after building it */
+/* mark edge e, a rim from vertex a to b, as a seam a neighbouring mesh continues
+ * flat (on = 1: not drawn) or not (0). Returns 0, changing nothing, when edge e
+ * is not that rim. See vpy3d.c. */
+int  vpy3d_mesh_seam(vpy_mesh *m, int e, int a, int b, int on);
 
 /* GIVING THE POOLS BACK. The pools only grow: a mesh, once built, keeps its space
  * for good — right for a game that builds everything at start-up, wrong for one

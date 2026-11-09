@@ -18,6 +18,7 @@ typedef struct {
     int16_t  f0, f1;    /* the faces either side, mesh-local; f1 < 0 = boundary */
     int16_t  ca, cb;    /* edge continuing the straight run past a / past b */
     uint8_t  hard;      /* the faces meet sharply: keep it when one is visible */
+    uint8_t  seam;      /* a rim that another mesh continues flat: not a line (vpy3d_mesh_seam) */
 } vpy3d_edge;
 
 static int16_t     PV[VPY3D_POOL_V][3];
@@ -482,8 +483,27 @@ static int edge_of(vpy_mesh *m, int a, int b, int face)
     vpy3d_edge *E = &PE[nPE++];
     E->a = (uint16_t)lo; E->b = (uint16_t)hi;
     E->f0 = (int16_t)face; E->f1 = -1;
-    E->ca = E->cb = -1; E->hard = 0;
+    E->ca = E->cb = -1; E->hard = 0; E->seam = 0;
     return m->ne++;
+}
+
+/* SEAMS: a model cut into meshes (a level's floor in slabs, a wall in panels)
+ * leaves every cut a rim on both sides, and a rim is drawn whenever its face is
+ * visible -- so a flat floor shows the lines of its slabs. The mesh cannot see
+ * its neighbour; the game can, and while the neighbour is drawn too it marks the
+ * rims that one continues within the crease angle. A marked rim is drawn as an
+ * interior edge whose two faces look the same way: not at all (wire mode still
+ * draws it). Edge e must be a rim from vertex a to b (either way round), or
+ * nothing is changed and it returns 0: the caller's edge numbers are checked,
+ * not trusted. on = 0 clears it, and is how to check them once after building. */
+int vpy3d_mesh_seam(vpy_mesh *m, int e, int a, int b, int on)
+{
+    if (!m || e < 0 || e >= m->ne) return 0;
+    vpy3d_edge *E = &PE[m->e0 + e];
+    int lo = a < b ? a : b, hi = a < b ? b : a;
+    if (E->a != lo || E->b != hi || E->f1 >= 0) return 0;
+    E->seam = (uint8_t)(on ? 1 : 0);
+    return 1;
 }
 
 /* NORMALS, CREASES AND STRAIGHT RUNS, from the mesh's vertices as they are now.
@@ -814,10 +834,11 @@ static void draw_surface(const vpy_mesh *m, const vpy_xf *place, int br)
     for (int e = 0; e < m->ne; e++) {
         const vpy3d_edge *E = &PE[m->e0 + e];
         int draw;
-        if (E->f1 < 0)         draw = m->open ? 1 : FV[E->f0];   /* a rim */
+        if (E->seam)           draw = 0;                         /* a cut the next mesh continues */
+        else if (E->f1 < 0)    draw = m->open ? 1 : FV[E->f0];   /* a rim */
         else if (E->hard)      draw = FV[E->f0] | FV[E->f1];     /* a crease */
         else                   draw = FV[E->f0] != FV[E->f1];    /* a silhouette */
-        ES[e] = (uint8_t)(E->f1 < 0 || FV[E->f0] != FV[E->f1]);
+        ES[e] = (uint8_t)(!E->seam && (E->f1 < 0 || FV[E->f0] != FV[E->f1]));
         if (s_wire) draw = 1;             /* a cage keeps what the solid hides */
         ED[e] = (uint8_t)draw;
         if (!draw) s_stats.culled++;
