@@ -81,6 +81,10 @@ const vpy_draw_stats_t *vpy_draw_stats(void);
 
 /* ---- drawing (VPy space, brightness 0..127) ---- */
 void vpy_set_intensity(int b);
+/* The colour of what is drawn next, 0..255 a gun; 0, 0, 0 = none (white). Only in builds with
+ * -DVPY_COLOR (VPy's SET_COLOR in colour builds); colour hardware shows it, the Vectrex does not. */
+void vpy_set_color(int r, int g, int b);
+#define VPY_HAS_COLOR 1   /* this libvpy has vpy_set_color: a game can test it and still build on older SDKs */
 void vpy_move(int x, int y);
 void vpy_draw_line(int x0, int y0, int x1, int y1, int b);
 void vpy_draw_circle(int cx, int cy, int r, int b);
