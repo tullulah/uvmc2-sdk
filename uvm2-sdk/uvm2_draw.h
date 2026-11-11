@@ -173,7 +173,12 @@ int      uvm2_refresh_fits(void);
  * list `uvm2_exec` is about to replay, published right before each call, NULL when that
  * list has no colour. A colour still set when a frame opens is carried into it as a mark at
  * command 0, so every table stands on its own. */
+/* Table entries per list. A game that changes colour often (the Sega G80 ports change it
+ * almost per vector) raises it; each entry is 8 bytes of SRAM per list buffer. A change past
+ * the end is lost (uvm2_color_dropped counts them) and its strokes keep the previous colour. */
+#ifndef UVM2_COLOR_MARKS
 #define UVM2_COLOR_MARKS 64u
+#endif
 struct uvm2_color_mark  { uint32_t cmd; uint32_t rgb; };
 struct uvm2_color_marks { uint32_t n; struct uvm2_color_mark m[UVM2_COLOR_MARKS]; };
 void uvm2_draw_color(uint32_t rgb);
