@@ -123,7 +123,13 @@ void uvm2_draw_color(uint32_t rgb)
     if (rgb == s_color_now) return;
     s_color_now = rgb;
     struct uvm2_color_marks *c = &s_colors[s_buf];
-    if (c->n && c->m[c->n - 1u].cmd == s_count) { c->m[c->n - 1u].rgb = rgb; return; }
+    if (c->n && c->m[c->n - 1u].cmd == s_count) {
+        /* Changed again before any command: the entry takes the new colour, and goes if that is
+         * the colour already in effect before it (a caller that sets two colours a stroke). */
+        const uint32_t before = c->n >= 2u ? c->m[c->n - 2u].rgb : 0u;
+        if (rgb == before) c->n--; else c->m[c->n - 1u].rgb = rgb;
+        return;
+    }
     if (c->n >= UVM2_COLOR_MARKS) { uvm2_color_dropped++; return; }
     c->m[c->n].cmd = s_count;
     c->m[c->n].rgb = rgb;
