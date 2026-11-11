@@ -282,9 +282,25 @@ const uint8_t *uvm2_list_buffer(void) { return s_cmds[s_buf]; }
 /* The list back to `count` commands and `cycles` (uvm2_list_commands / uvm2_list_cycles read
  * before): what was drawn since is taken out again. The debug monitor builds its pause sign on
  * top of a frame this way, keeps a copy and leaves the frame as it was (uvm2_monitor.c). */
+/* THE COLOUR TABLE REWINDS WITH THE LIST. Its entries name commands by number, so the ones for
+ * the commands taken out go too; and if the colour still set is not the one in effect at the new
+ * end, it is marked there again, so what is drawn next keeps it. */
+static void color_rewind(uint32_t count)
+{
+    struct uvm2_color_marks *c = &s_colors[s_buf];
+    while (c->n && c->m[c->n - 1u].cmd >= count) c->n--;
+    const uint32_t in_effect = c->n ? c->m[c->n - 1u].rgb : 0u;
+    if (in_effect != s_color_now) {
+        if (c->n >= UVM2_COLOR_MARKS) { uvm2_color_dropped++; return; }
+        c->m[c->n].cmd = count;
+        c->m[c->n].rgb = s_color_now;
+        c->n++;
+    }
+}
+
 void uvm2_list_rewind(uint32_t count, uint32_t cycles)
 {
-    if (count <= s_count) { s_count = count; s_cycles = cycles; }
+    if (count <= s_count) { s_count = count; s_cycles = cycles; color_rewind(count); }
     uvm2_draw_invalidate();
 }
 /* Everything the game drew in this frame out again, back to where uvm2_frame_begin left the
