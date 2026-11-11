@@ -108,6 +108,7 @@ void uvm2_replay_extra(void)
     if (!s_paused || !n || n > PAUSE_MAX) return;
     uint8_t cmds[PAUSE_MAX * 3];
     for (uint32_t i = 0; i < n * 3u; i++) cmds[i] = UVM2_PAUSE_CMDS[i];
+    uvm2_color_exec = 0;   /* the pause overlay has no colour table */
     uvm2_exec(cmds, n);
 }
 

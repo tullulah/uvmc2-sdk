@@ -744,6 +744,7 @@ static void core1_main(void)
         const uint8_t  *src = uvm2_frame_buffer(served);
         const uint32_t  n   = uvm2_frame_length(served);
         for (uint32_t i = 0; i < n * 3u && i < UVM2_CMD_CAPACITY * 3u; i++) s_stage[i] = src[i];
+        uvm2_color_exec = uvm2_frame_colors(served);
         uint32_t cycles = uvm2_exec(s_stage, n);
 #else
         {   /* The other half of the signature: what core 1 is ACTUALLY going to replay. */
@@ -757,6 +758,7 @@ static void core1_main(void)
                 else                                     uvm2_sig_last_ok = h;
             }
         }
+        uvm2_color_exec = uvm2_frame_colors(served);   /* the colour table of this replay */
         uint32_t cycles;
 #ifdef UVM2_CORE0_WORKER
         void (*const work)(void) = uvm2_worker;
