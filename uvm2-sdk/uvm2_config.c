@@ -21,7 +21,7 @@ extern volatile int32_t  uvm2_drift_x, uvm2_drift_y;
 extern volatile int32_t  uvm2_zero_offset;
 void uvm2_draw_intensity(int brightness);
 
-#define SD_PATH  "config/uvm2.cfg"
+#define SD_PATH  UVM2_SD_CONF "uvm2.cfg"   /* uvm2_sd.h: where things live on the card */
 
 volatile int uvm2_have_calibration = 0;
 
@@ -71,6 +71,7 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
     FIELD(aspect_q8, 0), FIELD(win_x, 0), FIELD(win_y, 0),
     FIELD(bright_pct, UVM2_SETTING_BRIGHT),
     FIELD(buttons, UVM2_SETTING_BUTTONS),
+    FIELD(turn, UVM2_SETTING_TURN),
 };
 /* THE REFRESH STARTS AT THE GAME'S OWN, UVM2_HZ: 50 for most, but an arcade machine can have
  * its own (Armor Attack runs at 38 Hz, and at 50 it played 32% fast). 0 there means "flat
@@ -96,6 +97,11 @@ volatile int32_t uvm2_setting_buttons = 1234;
 static uint8_t   s_btn_phys[4] = { 0, 1, 2, 3 };   /* the game's button i is physical bit [i] */
 static uint8_t   s_btn_identity = 1;
 static const char *s_btn_name[4];
+volatile int32_t uvm2_setting_turn = 0;
+/* The names of the two layouts: [0] the stick turns, [1] buttons turn. Buttons 0-3, then the
+ * stick's sideways, up, down. */
+static const char *s_turn_name[7];
+static const char *s_stick_name[3];
 
 int uvm2_buttons_set(int32_t map)
 {
@@ -133,7 +139,26 @@ const char *uvm2_config_button_name(int i)
 {
     static const char *const plain[4] = { "BUTTON 1", "BUTTON 2", "BUTTON 3", "BUTTON 4" };
     if (i < 0 || i > 3) return "";
+    if (uvm2_setting_turn && s_turn_name[i]) return s_turn_name[i];
     return s_btn_name[i] ? s_btn_name[i] : plain[i];
+}
+
+void uvm2_config_stick(const char *sideways, const char *up, const char *down)
+{
+    s_stick_name[0] = sideways; s_stick_name[1] = up; s_stick_name[2] = down;
+}
+
+void uvm2_config_turn(const char *b1, const char *b2, const char *b3, const char *b4,
+                      const char *sideways, const char *up, const char *down)
+{
+    s_turn_name[0] = b1; s_turn_name[1] = b2; s_turn_name[2] = b3; s_turn_name[3] = b4;
+    s_turn_name[4] = sideways; s_turn_name[5] = up; s_turn_name[6] = down;
+}
+
+const char *uvm2_config_stick_name(int i)
+{
+    if (i < 0 || i > 2) return 0;
+    return uvm2_setting_turn ? s_turn_name[4 + i] : s_stick_name[i];
 }
 
 /* The default is to have no settings of one's own, which is what 43 of the 44 ports want.
@@ -151,9 +176,9 @@ static const char *s_game_title;
 void uvm2_config_title(const char *title) { s_game_title = title; }
 const char *uvm2_config_title_get(void)
 {
-    /* Without a title, the config name: "config/ALPHAONE.CFG" -> "ALPHAONE". */
+    /* Without a title, the config name: ".conf/ALPHAONE.CFG" -> "ALPHAONE". */
     static char from_path[16];
-    int p = 0, k = 7;                                   /* past "config/" */
+    int p = 0, k = (int)sizeof UVM2_SD_CONF - 1;        /* past ".conf/" */
     if (s_game_title) return s_game_title;
     while (s_game_path[k] && s_game_path[k] != '.' && p < 15) from_path[p++] = s_game_path[k++];
     from_path[p] = 0;
@@ -163,7 +188,7 @@ const char *uvm2_config_title_get(void)
 void uvm2_config_game(const char *name, unsigned settings)
 {
     int p = 0;
-    const char *d = "config/";
+    const char *d = UVM2_SD_CONF;
     /* The OPTIONS screen is made of these three; declaring it declares them. */
     if (settings & UVM2_SETTING_OPTIONS)
         settings |= UVM2_SETTING_MENU | UVM2_SETTING_HZ | UVM2_SETTING_BRIGHT
@@ -172,7 +197,7 @@ void uvm2_config_game(const char *name, unsigned settings)
     if (!name || !*name) { s_game_path[0] = 0; return; }
     while (*d) s_game_path[p++] = *d++;
     /* 8.3 and upper case, which is what the card driver understands. */
-    while (*name && p < 15) {
+    while (*name && p < (int)sizeof UVM2_SD_CONF - 1 + 8) {
         char ch = *name++;
         if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
         s_game_path[p++] = ch;
@@ -219,6 +244,7 @@ UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
     c->win_y      = uvm2_screen_win_y;
     c->bright_pct = uvm2_setting_bright;
     c->buttons    = uvm2_setting_buttons;
+    c->turn       = uvm2_setting_turn;
 }
 
 UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
@@ -255,6 +281,7 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
         uvm2_setting_bright = c->bright_pct;
     /* 0 is "an old file": the map stays as wired. Anything that is not a map is refused. */
     if (c->buttons) uvm2_buttons_set(c->buttons);
+    uvm2_setting_turn = c->turn ? 1 : 0;
 }
 
 /* ── THE TEXT FILE ON THE SD ────────────────────────────────────────────────────────
@@ -327,6 +354,20 @@ UVM2_COLD static int load_from_flash(struct uvm2_config *c)
     return 1;
 }
 
+/* .conf/<file>, and if it is not there the config/<file> of a card set up before .conf/
+ * existed: its settings are kept, and the next save writes them to .conf/. */
+UVM2_COLD static int load_conf(struct uvm2_config *c, const char *path, int game_only)
+{
+    if (load_from_sd(c, path, game_only)) return 1;
+    const int k = (int)sizeof UVM2_SD_CONF - 1;
+    char old[48];
+    int n = 0;
+    for (const char *s = UVM2_SD_CONF_OLD; *s; ) old[n++] = *s++;
+    for (const char *s = path + k; *s && n < (int)sizeof old - 1; ) old[n++] = *s++;
+    old[n] = 0;
+    return load_from_sd(c, old, game_only);
+}
+
 UVM2_COLD int uvm2_config_load(void)
 {
     struct uvm2_config c;
@@ -336,9 +377,9 @@ UVM2_COLD int uvm2_config_load(void)
      *
      * THE SHARED ONE AS THE BASE — with all its fields, the game ones included: a file from
      * before this separation carries hz or the menu there, and they serve as starting values. */
-    int any = load_from_sd(&c, SD_PATH, 0) || load_from_flash(&c);
+    int any = load_conf(&c, SD_PATH, 0) || load_from_flash(&c);
     /* AND THE GAME'S ON TOP, which may only touch what the game declared as its own. */
-    if (s_game_path[0] && load_from_sd(&c, s_game_path, 1)) any = 1;
+    if (s_game_path[0] && load_conf(&c, s_game_path, 1)) any = 1;
     if (any) uvm2_config_apply(&c);
     return any;
 }

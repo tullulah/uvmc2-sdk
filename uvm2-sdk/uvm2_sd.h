@@ -13,12 +13,29 @@
 
 #include <stdint.h>
 
+/* WHERE THINGS LIVE ON THE CARD. The UVM2's menu does not list names starting with '.', so
+ * settings and romsets go in hidden folders and the card shows the games and nothing else:
+ *
+ *     .conf/   the console's uvm2.cfg, each game's <NAME>.CFG and .NV, the romsets' .loc
+ *     .roms/   the MAME romsets (<set>.zip) and the files that travel with them
+ *
+ * The visible names from before, config/ and roms/, are still READ when the hidden one does
+ * not have the file, so a card set up for an older SDK keeps its settings and its romsets.
+ * They are never written: anything saved goes to .conf/, created on the first save. */
+#define UVM2_SD_CONF      ".conf/"
+#define UVM2_SD_CONF_OLD  "config/"
+#define UVM2_SD_ROMS      ".roms/"
+#define UVM2_SD_ROMS_OLD  "roms/"
+
 /* 0 = no card, or it did not start. Non-zero = ready to read. */
 int uvm2_sd_init(void);
 
 /* Copies <path> (for example "roms/dkong.zip") into dst. Returns the bytes read, or 0.
  * FAT12/16/32 or exFAT, long names, any depth, case-insensitive (FatFs underneath). */
 uint32_t uvm2_sd_read(const char *path, unsigned char *dst, uint32_t max);
+
+/* uvm2_sd_read of a file that lives with the romsets: .roms/<name>, else roms/<name>. */
+uint32_t uvm2_sd_read_rom(const char *name, unsigned char *dst, uint32_t max);
 
 /** Creates a 512-byte text file from up to 512 bytes of content, padded with spaces and a
  *  newline so uvm2_sd_overwrite can rewrite it later. Missing folders are created and an
@@ -106,6 +123,24 @@ typedef struct {
     /* FatFs's DIR, opaque for the same reason as uvm2_sd_file.fil. */
     uint64_t dir[12];
 } uvm2_sd_dir;
+
+/* ── A FILE BY ITS NAME, WHEREVER IT IS ON THE CARD ─────────────────────────────────────
+ *
+ * The romset loader's search (uvm2_romzip.c), for any other file a game carries: a pack of
+ * samples or music, a data file. In this order, and the first that opens wins:
+ *
+ *   1. the path remembered in .conf/<name minus extension>.loc
+ *   2. .roms/<name>   3. roms/<name>   4. <name> at the root
+ *   5. every folder of the card, UVM2_SD_FIND_DEPTH deep, names starting with '.' skipped;
+ *      what is found there is written to the .loc, so the next start goes straight to it.
+ *
+ * Leaves the path in `out` (max bytes, 96 is plenty) and returns 1, or 0 with `out` empty.
+ * `scratch` is the scan's stack, UVM2_SD_FIND_SCRATCH bytes aligned to 8; it is free again
+ * when this returns. Step 5 lists folders, so call it where the card can be read at length:
+ * in setup, not inside a frame. */
+#define UVM2_SD_FIND_DEPTH    6
+#define UVM2_SD_FIND_SCRATCH  (UVM2_SD_FIND_DEPTH * (sizeof(uvm2_sd_dir) + sizeof(int)))
+int uvm2_sd_find(const char *name, char *out, int max, void *scratch);
 
 #define UVM2_SD_DIR_END     0   /* no more entries (or an error: uvm2_sd_error says which) */
 #define UVM2_SD_DIR_FILE    1

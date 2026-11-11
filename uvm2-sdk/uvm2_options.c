@@ -24,8 +24,11 @@
  *     SOUND JACK / VECTREX             UVM2_SETTING_AUDIO  (games with sound on the jack)
  *     REFRESH <game's> / 50 / 60 / MAX always (the game's own rate first: UVM2_HZ)
  *     BRIGHTNESS 100                   always, percent (a gain on every intensity, uvm2_draw.c)
+ *     TURN WITH STICK / BUTTONS        UVM2_SETTING_TURN (games that turn a ship): which of the
+ *                                      game's two layouts (uvm2_config_turn), saved as `turn`
  *     CONTROLS                         always: which console button does each of the game's
- *                                      four (controls_menu, saved as `buttons`)
+ *                                      four (controls_menu, saved as `buttons`), and what the
+ *                                      stick does (uvm2_config_stick)
  *     CALIBRATE                        always (the SDK's calibration screen)
  *     START IN MENU / START IN GAME    always
  *
@@ -42,6 +45,9 @@
  * (mh_jack_init, dk_board_select...), so changing it under a running game would need every
  * port to support switching live.
  */
+/* Boot-only code (runs once, before the game): built for size, not speed. Every byte of
+ * text here is SRAM the game cannot use, and aztarac's image is that tight. */
+#pragma GCC optimize("Os")
 #include <stdint.h>
 #include "uvm2_config.h"
 #include "uvm2_draw.h"
@@ -62,8 +68,8 @@ extern volatile uint32_t uvm2_cached_axes;
 #define BRIGHT_LO   50
 #define BRIGHT_HI  200
 
-enum { OPT_PLAY, OPT_SCREEN, OPT_SOUND, OPT_REFRESH, OPT_BRIGHT, OPT_CONTROLS, OPT_CALIBRATE,
-       OPT_START };
+enum { OPT_PLAY, OPT_SCREEN, OPT_SOUND, OPT_REFRESH, OPT_BRIGHT, OPT_TURN, OPT_CONTROLS,
+       OPT_CALIBRATE, OPT_START };
 
 /* ── THE STICK, AS A MENU READS IT ──────────────────────────────────────────────────────
  *
@@ -163,6 +169,7 @@ static const char *label(int opt)
     case OPT_SOUND:     return uvm2_setting_audio ? "SOUND VECTREX" : "SOUND JACK";
     case OPT_REFRESH:   return refresh_label();
     case OPT_BRIGHT:    return bright_label();
+    case OPT_TURN:      return uvm2_setting_turn ? "TURN WITH BUTTONS" : "TURN WITH STICK";
     case OPT_CONTROLS:  return "CONTROLS";
     case OPT_CALIBRATE: return "CALIBRATE";
     default:            return uvm2_setting_menu ? "START IN MENU" : "START IN GAME";
@@ -176,6 +183,7 @@ static int change(int opt, int dir)
     case OPT_SCREEN:  uvm2_setting_rotate = !uvm2_setting_rotate; return 1;
     case OPT_SOUND:   uvm2_setting_audio  = !uvm2_setting_audio;  return 1;
     case OPT_START:   uvm2_setting_menu   = !uvm2_setting_menu;   return 1;
+    case OPT_TURN:    uvm2_setting_turn   = !uvm2_setting_turn;   return 1;
     case OPT_REFRESH:
         uvm2_setting_hz = refresh_step(dir);
         return 1;
@@ -196,19 +204,32 @@ static int change(int opt, int dir)
  *     FIRE         BUTTON 2
  *     TURRET L     BUTTON 1      the game's names (uvm2_config_buttons), then the
  *     ...                        physical button that does it
+ *     TURN         STICK L R     what the stick does (uvm2_config_stick), READ-ONLY: the
+ *     COIN START   STICK DOWN    map swaps buttons, not the stick. Without these lines no
+ *                                game said where the coin was.
  *     DEFAULTS
  *     BACK
  *
- * Stick up/down picks a line; PRESSING A BUTTON on a game line gives that button to it, and
- * the line that had it gets this line's old one -- a swap, so the four stay four. Any button
- * on DEFAULTS puts them back as wired, on BACK leaves. Every button does the same thing here
- * because every button is what is being assigned. Returns 1 if the map changed. */
-#define C_NAME  (-110)     /* the game's name for the button */
-#define C_PHYS    30       /* "BUTTON n" */
+ * Stick up/down picks a line (the stick's own lines are skipped); PRESSING A BUTTON on a game
+ * line gives that button to it, and the line that had it gets this line's old one -- a swap,
+ * so the four stay four. Any button on DEFAULTS puts them back as wired, on BACK leaves. Every
+ * button does the same thing here because every button is what is being assigned. Returns 1
+ * if the map changed. */
+#define C_NAME  (-110)     /* the game's name for the control */
+#define C_PHYS    20       /* "BUTTON n" / "STICK DOWN": ten letters end at 120 */
+enum { ROW_BUTTON, ROW_STICK, ROW_DEFAULTS, ROW_BACK };
 static int controls_menu(struct nav *nv)
 {
-    const int n = 6;                                  /* 4 buttons, DEFAULTS, BACK */
+    static const char *const stick_phys[3] = { "STICK L R", "STICK UP", "STICK DOWN" };
     const int start = uvm2_setting_buttons;
+    int kind[9], arg[9], n = 0;
+    for (int i = 0; i < 4; i++) { kind[n] = ROW_BUTTON; arg[n++] = i; }
+    for (int i = 0; i < 3; i++)
+        if (uvm2_config_stick_name(i)) { kind[n] = ROW_STICK; arg[n++] = i; }
+    kind[n] = ROW_DEFAULTS; arg[n++] = 0;
+    kind[n] = ROW_BACK;     arg[n++] = 0;
+    /* Nine lines do not fit at the menu's spacing: the prompt would fall off the bottom. */
+    const int row = n > 6 ? 16 : ROW;
     int sel = 0;
     uint8_t before = 0xFF;                            /* the press that opened this */
     char phys[4][9];
@@ -227,14 +248,22 @@ static int controls_menu(struct nav *nv)
         uvm2_draw_intensity(INK);
         text_centred(TOP + 40, "CONTROLS");
         for (int i = 0; i < n; i++) {
-            const int y = TOP - i * ROW;
+            const int y = TOP - i * row;
             if (i == sel) uvm2_print_text(C_NAME - 16, y, ">", TEXT, INK);
-            if (i < 4) {
-                uvm2_print_text(C_NAME, y, uvm2_config_button_name(i), TEXT, INK);
-                uvm2_print_text(C_PHYS, y, phys[i], TEXT, INK);
-            } else uvm2_print_text(C_NAME, y, i == 4 ? "DEFAULTS" : "BACK", TEXT, INK);
+            switch (kind[i]) {
+            case ROW_BUTTON:
+                uvm2_print_text(C_NAME, y, uvm2_config_button_name(arg[i]), TEXT, INK);
+                uvm2_print_text(C_PHYS, y, phys[arg[i]], TEXT, INK);
+                break;
+            case ROW_STICK:
+                uvm2_print_text(C_NAME, y, uvm2_config_stick_name(arg[i]), TEXT, INK);
+                uvm2_print_text(C_PHYS, y, stick_phys[arg[i]], TEXT, INK);
+                break;
+            default:
+                uvm2_print_text(C_NAME, y, kind[i] == ROW_DEFAULTS ? "DEFAULTS" : "BACK", TEXT, INK);
+            }
         }
-        text_centred(TOP - n * ROW - 14, sel < 4 ? "PRESS ITS BUTTON" : "ANY BUTTON");
+        text_centred(TOP - n * row - 14, kind[sel] == ROW_BUTTON ? "PRESS ITS BUTTON" : "ANY BUTTON");
         uvm2_frame_end();
 
         const uint8_t b = (uint8_t)(~uvm2_cached_buttons & 0x0F);
@@ -242,19 +271,20 @@ static int controls_menu(struct nav *nv)
         before = b;
         int sx, sy;
         if (!nav_read(nv, &sx, &sy)) continue;
-        if (sy) sel = (sel + n + sy) % n;
+        if (sy) do sel = (sel + n + sy) % n; while (kind[sel] == ROW_STICK);
         if (!pressed) continue;
-        if (sel == 5) break;
-        if (sel == 4) { uvm2_buttons_set(1234); continue; }
+        if (kind[sel] == ROW_BACK) break;
+        if (kind[sel] == ROW_DEFAULTS) { uvm2_buttons_set(1234); continue; }
         /* The lowest button pressed is the one given; whoever had it takes this line's. */
+        const int line = arg[sel];
         int phys_b = 0;
         while (!(pressed & (1u << phys_b))) phys_b++;
         int digits[4];
         int32_t m2 = uvm2_setting_buttons;
         for (int i = 3; i >= 0; i--) { digits[i] = (int)(m2 % 10); m2 /= 10; }
         for (int i = 0; i < 4; i++)
-            if (digits[i] == phys_b + 1) digits[i] = digits[sel];
-        digits[sel] = phys_b + 1;
+            if (digits[i] == phys_b + 1) digits[i] = digits[line];
+        digits[line] = phys_b + 1;
         uvm2_buttons_set(digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3]);
     }
     return uvm2_setting_buttons != start;
@@ -269,6 +299,7 @@ int uvm2_options_menu(void)
     if (mine & UVM2_SETTING_AUDIO)  opts[n++] = OPT_SOUND;
     opts[n++] = OPT_REFRESH;
     opts[n++] = OPT_BRIGHT;
+    if (mine & UVM2_SETTING_TURN)    opts[n++] = OPT_TURN;
     if (mine & UVM2_SETTING_BUTTONS) opts[n++] = OPT_CONTROLS;
     opts[n++] = OPT_CALIBRATE;
     opts[n++] = OPT_START;

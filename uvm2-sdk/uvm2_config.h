@@ -111,6 +111,11 @@ struct uvm2_config {
      * game reads its buttons (uvm2_svc.c), so the SDK's own screens keep the physical ones.
      * Appended like the others: 0, from a file without it, is 1234. UVMC2 only. */
     int32_t buttons;
+    /* WHAT TURNS THE SHIP, per game: 0 the stick, 1 buttons 1 and 2 (the arcade cabinets of
+     * Asteroids and its kin turned with two buttons, and players who know them asked for it).
+     * The SDK only stores it; the game reads uvm2_setting_turn and maps its controls. Appended
+     * like the others: 0, from a file without it, is the stick. */
+    int32_t turn;
 };
 extern volatile int32_t uvm2_setting_hz, uvm2_setting_menu, uvm2_setting_rotate;
 /* The refresh the game was built for (UVM2_HZ; 50 when that is 0 or unset): what
@@ -140,6 +145,9 @@ enum {
     /* The button map (uvm2_setting_buttons), and the OPTIONS screen's CONTROLS line that
      * edits it. Declared by OPTIONS. */
     UVM2_SETTING_BUTTONS = 64u,
+    /* TURN WITH STICK / BUTTONS (uvm2_setting_turn), a line on the OPTIONS screen. Only for a
+     * game that can turn both ways and says so; it names both layouts (uvm2_config_turn). */
+    UVM2_SETTING_TURN = 128u,
 };
 /* Brightness gain in percent, 100 = exactly what the game asks for. */
 extern volatile int32_t uvm2_setting_bright;
@@ -160,7 +168,31 @@ extern volatile int32_t uvm2_setting_buttons;
 int     uvm2_buttons_set(int32_t map);
 uint8_t uvm2_buttons_remap(uint8_t pressed);
 void    uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4);
-const char *uvm2_config_button_name(int i);   /* i = 0..3 */
+const char *uvm2_config_button_name(int i);   /* i = 0..3, in the layout uvm2_setting_turn picks */
+
+/* ── THE STICK ON THE CONTROLS SCREEN, AND THE SECOND LAYOUT ─────────────────────────────
+ *
+ * The CONTROLS screen listed the four buttons and nothing else, so no game said where the
+ * coin was. uvm2_config_stick() names what the stick does -- side to side, up, down -- and
+ * the screen shows those lines under the buttons, read-only (the map only swaps buttons):
+ *
+ *     uvm2_config_stick("TURN", "THRUST", "COIN START");
+ *
+ * Any of the three may be 0: that line is not shown.
+ *
+ * A game that declares UVM2_SETTING_TURN also names its OTHER layout, the one used while
+ * uvm2_setting_turn is 1 -- its four buttons and its stick:
+ *
+ *     uvm2_config_turn("TURN LEFT", "TURN RIGHT", "THRUST", "FIRE",
+ *                      0, "HYPERSPACE", "COIN START");
+ *
+ * Call both from uvm2_game_settings. Defined from v1.4.15 on: `#ifdef UVM2_HAS_TURN`. */
+#define UVM2_HAS_TURN 1
+extern volatile int32_t uvm2_setting_turn;
+void uvm2_config_stick(const char *sideways, const char *up, const char *down);
+void uvm2_config_turn(const char *b1, const char *b2, const char *b3, const char *b4,
+                      const char *sideways, const char *up, const char *down);
+const char *uvm2_config_stick_name(int i);    /* i = 0 sideways, 1 up, 2 down; 0 = none */
 
 /** Declares the game's name (8.3, no extension: "MHAVOC") and which of its own settings it
  *  uses. Call it BEFORE uvm2_config_load. Its settings go in `config/<NAME>.CFG`, layered on
