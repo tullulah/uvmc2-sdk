@@ -237,6 +237,10 @@ void uvm2_runtime_init(void)
     /* And the calibration wizard if buttons 2+3 are held, as main() does on the C path. It
      * was missing here for a day, so VPy games could not open it at all. */
     uvm2_config_boot_combo();
+    /* And the game's OPTIONS screen with the Vectrex Studio card, if it declared one
+     * (UVM2_SETTING_OPTIONS in uvm2_game_settings), as main() does on the C path. Missing
+     * here, no VPy game could have the card and the menu every C game has (2026-11-17). */
+    uvm2_options_boot();
 #  endif
 #endif
 }
