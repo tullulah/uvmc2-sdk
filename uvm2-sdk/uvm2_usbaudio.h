@@ -35,6 +35,14 @@ void uvm2_usbaudio_write_lr(const int16_t *l, const int16_t *r, int n);   /* UVM
 int  uvm2_usbaudio_space(void);              /* samples to write now to stay ahead */
 int  uvm2_usbaudio_playing(void);            /* 1 while a device takes the sound */
 
+/* THE VOLUME, which the headphones' own buttons move (their HID interface: volume up / down,
+ * mute), applied here to the samples in 3 dB steps: 0 silent .. 16 full, 12 to start. Read it
+ * to show it; set it to restore a saved one. Negative from _volume = muted (-1 - the level). */
+int      uvm2_usbaudio_volume(void);
+void     uvm2_usbaudio_set_volume(int v);
+/* the headphones' buttons held now: bit 0 volume up, 1 volume down, 2 play/pause, 3 mute */
+uint32_t uvm2_usbaudio_buttons(void);
+
 /* WHAT IT SEES, for a game or a test to put on the screen:
  *   0 off   1 waiting for a device   2 enumerating   3 playing   4 a device it cannot play to
  *   (not audio, no playback endpoint, a format it does not do)   5 a transfer failed */

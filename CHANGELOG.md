@@ -3,6 +3,20 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.16 — the headphones' own volume buttons
+
+* New: the buttons on USB headphones work. Their HID interface is read alongside the sound (an
+  interrupt endpoint the controller polls by itself), its report descriptor parsed for the
+  Consumer page's volume up, volume down, mute and play/pause, as single bits or as array
+  values. Volume up and down move the volume in 3 dB steps, 0 silent to 16 full, starting at 12
+  (-12 dB); mute toggles. Applied to the samples on the cartridge, so it works the same on
+  headphones without a volume control of their own. Measured with Apple's USB-C EarPods: up,
+  down and the middle button each read, the volume follows.
+* New: `uvm2_usbaudio_volume()` / `uvm2_usbaudio_set_volume(v)` and `uvm2_usbaudio_buttons()`
+  (bit 0 up, 1 down, 2 play/pause, 3 mute, held now), for a game that wants to show the
+  volume or use the play button. `uvm2_usbaudio_report()` adds the volume and the buttons.
+* Not saved yet: each launch starts at 12. Nothing to change in a game; rebuild it.
+
 ## v1.4.15 — the game's sound out of USB headphones
 
 * New: USB headphones on the cartridge's USB-C (`uvm2_usbaudio.c`). The cartridge is the USB

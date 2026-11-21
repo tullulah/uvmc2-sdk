@@ -52,6 +52,7 @@ enum { ST_OFF, ST_WAIT, ST_ENUM, ST_PLAY, ST_CANT, ST_FAIL };
 #define ADDR        1u                  /* the one device's address */
 #define EPX_OFF     0x180u              /* EPX's buffer in the DPRAM (control transfers) */
 #define ISO_OFF     0x200u              /* the stream's buffer: 64-byte aligned, up to 1023 */
+#define HID_OFF     0x600u              /* the buttons' reports (past the stream's 1023) */
 #define SETTLE_US   100000u             /* attach to first request: USB 2.0 §7.1.7.3 */
 #define XFER_US     50000u              /* one control transfer, at most */
 #define SIE_BASE    (USB_SIE_CTRL_SOF_EN_BITS | USB_SIE_CTRL_KEEP_ALIVE_EN_BITS | \
@@ -81,6 +82,20 @@ static volatile uint32_t s_packets, s_under, s_irqs;
 static uint32_t s_t_sec, s_last_p, s_last_u, s_pps, s_ups;   /* per second, for the report */
 
 static int s_err_step;                  /* which request failed, for the report */
+
+/* ── the headphones' buttons (their HID interface) and the volume they move ── */
+enum { BTN_VOLUP, BTN_VOLDN, BTN_PLAY, BTN_MUTE, NBTN };
+static const uint16_t BTN_USAGE[NBTN] = { 0xE9, 0xEA, 0xCD, 0xE2 };   /* HID Consumer page */
+static int s_hid_if, s_hid_ep, s_hid_mps, s_hid_ival, s_hid_rlen, s_hid_ids, s_hid_pid;
+static uint8_t s_rdesc[256];
+static int16_t s_bit_id[NBTN], s_bit_at[NBTN];  /* a button as one bit of an input report, -1 none */
+static int s_arr_id = -1, s_arr_at, s_arr_size, s_arr_count, s_arr_lmin, s_arr_n;
+static uint16_t s_arr_usage[16];        /* a button as a value of an array field: its usages */
+static volatile uint32_t s_buttons, s_hid_reports;
+#define VOL_STEPS   16                  /* 3 dB each: 16 is full, 0 is silent */
+#define VOL_DEFAULT 12                  /* -12 dB: the EarPods at full are loud in a quiet room */
+static volatile int s_vol = VOL_DEFAULT, s_mute;
+static int32_t s_gain_q15;              /* what fill_packet multiplies by */
 
 /* ════════════════════════════════════════ the controller */
 
@@ -196,12 +211,14 @@ static int parse(const uint8_t *d, int len)
     int best = -1;
     int term_id[8], term_clock[8], nterm = 0, first_clock = -1;
     s_uac = 0;
+    s_hid_if = -1; s_hid_ep = 0; s_hid_rlen = 0;
     for (int i = 0; i + 2 <= len && d[i] >= 2; i += d[i]) {
         const uint8_t *x = d + i;
         const int at_end = i + d[i] + 1 >= len || d[i + d[i] + 1] == 4;   /* next is an interface */
         if (x[1] == 4 && x[0] >= 9) {                                   /* INTERFACE */
             ifn = x[2]; alt = x[3]; cls = x[5]; sub = x[6];
             if (cls == 1 && sub == 1) { s_ac_if = ifn; s_uac = x[7] == 0x20 ? 2 : 1; }
+            if (cls == 3 && s_hid_if < 0) s_hid_if = ifn;           /* HID: the buttons */
             link = -1; ch = 0; subslot = 0; bits = 0; ep = 0; mps = 0; sync = 0; nr = 0;
         } else if (x[1] == 0x24 && cls == 1 && sub == 1) {              /* AudioControl */
             if (x[2] == 0x0A && x[0] >= 4 && first_clock < 0) first_clock = x[3];       /* UAC2 clock source */
@@ -222,6 +239,10 @@ static int parse(const uint8_t *d, int len)
                         rates[nr++] = x[8 + 3 * k] | x[9 + 3 * k] << 8 | (uint32_t)x[10 + 3 * k] << 16;
                 }
             }
+        } else if (x[1] == 0x21 && cls == 3 && ifn == s_hid_if && x[0] >= 9) {   /* HID descriptor */
+            if (x[6] == 0x22) s_hid_rlen = x[7] | x[8] << 8;                 /* its report descriptor */
+        } else if (x[1] == 5 && x[0] >= 7 && cls == 3 && ifn == s_hid_if && (x[3] & 3) == 3 && (x[2] & 0x80)) {
+            if (!s_hid_ep) { s_hid_ep = x[2]; s_hid_mps = x[4] > 64 ? 64 : x[4]; s_hid_ival = x[6]; }
         } else if (x[1] == 5 && x[0] >= 7 && cls == 1 && sub == 2) {   /* ENDPOINT */
             if ((x[3] & 3) == 1 && !(x[2] & 0x80)) { ep = x[2]; mps = x[4] | (x[5] & 7) << 8; sync = (x[3] >> 2) & 3; }
         }
@@ -289,8 +310,8 @@ static void __not_in_flash_func(fill_packet)(void)
         } else {
             s_under++;
         }
-        int16_t v[2] = { l, rr };
-        if (s_ch == 1) v[0] = (int16_t)((l + rr) / 2);
+        int16_t v[2] = { (int16_t)((l * s_gain_q15) >> 15), (int16_t)((rr * s_gain_q15) >> 15) };
+        if (s_ch == 1) v[0] = (int16_t)((v[0] + v[1]) / 2);
         for (int c = 0; c < s_ch; c++) {
             for (int z = 2; z < s_sub; z++) *p++ = 0;                  /* 24/32-bit: zeros below */
             *p++ = (uint8_t)v[c];
@@ -308,6 +329,57 @@ static void __not_in_flash_func(fill_packet)(void)
     s_packets++;
 }
 
+static void set_gain(void)
+{
+    int32_t g = 32767;                                  /* full, then -3 dB a step: x 1/sqrt(2) */
+    for (int v = VOL_STEPS; v > s_vol; v--) g = (g * 23170) >> 15;
+    s_gain_q15 = (s_mute || s_vol <= 0) ? 0 : g;
+}
+
+static uint32_t bits(const uint8_t *d, int n, int at, int size)
+{
+    uint32_t v = 0;
+    for (int k = 0; k < size && k < 32; k++) {
+        const int b = at + k;
+        if (b >> 3 >= n) break;
+        v |= (uint32_t)(d[b >> 3] >> (b & 7) & 1u) << k;
+    }
+    return v;
+}
+
+/* one input report: which buttons are down; a button going down moves the volume */
+static void __not_in_flash_func(hid_report)(const uint8_t *r, int n)
+{
+    int id = 0;
+    if (s_hid_ids && n > 0) { id = r[0]; r++; n--; }
+    uint32_t down = 0;
+    for (int k = 0; k < NBTN; k++)
+        if (s_bit_at[k] >= 0 && s_bit_id[k] == id && bits(r, n, s_bit_at[k], 1)) down |= 1u << k;
+    if (s_arr_id == id && s_arr_size > 0)
+        for (int c = 0; c < s_arr_count; c++) {
+            const int v = (int)bits(r, n, s_arr_at + c * s_arr_size, s_arr_size) - s_arr_lmin;
+            if (v < 0 || v >= s_arr_n) continue;
+            for (int k = 0; k < NBTN; k++) if (s_arr_usage[v] == BTN_USAGE[k]) down |= 1u << k;
+        }
+    const uint32_t pressed = down & ~s_buttons;
+    if (pressed & (1u << BTN_VOLUP) && s_vol < VOL_STEPS) { s_vol++; s_mute = 0; }
+    if (pressed & (1u << BTN_VOLDN) && s_vol > 0) s_vol--;
+    if (pressed & (1u << BTN_MUTE)) s_mute = !s_mute;
+    if (pressed) set_gain();
+    s_buttons = down;
+    s_hid_reports++;
+}
+
+/* the buttons' endpoint: interrupt IN on the controller's interrupt endpoint 1, which polls it
+   by itself every bInterval ms (isochronous was what did not work there, not this) */
+static void __not_in_flash_func(hid_arm)(void)
+{
+    const uint32_t bc = (uint32_t)s_hid_mps | USB_BUF_CTRL_LAST |
+                        (s_hid_pid ? USB_BUF_CTRL_DATA1_PID : USB_BUF_CTRL_DATA0_PID);
+    usbh_dpram->int_ep_buffer_ctrl[0].ctrl = bc;
+    usbh_dpram->int_ep_buffer_ctrl[0].ctrl = bc | USB_BUF_CTRL_AVAIL;
+}
+
 static void __not_in_flash_func(usb_irq)(void)
 {
     const uint32_t bs = usb_hw->buf_status;
@@ -317,6 +389,85 @@ static void __not_in_flash_func(usb_irq)(void)
                                USB_SIE_STATUS_DATA_SEQ_ERROR_BITS | USB_SIE_STATUS_NAK_REC_BITS |
                                USB_SIE_STATUS_ACK_REC_BITS;
     if (bs & 1u) fill_packet();                        /* EPX's packet went: the next one */
+    if (bs & 0x0Cu) {                                  /* interrupt endpoint 1: a button report */
+        const int n = (int)(usbh_dpram->int_ep_buffer_ctrl[0].ctrl & USB_BUF_CTRL_LEN_MASK);
+        uint8_t r[64];
+        const volatile uint8_t *src = (volatile uint8_t *)usbh_dpram + HID_OFF;
+        for (int i = 0; i < n && i < 64; i++) r[i] = src[i];
+        s_hid_pid ^= 1;
+        hid_report(r, n < 64 ? n : 64);
+        hid_arm();
+    }
+}
+
+static void hid_start(void)
+{
+    if (s_hid_if < 0 || !s_hid_ep) return;
+    usbh_dpram->int_ep_ctrl[0].ctrl = EP_CTRL_ENABLE_BITS | EP_CTRL_INTERRUPT_PER_BUFFER |
+                                      (3u << EP_CTRL_BUFFER_TYPE_LSB) | HID_OFF |      /* 3 = interrupt */
+                                      (uint32_t)(s_hid_ival > 1 ? s_hid_ival - 1 : 0) << EP_CTRL_HOST_INTERRUPT_INTERVAL_LSB;
+    usb_hw->int_ep_addr_ctrl[0] = ADDR | (uint32_t)(s_hid_ep & 0x0F) << USB_ADDR_ENDP1_ENDPOINT_LSB;   /* IN */
+    s_hid_pid = 0;
+    hid_arm();
+    usb_hw_set->int_ep_ctrl = 1u << 1;
+}
+
+/* the report descriptor: where the Consumer page's volume, play and mute usages land in an
+   input report, as single bits (a Variable field) or as values of an Array field */
+static void parse_report(const uint8_t *d, int len)
+{
+    int page = 0, rsize = 0, rcount = 0, rid = 0, lmin = 0, nu = 0, umin = -1, umax = -1;
+    uint16_t usage[16];
+    int ids[8], offs[8], nid = 0;
+    for (int k = 0; k < NBTN; k++) { s_bit_id[k] = 0; s_bit_at[k] = -1; }
+    s_arr_id = -1; s_hid_ids = 0;
+    for (int i = 0; i < len; ) {
+        const uint8_t b = d[i];
+        if (b == 0xFE) { i += 3 + (i + 1 < len ? d[i + 1] : 0); continue; }      /* a long item */
+        int sz = b & 3; if (sz == 3) sz = 4;
+        const int type = (b >> 2) & 3, tag = b >> 4;
+        uint32_t v = 0;
+        for (int k = 0; k < sz && i + 1 + k < len; k++) v |= (uint32_t)d[i + 1 + k] << (8 * k);
+        int32_t sv = (int32_t)v;
+        if (sz == 1 && (v & 0x80)) sv = (int32_t)v - 0x100;
+        if (sz == 2 && (v & 0x8000)) sv = (int32_t)v - 0x10000;
+        i += 1 + sz;
+        if (type == 1) {                                         /* global */
+            if (tag == 0) page = (int)v;
+            else if (tag == 1) lmin = sv;
+            else if (tag == 7) rsize = (int)v;
+            else if (tag == 8) { rid = (int)v; s_hid_ids = 1; }
+            else if (tag == 9) rcount = (int)v;
+        } else if (type == 2) {                                  /* local */
+            if (tag == 0 && nu < 16) usage[nu++] = (uint16_t)v;
+            else if (tag == 1) umin = (int)v;
+            else if (tag == 2) umax = (int)v;
+        } else if (type == 0) {                                  /* main */
+            if (tag == 8) {                                      /* Input */
+                int slot = -1;
+                for (int k = 0; k < nid; k++) if (ids[k] == rid) slot = k;
+                if (slot < 0 && nid < 8) { slot = nid++; ids[slot] = rid; offs[slot] = 0; }
+                const int at = slot >= 0 ? offs[slot] : 0;
+                if (page == 0x0C && !(v & 1)) {                  /* Consumer, data (not constant) */
+                    if (v & 2) {                                 /* Variable: a bit a usage */
+                        for (int j = 0; j < rcount; j++) {
+                            const int u = j < nu ? usage[j] : umin >= 0 ? umin + j : nu ? usage[nu - 1] : 0;
+                            for (int k = 0; k < NBTN; k++)
+                                if (u == BTN_USAGE[k] && rsize == 1) { s_bit_id[k] = (int16_t)rid; s_bit_at[k] = (int16_t)(at + j); }
+                        }
+                    } else if (s_arr_id < 0) {                   /* Array: values name usages */
+                        s_arr_id = rid; s_arr_at = at; s_arr_size = rsize; s_arr_count = rcount; s_arr_lmin = lmin;
+                        s_arr_n = 0;
+                        if (nu) for (int j = 0; j < nu && s_arr_n < 16; j++) s_arr_usage[s_arr_n++] = usage[j];
+                        else if (umin >= 0) for (int u = umin; u <= umax && s_arr_n < 16; u++) s_arr_usage[s_arr_n++] = (uint16_t)u;
+                    }
+                }
+                if (slot >= 0) offs[slot] += rsize * rcount;
+            }
+            nu = 0; umin = umax = -1;                            /* locals end with the main item */
+        }
+    }
+    (void)umax;
 }
 
 /* THE STREAM GOES THROUGH EPX, not an interrupt endpoint. Interrupt endpoint 1 set to
@@ -342,6 +493,8 @@ static void stream_start(void)
 static void stream_stop(void)
 {
     irq_set_enabled(USBCTRL_IRQ, false);
+    usb_hw_clear->int_ep_ctrl = 1u << 1;
+    usbh_dpram->int_ep_ctrl[0].ctrl = 0;
     usb_hw->inte = 0;
     usb_hw->sie_ctrl = SIE_BASE;
     usbh_dpram->epx_ctrl = 0;
@@ -375,8 +528,17 @@ static void enumerate(void)
     if (ctrl(ADDR, 0x01, 11, (uint16_t)s_as_alt, (uint16_t)s_as_if, 0, 0) < 0) goto fail;   /* SET_INTERFACE */
     s_err_step = 8;
     if (set_rate()) { s_state = ST_CANT; return; }
+    /* the buttons: not having them is no reason not to play */
+    if (s_hid_if >= 0 && s_hid_ep && s_hid_rlen) {
+        int n = s_hid_rlen < (int)sizeof s_rdesc ? s_hid_rlen : (int)sizeof s_rdesc;
+        n = ctrl(ADDR, 0x81, 6, 0x2200, (uint16_t)s_hid_if, s_rdesc, (uint16_t)n);   /* report descriptor */
+        if (n > 0) parse_report(s_rdesc, n); else s_hid_ep = 0;
+        ctrl(ADDR, 0x21, 0x0A, 0, (uint16_t)s_hid_if, 0, 0);       /* SET_IDLE 0: report on change */
+    }
     s_err_step = 0;
+    set_gain();
     stream_start();
+    hid_start();
     s_state = ST_PLAY;
     return;
 fail:
@@ -459,6 +621,9 @@ int uvm2_usbaudio_space(void)
 }
 
 int uvm2_usbaudio_playing(void) { return s_state == ST_PLAY; }
+int uvm2_usbaudio_volume(void) { return s_mute ? -s_vol - 1 : s_vol; }
+void uvm2_usbaudio_set_volume(int v) { s_vol = v < 0 ? 0 : v > VOL_STEPS ? VOL_STEPS : v; s_mute = 0; set_gain(); }
+uint32_t uvm2_usbaudio_buttons(void) { return s_buttons; }
 int uvm2_usbaudio_state(void) { return s_state; }
 
 static char *put(char *q, const char *s) { while (*s) *q++ = *s++; return q; }
@@ -483,6 +648,9 @@ const char *uvm2_usbaudio_report(void)
         q = put(q, " U"); q = num(q, s_under);
         q = put(q, " PS"); q = num(q, s_pps);         /* packets a second: 1000 */
         q = put(q, " US"); q = num(q, s_ups);         /* of them, empty: 0 */
+        q = put(q, " VOL"); q = num(q, (uint32_t)s_vol); if (s_mute) q = put(q, "M");
+        if (s_hid_ep) { q = put(q, " BTN"); q = num(q, s_buttons); q = put(q, " R"); q = num(q, s_hid_reports); }
+        else q = put(q, " NO BTN");
     }
     *q = 0;
     return b;
@@ -495,6 +663,9 @@ void uvm2_usbaudio_poll(void) { }
 void uvm2_usbaudio_write_lr(const int16_t *l, const int16_t *r, int n) { (void)l; (void)r; (void)n; }
 int  uvm2_usbaudio_space(void) { return 0; }
 int  uvm2_usbaudio_playing(void) { return 0; }
+int  uvm2_usbaudio_volume(void) { return 0; }
+void uvm2_usbaudio_set_volume(int v) { (void)v; }
+uint32_t uvm2_usbaudio_buttons(void) { return 0; }
 int  uvm2_usbaudio_state(void) { return 0; }
 const char *uvm2_usbaudio_report(void) { return "USB OFF"; }
 #endif
