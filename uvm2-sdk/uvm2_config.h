@@ -167,8 +167,9 @@ extern volatile int32_t uvm2_setting_bright;
 
 /* ── THE BUTTON MAP ─────────────────────────────────────────────────────────────────────
  *
- * uvm2_setting_buttons is the four digits (1234 = as wired). uvm2_buttons_set() takes a new
- * map and returns 0, changing nothing, if it is not the four buttons each once.
+ * uvm2_setting_buttons is the four digits (1234 = as wired), or six with the stick's up and
+ * down (below). uvm2_buttons_set() takes a new map and returns 0, changing nothing, if it is
+ * not four or six inputs each once.
  * uvm2_buttons_remap() turns what the console reads (1 = pressed, controller 1 in bits 0-3)
  * into what the game should see; controller 2's bits pass through.
  *
@@ -182,6 +183,33 @@ int     uvm2_buttons_set(int32_t map);
 uint8_t uvm2_buttons_remap(uint8_t pressed);
 void    uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4);
 const char *uvm2_config_button_name(int i);   /* i = 0..3, in the layout uvm2_setting_turn picks */
+
+/* ── THE STICK'S UP AND DOWN IN THE MAP TOO (v1.4.17 on) ────────────────────────────────
+ *
+ * A game that names what its stick's up and down do (uvm2_config_stick / uvm2_config_turn: a
+ * hyperspace, a coin) gets them in the map as two more entries: SIX, the four buttons and the
+ * two stick ACTIONS, any of them on any of the console's four buttons, stick up or stick down.
+ * Asked for by a player whose controllers (Victor's) want hyperspace on the stick DOWN. The
+ * stick's sideways movement, and any analog use of it, are never mapped.
+ *
+ * uvm2_setting_buttons keeps four digits while the stick's are as wired (1234 = everything as
+ * wired, so old files and old SDKs read it), and six once they move: digit i is the physical
+ * input of the game's entry i, 1-4 the buttons, 5 the stick up, 6 the stick down (123465 =
+ * up and down swapped).
+ *
+ * uvm2_pad_actions() is the game's six as they are pressed now, the map applied: bits 0-3 its
+ * buttons (what SYS_READ_BUTTONS gives it too), bit 4 its stick-up action, bit 5 its
+ * stick-down action. The physical stick counts as UP above UVM2_STICK_UP, and as DOWN pushed
+ * fully (UVM2_STICK_DOWN) until it comes back above UVM2_STICK_REARM: the thresholds the
+ * turning ports used, so nothing changes in feel and a turn cannot drop in a coin. */
+#define UVM2_HAS_STICK_MAP 1
+#define UVM2_STICK_UP      40
+#define UVM2_STICK_DOWN  (-100)
+#define UVM2_STICK_REARM  (-40)
+enum { UVM2_ACT_UP = 0x10u, UVM2_ACT_DOWN = 0x20u };
+uint8_t uvm2_pad_actions(void);
+uint8_t uvm2_pad_remap(uint8_t physical);    /* six bits as the console has them -> the game's */
+int     uvm2_buttons_phys(int i);            /* entry i's physical input: 0-3 buttons, 4 up, 5 down */
 
 /* ── THE STICK ON THE CONTROLS SCREEN, AND THE SECOND LAYOUT ─────────────────────────────
  *

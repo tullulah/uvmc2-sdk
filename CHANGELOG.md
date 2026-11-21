@@ -24,6 +24,17 @@ Brings in the `color-sync` work (until now only on one machine, installed there 
   turn with the stick or with two buttons (Asteroids and its kin) offers both on the OPTIONS
   screen and names the other layout; `uvm2_config_stick` names what the stick does on the
   CONTROLS screen. `#ifdef UVM2_HAS_TURN`.
+* New: the stick's up and down are in the button map. A game that names what they do
+  (`uvm2_config_stick` / `uvm2_config_turn`: a hyperspace, a coin) gets them on the CONTROLS
+  screen as two more lines, and any of its six -- four buttons, stick up, stick down -- can go
+  on any of the console's buttons or the stick's up or down: a button pressed on a line gives
+  it that button, the stick left/right steps it through the inputs it may have, and the line
+  that had it gets the old one. Asked for by a player whose controllers (Victor's) want
+  hyperspace on the stick down. Saved in the game's `buttons` as six digits once the stick's
+  move (four while they are as wired, which older files and SDKs read). `uvm2_pad_actions()`
+  gives the game its six (bit 4 the up action, bit 5 the down action) with the same thresholds
+  the turning ports used, down with its hysteresis; the sideways stick is never mapped.
+  `#ifdef UVM2_HAS_STICK_MAP`. The AAE turning ports read it in `aae_pad.h`.
 * New: the USB headphones' volume is kept. It is the console's setting (`usb_volume` in its
   config, appended after `turn`), saved 2 s after the buttons stop moving it, from the game's
   loop and never from the interrupt; each launch starts where it was left. Mute is not kept.

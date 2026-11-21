@@ -206,50 +206,66 @@ static int change(int opt, int dir)
     }
 }
 
-/* ── CONTROLS: THE GAME'S FOUR BUTTONS, AND WHICH ONE OF THE CONSOLE'S DOES EACH ──────────
+/* ── CONTROLS: THE GAME'S BUTTONS AND STICK ACTIONS, AND WHICH OF THE CONSOLE'S DOES EACH ─
  *
  *     FIRE         BUTTON 2
  *     TURRET L     BUTTON 1      the game's names (uvm2_config_buttons), then the
- *     ...                        physical button that does it
- *     TURN         STICK L R     what the stick does (uvm2_config_stick), READ-ONLY: the
- *     COIN START   STICK DOWN    map swaps buttons, not the stick. Without these lines no
- *                                game said where the coin was.
+ *     ...                        physical input that does it
+ *     TURN         STICK L R     the stick's sideways (uvm2_config_stick): READ-ONLY
+ *     HYPERSPACE   STICK UP      the stick's up and down ACTIONS, when the game names them:
+ *     COIN START   STICK DOWN    in the map like the buttons (v1.4.17, uvm2_config.h)
  *     DEFAULTS
  *     BACK
  *
- * Stick up/down picks a line (the stick's own lines are skipped); PRESSING A BUTTON on a game
- * line gives that button to it, and the line that had it gets this line's old one -- a swap,
- * so the four stay four. Any button on DEFAULTS puts them back as wired, on BACK leaves. Every
- * button does the same thing here because every button is what is being assigned. Returns 1
- * if the map changed. */
+ * Stick up/down picks a line (the sideways one is skipped). On a game line, PRESSING A BUTTON
+ * gives that button to it, and STICK LEFT / RIGHT steps it through the inputs it can have --
+ * the four buttons, and the stick up and down when the game has those actions (asked for:
+ * hyperspace on the stick down, for Victor's controllers). Either way the line that had that
+ * input gets this line's old one: a swap, so every action keeps an input. Any button on
+ * DEFAULTS puts them back as wired, on BACK leaves. Returns 1 if the map changed. */
 #define C_NAME  (-110)     /* the game's name for the control */
 #define C_PHYS    20       /* "BUTTON n" / "STICK DOWN": ten letters end at 120 */
-enum { ROW_BUTTON, ROW_STICK, ROW_DEFAULTS, ROW_BACK };
+enum { ROW_ENTRY, ROW_STICK, ROW_DEFAULTS, ROW_BACK };
+
+static const char *entry_name(int e)
+{
+    return e < 4 ? uvm2_config_button_name(e) : uvm2_config_stick_name(e - 3);   /* 4 up, 5 down */
+}
+
+static const char *phys_name(int p)
+{
+    static const char *const n[6] = { "BUTTON 1", "BUTTON 2", "BUTTON 3", "BUTTON 4", "STICK UP", "STICK DOWN" };
+    return p >= 0 && p < 6 ? n[p] : "";
+}
+
+/* entry e gets physical input p; whoever had p gets e's old one */
+static void give(int e, int p)
+{
+    int phys[6];
+    for (int i = 0; i < 6; i++) phys[i] = uvm2_buttons_phys(i);
+    for (int i = 0; i < 6; i++) if (i != e && phys[i] == p) phys[i] = phys[e];
+    phys[e] = p;
+    int32_t m = 0;
+    for (int i = 0; i < 6; i++) m = m * 10 + phys[i] + 1;
+    uvm2_buttons_set(m);
+}
+
 static int controls_menu(struct nav *nv)
 {
-    static const char *const stick_phys[3] = { "STICK L R", "STICK UP", "STICK DOWN" };
     const int start = uvm2_setting_buttons;
+    const int has_up = uvm2_config_stick_name(1) != 0, has_down = uvm2_config_stick_name(2) != 0;
     int kind[9], arg[9], n = 0;
-    for (int i = 0; i < 4; i++) { kind[n] = ROW_BUTTON; arg[n++] = i; }
-    for (int i = 0; i < 3; i++)
-        if (uvm2_config_stick_name(i)) { kind[n] = ROW_STICK; arg[n++] = i; }
+    for (int i = 0; i < 4; i++) { kind[n] = ROW_ENTRY; arg[n++] = i; }
+    if (uvm2_config_stick_name(0)) { kind[n] = ROW_STICK; arg[n++] = 0; }
+    if (has_up)   { kind[n] = ROW_ENTRY; arg[n++] = 4; }
+    if (has_down) { kind[n] = ROW_ENTRY; arg[n++] = 5; }
     kind[n] = ROW_DEFAULTS; arg[n++] = 0;
     kind[n] = ROW_BACK;     arg[n++] = 0;
     /* Nine lines do not fit at the menu's spacing: the prompt would fall off the bottom. */
     const int row = n > 6 ? 16 : ROW;
     int sel = 0;
     uint8_t before = 0xFF;                            /* the press that opened this */
-    char phys[4][9];
     for (;;) {
-        int32_t m = uvm2_setting_buttons;
-        for (int i = 3; i >= 0; i--) {
-            const char *t = "BUTTON ";
-            int p = 0;
-            while (*t) phys[i][p++] = *t++;
-            phys[i][p++] = (char)('0' + m % 10);
-            phys[i][p] = 0;
-            m /= 10;
-        }
         uvm2_draw_rotate((int)uvm2_setting_rotate);
         uvm2_frame_begin();
         uvm2_draw_intensity(INK);
@@ -258,19 +274,19 @@ static int controls_menu(struct nav *nv)
             const int y = TOP - i * row;
             if (i == sel) uvm2_print_text(C_NAME - 16, y, ">", TEXT, INK);
             switch (kind[i]) {
-            case ROW_BUTTON:
-                uvm2_print_text(C_NAME, y, uvm2_config_button_name(arg[i]), TEXT, INK);
-                uvm2_print_text(C_PHYS, y, phys[arg[i]], TEXT, INK);
+            case ROW_ENTRY:
+                uvm2_print_text(C_NAME, y, entry_name(arg[i]), TEXT, INK);
+                uvm2_print_text(C_PHYS, y, phys_name(uvm2_buttons_phys(arg[i])), TEXT, INK);
                 break;
             case ROW_STICK:
-                uvm2_print_text(C_NAME, y, uvm2_config_stick_name(arg[i]), TEXT, INK);
-                uvm2_print_text(C_PHYS, y, stick_phys[arg[i]], TEXT, INK);
+                uvm2_print_text(C_NAME, y, uvm2_config_stick_name(0), TEXT, INK);
+                uvm2_print_text(C_PHYS, y, "STICK L R", TEXT, INK);
                 break;
             default:
                 uvm2_print_text(C_NAME, y, kind[i] == ROW_DEFAULTS ? "DEFAULTS" : "BACK", TEXT, INK);
             }
         }
-        text_centred(TOP - n * row - 14, kind[sel] == ROW_BUTTON ? "PRESS ITS BUTTON" : "ANY BUTTON");
+        text_centred(TOP - n * row - 14, kind[sel] == ROW_ENTRY ? "BUTTON OR STICK SIDEWAYS" : "ANY BUTTON");
         uvm2_frame_end();
 
         const uint8_t b = (uint8_t)(~uvm2_cached_buttons & 0x0F);
@@ -279,20 +295,21 @@ static int controls_menu(struct nav *nv)
         int sx, sy;
         if (!nav_read(nv, &sx, &sy)) continue;
         if (sy) do sel = (sel + n + sy) % n; while (kind[sel] == ROW_STICK);
+        if (kind[sel] == ROW_ENTRY && sx) {
+            /* the next input this line may have, round the ones there are */
+            const int e = arg[sel];
+            int p = uvm2_buttons_phys(e);
+            do p = (p + 6 + sx) % 6; while ((p == 4 && !has_up) || (p == 5 && !has_down));
+            give(e, p);
+            continue;
+        }
         if (!pressed) continue;
         if (kind[sel] == ROW_BACK) break;
         if (kind[sel] == ROW_DEFAULTS) { uvm2_buttons_set(1234); continue; }
         /* The lowest button pressed is the one given; whoever had it takes this line's. */
-        const int line = arg[sel];
         int phys_b = 0;
         while (!(pressed & (1u << phys_b))) phys_b++;
-        int digits[4];
-        int32_t m2 = uvm2_setting_buttons;
-        for (int i = 3; i >= 0; i--) { digits[i] = (int)(m2 % 10); m2 /= 10; }
-        for (int i = 0; i < 4; i++)
-            if (digits[i] == phys_b + 1) digits[i] = digits[line];
-        digits[line] = phys_b + 1;
-        uvm2_buttons_set(digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3]);
+        give(arg[sel], phys_b);
     }
     return uvm2_setting_buttons != start;
 }

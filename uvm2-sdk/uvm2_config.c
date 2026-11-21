@@ -97,7 +97,8 @@ volatile int32_t uvm2_screen_win_x = SCREEN_WIN_DEFAULT, uvm2_screen_win_y = SCR
 
 /* ── THE BUTTON MAP (see uvm2_config.h) ──────────────────────────────────────────────── */
 volatile int32_t uvm2_setting_buttons = 1234;
-static uint8_t   s_btn_phys[4] = { 0, 1, 2, 3 };   /* the game's button i is physical bit [i] */
+/* The game's entry i is physical input [i]: 0-3 the buttons, 4 the stick up, 5 the stick down. */
+static uint8_t   s_btn_phys[6] = { 0, 1, 2, 3, 4, 5 };
 static uint8_t   s_btn_identity = 1;
 static const char *s_btn_name[4];
 volatile int32_t uvm2_setting_turn = 0;
@@ -108,29 +109,43 @@ static const char *s_stick_name[3];
 
 int uvm2_buttons_set(int32_t map)
 {
-    uint8_t phys[4], seen = 0;
+    uint8_t phys[6] = { 0, 1, 2, 3, 4, 5 }, seen = 0;
+    const int n = map >= 100000 ? 6 : 4;              /* four digits, or six with the stick's */
     int32_t v = map;
-    for (int i = 3; i >= 0; i--) {                    /* the last digit is the game's button 4 */
+    for (int i = n - 1; i >= 0; i--) {                /* the last digit is the game's last entry */
         const int d = (int)(v % 10);
         v /= 10;
-        if (d < 1 || d > 4 || (seen & (1u << (d - 1)))) return 0;
+        if (d < 1 || d > n || (seen & (1u << (d - 1)))) return 0;
         seen |= (uint8_t)(1u << (d - 1));
         phys[i] = (uint8_t)(d - 1);
     }
-    if (v != 0) return 0;                             /* more than four digits */
-    for (int i = 0; i < 4; i++) s_btn_phys[i] = phys[i];
-    s_btn_identity = map == 1234;
-    uvm2_setting_buttons = map;
+    if (v != 0) return 0;                             /* more digits than that */
+    int id = 1;
+    for (int i = 0; i < 6; i++) { s_btn_phys[i] = phys[i]; id &= phys[i] == i; }
+    s_btn_identity = (uint8_t)id;
+    /* stored as four digits while the stick's two are as wired: what old files and SDKs read */
+    uvm2_setting_buttons = (phys[4] == 4 && phys[5] == 5)
+        ? (phys[0] + 1) * 1000 + (phys[1] + 1) * 100 + (phys[2] + 1) * 10 + (phys[3] + 1)
+        : map;
     return 1;
 }
 
+int uvm2_buttons_phys(int i) { return i >= 0 && i < 6 ? s_btn_phys[i] : i; }
+
+uint8_t uvm2_pad_remap(uint8_t physical)
+{
+    if (s_btn_identity) return (uint8_t)(physical & 0x3Fu);
+    uint8_t out = 0;
+    for (int i = 0; i < 6; i++)
+        if (physical & (1u << s_btn_phys[i])) out |= (uint8_t)(1u << i);
+    return out;
+}
+
+/* The four buttons alone (no stick: who calls this has only the buttons); controller 2 as it is. */
 uint8_t uvm2_buttons_remap(uint8_t pressed)
 {
     if (s_btn_identity) return pressed;
-    uint8_t out = (uint8_t)(pressed & 0xF0u);         /* controller 2 as it is */
-    for (int i = 0; i < 4; i++)
-        if (pressed & (1u << s_btn_phys[i])) out |= (uint8_t)(1u << i);
-    return out;
+    return (uint8_t)((pressed & 0xF0u) | (uvm2_pad_remap((uint8_t)(pressed & 0x0Fu)) & 0x0Fu));
 }
 
 void uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4)

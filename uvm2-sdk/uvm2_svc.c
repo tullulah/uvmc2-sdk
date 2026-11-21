@@ -106,6 +106,31 @@ void uvm2_psg_queue(uint32_t reg, uint32_t value);
 #  define UVM2_AXES     s_axes
 #  define UVM2_PSG(r,v) uvm2_psg_write((r), (v))
 #endif
+
+/* THE CONSOLE'S SIX AS THE MAP SEES THEM: the four buttons (1 = pressed), the stick up (bit 4)
+ * and the stick down (bit 5), read from the same cache as the buttons. Down has a hysteresis
+ * (pushed fully, released back above UVM2_STICK_REARM): a turn that sags must not drop a coin,
+ * which is how the turning ports read it before the stick was in the map. Stateful, but only
+ * in the stick's own position, so asking twice in a frame gives the same answer. */
+static uint8_t physical_six(void)
+{
+    static uint8_t s_down;
+    const int8_t y = (int8_t)(UVM2_AXES >> 16);
+    if (y <= UVM2_STICK_DOWN) s_down = 1;
+    else if (y > UVM2_STICK_REARM) s_down = 0;
+    return (uint8_t)((~UVM2_BUTTONS & 0x0Fu) | (y > UVM2_STICK_UP ? 0x10u : 0u) | (s_down ? 0x20u : 0u));
+}
+
+/* What the game's own buttons read as: its four from the six (a stick action given to one of
+ * its buttons is that button), controller 2 as it is. */
+static uint8_t game_buttons(void)
+{
+    const uint8_t raw = (uint8_t)~UVM2_BUTTONS;
+    return (uint8_t)((raw & 0xF0u) | (uvm2_pad_remap(physical_six()) & 0x0Fu));
+}
+
+/* The game's six now (uvm2_config.h): a C game calls it directly, between frames. */
+uint8_t uvm2_pad_actions(void) { return uvm2_pad_remap(physical_six()); }
 /* Leftover Vectrex time not yet handed to the sequencer, in bus cycles. */
 static uint32_t s_audio_acc;
 
@@ -503,11 +528,11 @@ void uvm2_svc_dispatch(uint32_t *frame)
      * here and only here, so the SDK's screens, which read uvm2_cached_buttons, keep the
      * console's own. */
     case SYS_READ_BUTTONS:
-        frame[0] = (uint32_t)uvm2_buttons_remap((uint8_t)~UVM2_BUTTONS);
+        frame[0] = (uint32_t)game_buttons();
         break;
 
     case SYS_READ_BTN_RAW: {
-        uint8_t  b  = (uint8_t)~uvm2_buttons_remap((uint8_t)~UVM2_BUTTONS);
+        uint8_t  b  = (uint8_t)~game_buttons();
         uint32_t j1 = (uint32_t)(((b & 0x0Fu) << 4) | 0x0Fu);
         uint32_t j2 = (uint32_t)(((b >> 4) & 0x0Fu) | 0xF0u);
         frame[0] = (j1 << 8) | j2;
