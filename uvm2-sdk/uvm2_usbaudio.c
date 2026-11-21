@@ -95,6 +95,13 @@ static volatile uint32_t s_buttons, s_hid_reports;
 #define VOL_STEPS   16                  /* 3 dB each: 16 is full, 0 is silent */
 #define VOL_DEFAULT 12                  /* -12 dB: the EarPods at full are loud in a quiet room */
 static volatile int s_vol = VOL_DEFAULT, s_mute;
+static volatile uint32_t s_vol_t;       /* when the buttons last moved it */
+static int s_vol_saved = -1;            /* what was last written to the config */
+#define VOL_SAVE_US 2000000u            /* saved once it has stayed put this long */
+/* THE SAVED VOLUME (uvm2_config.c, the console's config). Weak, for a build without the config
+   (the debug board's): there the level simply starts at VOL_DEFAULT every time. */
+__attribute__((weak)) volatile int32_t uvm2_setting_usb_volume = -1;
+__attribute__((weak)) int uvm2_config_save(void);
 static int32_t s_gain_q15;              /* what fill_packet multiplies by */
 
 /* ════════════════════════════════════════ the controller */
@@ -365,7 +372,7 @@ static void __not_in_flash_func(hid_report)(const uint8_t *r, int n)
     if (pressed & (1u << BTN_VOLUP) && s_vol < VOL_STEPS) { s_vol++; s_mute = 0; }
     if (pressed & (1u << BTN_VOLDN) && s_vol > 0) s_vol--;
     if (pressed & (1u << BTN_MUTE)) s_mute = !s_mute;
-    if (pressed) set_gain();
+    if (pressed) { set_gain(); s_vol_t = time_us_32(); }
     s_buttons = down;
     s_hid_reports++;
 }
@@ -568,6 +575,8 @@ void uvm2_usbaudio_start(void)
     s_started = 1;
     usb_clock();
     host_up();
+    if (uvm2_setting_usb_volume >= 0 && uvm2_setting_usb_volume <= VOL_STEPS) s_vol = (int)uvm2_setting_usb_volume;
+    s_vol_saved = s_vol;
 #ifdef UVM2_DUAL_CORE
     volatile uint32_t *shpr2 = (volatile uint32_t *)0xE000ED1Cu;      /* SCB SHPR2: SVCall in 31:24 */
     *shpr2 = (*shpr2 & 0x00FFFFFFu) | SVC_PRIO << 24;
@@ -580,6 +589,13 @@ void uvm2_usbaudio_poll(void)
 {
     if (!s_started) return;
     const int sp = speed();
+    /* the volume the buttons moved, saved from here (the game's core, between frames) and never
+       from the interrupt: once it has stayed put a while, so a run of presses is one write */
+    if (s_vol != s_vol_saved && time_us_32() - s_vol_t >= VOL_SAVE_US) {
+        s_vol_saved = s_vol;
+        uvm2_setting_usb_volume = s_vol;
+        if (uvm2_config_save) uvm2_config_save();
+    }
     if (time_us_32() - s_t_sec >= 1000000u) {          /* packets and empty packets a second */
         s_t_sec = time_us_32();
         s_pps = s_packets - s_last_p; s_last_p = s_packets;
@@ -622,7 +638,7 @@ int uvm2_usbaudio_space(void)
 
 int uvm2_usbaudio_playing(void) { return s_state == ST_PLAY; }
 int uvm2_usbaudio_volume(void) { return s_mute ? -s_vol - 1 : s_vol; }
-void uvm2_usbaudio_set_volume(int v) { s_vol = v < 0 ? 0 : v > VOL_STEPS ? VOL_STEPS : v; s_mute = 0; set_gain(); }
+void uvm2_usbaudio_set_volume(int v) { s_vol = v < 0 ? 0 : v > VOL_STEPS ? VOL_STEPS : v; s_mute = 0; set_gain(); s_vol_saved = s_vol; }
 uint32_t uvm2_usbaudio_buttons(void) { return s_buttons; }
 int uvm2_usbaudio_state(void) { return s_state; }
 

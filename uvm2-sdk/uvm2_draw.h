@@ -159,6 +159,34 @@ unsigned uvm2_current_refresh(void);
 /** 1 if the last frame fit inside the period (or if the refresh is free-running). */
 int      uvm2_refresh_fits(void);
 
+/* COLOUR, IN STEP WITH THE LIST (SYS_SET_COLOR, svc #31; colour builds of VPy).
+ *
+ * The Vectrex draws in white; a colour cartridge, a colour LCD frame over the screen or a
+ * colour vector monitor (UVMC2 Elite) needs to know which commands of the list draw in which
+ * colour. The list is replayed later and elsewhere (core 1, the PIO and the DMA), so setting
+ * a colour "now" says nothing about the bus: the colour has to travel WITH the list.
+ *
+ * It travels BESIDE it, not in it: one table per list buffer, "from command `cmd` on, colour
+ * `rgb`" (0xRRGGBB; 0 = no colour, plain white). The replay is not touched — the executor,
+ * the PIO program and the DMA do not know colours exist. Whoever needs them (the IDE's
+ * emulator today, the colour hardware tomorrow) reads `uvm2_color_exec`: the table of the
+ * list `uvm2_exec` is about to replay, published right before each call, NULL when that
+ * list has no colour. A colour still set when a frame opens is carried into it as a mark at
+ * command 0, so every table stands on its own. */
+/* Table entries per list. A game that changes colour often (the Sega G80 ports change it
+ * almost per vector) raises it; each entry is 8 bytes of SRAM per list buffer. A change past
+ * the end is lost (uvm2_color_dropped counts them) and its strokes keep the previous colour. */
+#ifndef UVM2_COLOR_MARKS
+#define UVM2_COLOR_MARKS 64u
+#endif
+struct uvm2_color_mark  { uint32_t cmd; uint32_t rgb; };
+struct uvm2_color_marks { uint32_t n; struct uvm2_color_mark m[UVM2_COLOR_MARKS]; };
+void uvm2_draw_color(uint32_t rgb);
+extern const struct uvm2_color_marks *volatile uvm2_color_exec;
+const struct uvm2_color_marks *uvm2_frame_colors(uint32_t frame);
+/* Colour changes lost because a frame had more than UVM2_COLOR_MARKS of them. */
+extern uint32_t uvm2_color_dropped;
+
 /* Frame boundary.  uvm2_frame_end() blanks, re-centres, replays the stream and
  * then pads the frame out to exactly 30000 bus cycles (50 Hz), locked to the
  * Vectrex clock rather than to any RP2350 timer. */

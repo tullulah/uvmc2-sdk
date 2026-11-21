@@ -579,6 +579,21 @@ uint32_t uvm2_sd_read(const char *path, unsigned char *dst, uint32_t max)
     return read_at(&f, dst, len, 0);
 }
 
+uint32_t uvm2_sd_read_rom(const char *name, unsigned char *dst, uint32_t max)
+{
+    static const char *const dirs[2] = { UVM2_SD_ROMS, UVM2_SD_ROMS_OLD };
+    char path[96];
+    for (int d = 0; d < 2; d++) {
+        int n = 0;
+        for (const char *s = dirs[d]; *s; ) path[n++] = *s++;
+        for (const char *s = name; *s && n < (int)sizeof path - 1; ) path[n++] = *s++;
+        path[n] = 0;
+        const uint32_t got = uvm2_sd_read(path, dst, max);
+        if (got) return got;
+    }
+    return 0;
+}
+
 /* The config files' sector: the text, padded with spaces and a closing newline so the file
  * stays readable on a PC and drags nothing along from what was there before. */
 static void pad_sector(unsigned char *b, const unsigned char *data, uint32_t n)

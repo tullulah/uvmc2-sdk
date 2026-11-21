@@ -66,6 +66,10 @@ enum {
      * it, so a VPy game's CALIBRATE() means the same on both. 30 and not 26: 26 is
      * RASTER_TEXT here, and for one day (2026-10-02) the BIOS gave CALIBRATE that same number. */
     SYS_CALIBRATE     = 30,
+    /* (r0: 0xRRGGBB, 0 = no colour) — colour builds of VPy: from the next command on, the
+     * drawing is in this colour. It goes into the list's colour table (uvm2_draw.h), never
+     * onto the bus: the console itself draws white whatever is asked here. */
+    SYS_SET_COLOR     = 31,
     SYS_MOVE_Q4       = 28,   /* (r0:dx, r1:dy) in 1/16 of a unit: VPy in subunits */
     SYS_DRAW_DELTA_Q4 = 29,   /* (r0:dx, r1:dy) in 1/16 of a unit, lit */
 };
@@ -369,8 +373,13 @@ void uvm2_svc_dispatch(uint32_t *frame)
     case SYS_MOVE:
     case SYS_DRAW_DELTA:
     case SYS_MOVE_ABS:
+    case SYS_SET_COLOR:
         break;
 #else
+    case SYS_SET_COLOR:
+        uvm2_draw_color(r0);
+        break;
+
     case SYS_SET_INTENSITY:
         uvm2_draw_intensity((int)r0);
         break;

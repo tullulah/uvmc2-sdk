@@ -39,7 +39,30 @@ typedef struct {
     int16_t x0, y0, x1, y1;
     uint8_t br;    /* 0..127; bit 7 = re-zero the beam before this stroke */
     uint8_t pri;   /* shed order: 0 goes first, 255 is kept */
+#ifdef VPY_COLOR
+    uint8_t col;   /* the stroke's colour: an entry of the frame's palette (s_pal) */
+#endif
 } vpy_stroke_t;
+
+/* COLOUR (-DVPY_COLOR; VPy's SET_COLOR in colour builds, vpy_set_color for a C game).
+ *
+ * The Vectrex draws white; colour hardware does not -- the Vector Elite's RGB guns, a colour LCD
+ * over the screen, the IDE's colour mode. Strokes only reach the beam in vpy_flush, in this
+ * buffer's order and some of them shed, so the colour current when a stroke is pushed is kept
+ * WITH it: one byte, an entry of a small palette the frame builds as it goes (a game has a
+ * handful of colours). vpy_flush hands each stroke's colour over right before the stroke, through
+ * whichever the platform has -- uvm2_vb_color on the Vector Elite, uvm2_draw_color on the UVMC2
+ * (the SDK keeps it beside its command list), v_setColour in the IDE's simulator -- and goes back
+ * to white after the frame. All three are weak: a platform with none draws white, as before.
+ * Without VPY_COLOR the stroke has no colour byte and vpy_set_color does nothing. */
+#ifdef VPY_COLOR
+#ifndef VPY_COLOR_PAL
+#define VPY_COLOR_PAL 32
+#endif
+static uint32_t s_pal[VPY_COLOR_PAL] = { 0 };   /* entry 0 = no colour (white) */
+static unsigned s_npal = 1, s_col;
+static uint32_t s_pal_full;                       /* colours past the palette: drawn white */
+#endif
 
 static vpy_stroke_t     s_sb[VPY_SB_MAX];
 static int              s_raster_row;   /* DRAW_RASTER's rows this frame: see vpy_fill_rows */
@@ -95,6 +118,36 @@ static void sb_push_dev(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int br)
     t->br = (uint8_t)br | (s_zero_next ? 0x80 : 0);
     s_zero_next = 0;
     t->pri = s_pri;
+#ifdef VPY_COLOR
+    t->col = (uint8_t)s_col;
+#endif
+}
+
+#ifdef VPY_COLOR
+void uvm2_vb_color(int r, int g, int b) __attribute__((weak));   /* the Vector Elite */
+void uvm2_draw_color(uint32_t rgb) __attribute__((weak));        /* the UVMC2 SDK's table */
+void v_setColour(uint32_t rgb) __attribute__((weak));            /* pitrex-sim (the IDE) */
+static void color_emit(uint32_t rgb)
+{
+    if (uvm2_vb_color) uvm2_vb_color((int)((rgb >> 16) & 255), (int)((rgb >> 8) & 255), (int)(rgb & 255));
+    else if (uvm2_draw_color) uvm2_draw_color(rgb);
+    else if (v_setColour) v_setColour(rgb);
+}
+#endif
+
+void vpy_set_color(int r, int g, int b)
+{
+#ifdef VPY_COLOR
+    const uint32_t rgb = (uint32_t)(((r < 0 ? 0 : r > 255 ? 255 : r) << 16) |
+                                    ((g < 0 ? 0 : g > 255 ? 255 : g) << 8) |
+                                     (b < 0 ? 0 : b > 255 ? 255 : b));
+    for (unsigned k = 0; k < s_npal; k++) if (s_pal[k] == rgb) { s_col = k; return; }
+    if (s_npal == VPY_COLOR_PAL) { s_pal_full++; s_col = 0; return; }
+    s_pal[s_npal] = rgb;
+    s_col = s_npal++;
+#else
+    (void)r; (void)g; (void)b;
+#endif
 }
 
 /* A stroke already in PiTrex deflection units. The VPy drawing calls work in
@@ -115,13 +168,24 @@ int vpy_get_priority(void) { return (int)s_pri; }
 
 void vpy_flush(void)
 {
+#ifdef VPY_COLOR
+    unsigned last = 0;
+#endif
     for (int i = 0; i < s_nsb; i++) {
         const vpy_stroke_t *t = &s_sb[i];
 #ifdef VPY_RP2350
         if (t->br & 0x80) v_beamNewStroke();
 #endif
+#ifdef VPY_COLOR
+        if (t->col != last) { last = t->col; color_emit(s_pal[last]); }
+#endif
         v_directDraw32(t->x0, t->y0, t->x1, t->y1, t->br & 0x7F);
     }
+#ifdef VPY_COLOR
+    if (last) color_emit(0);                         /* what is drawn outside libvpy: white */
+    /* The palette starts again with the next frame, keeping the colour still set. */
+    { const uint32_t cur = s_pal[s_col]; s_npal = 1; s_col = 0; if (cur) { s_pal[1] = cur; s_npal = 2; s_col = 1; } }
+#endif
     s_stats.strokes = (uint32_t)s_nsb;
     if (s_stats.strokes > s_stats.peak) s_stats.peak = s_stats.strokes;
     s_stats.frames++;

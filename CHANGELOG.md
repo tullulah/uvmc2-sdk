@@ -3,6 +3,32 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.17 — colour with the list, hidden folders on the card, TURN, and the volume kept
+
+Brings in the `color-sync` work (until now only on one machine, installed there as a local
+"v1.4.14.1"), on top of v1.4.16.
+
+* New: colour in step with the command list. Colour builds of VPy call `SYS_SET_COLOR`
+  (svc #31, r0 = 0xRRGGBB) while they build the list, and the colour travels beside it, a
+  table per list buffer ("from command N on, colour RGB"), carried into the next frame. The
+  console still draws white; colour hardware and the IDE's emulator read the table. libvpy:
+  `vpy_set_color` with `-DVPY_COLOR` keeps the colour with each stroke through `vpy_flush`
+  (`VPY_HAS_COLOR`). `UVM2_COLOR_MARKS` (64) can be raised by a game that changes colour
+  almost every vector. The table rewinds with the list, and a colour set back before any
+  command costs no entry.
+* New: the card's settings in `.conf/` and romsets in `.roms/`, hidden from the multicart's
+  menu; the old `config/` and `roms/` are still read, never written. The romset is looked for
+  by name: the place remembered in `.conf/`, `.roms/`, `roms/`, then every folder of the card
+  (remembered once found); `uvm2_sd_find` does the same for any other file a game carries.
+* New: TURN, `uvm2_config_turn` / `uvm2_setting_turn` / `UVM2_SETTING_TURN`: a game that can
+  turn with the stick or with two buttons (Asteroids and its kin) offers both on the OPTIONS
+  screen and names the other layout; `uvm2_config_stick` names what the stick does on the
+  CONTROLS screen. `#ifdef UVM2_HAS_TURN`.
+* New: the USB headphones' volume is kept. It is the console's setting (`usb_volume` in its
+  config, appended after `turn`), saved 2 s after the buttons stop moving it, from the game's
+  loop and never from the interrupt; each launch starts where it was left. Mute is not kept.
+* A game built with the local "v1.4.14.1" gets the same from here, and the USB sound with it.
+
 ## v1.4.16 — the headphones' own volume buttons
 
 * New: the buttons on USB headphones work. Their HID interface is read alongside the sound (an

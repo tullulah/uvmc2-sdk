@@ -23,7 +23,7 @@
 
 int uvm2_game_main(void);          /* the game's own main(), renamed at compile time */
 void uvm2_runtime_init(void);      /* uvm2_svc.c */
-void uvm2_romzip_load(void);       /* uvm2_romzip.c: reads roms/<game>.zip off the SD */
+void uvm2_romzip_load(void);       /* uvm2_romzip.c: finds the romset on the SD and reads it */
 #ifdef UVM2_DUAL_CORE
 void uvm2_core1_start(void);       /* uvm2_core1.c */
 void uvm2_stack_paint(void);       /* uvm2_core1.c: stack0_peak / stack1_peak */

@@ -102,6 +102,40 @@ static uint8_t s_cmds[UVM2_NBUF][UVM2_CMD_CAPACITY * 3u];
 static uint32_t s_count;
 static uint32_t s_buf;                  /* buffer being filled; always 0 single-core */
 
+/* The colour table of each list buffer (see uvm2_draw.h). In SRAM even when the list lives
+ * in PSRAM: 520 bytes per buffer, and whoever reads it reads it once per list. */
+static struct uvm2_color_marks s_colors[UVM2_NBUF];
+static uint32_t s_color_now;            /* the colour SET_COLOR left set, 0 = none */
+const struct uvm2_color_marks *volatile uvm2_color_exec;
+uint32_t uvm2_color_dropped;
+
+/* The table of buffer `b` for the replay, or NULL when nothing in it is coloured. */
+static const struct uvm2_color_marks *colors_of(uint32_t b)
+{
+    return s_colors[b].n ? &s_colors[b] : 0;
+}
+
+/* From the next command on, draw in `rgb`. Consecutive changes with no command between them
+ * keep only the last one. */
+void uvm2_draw_color(uint32_t rgb)
+{
+    rgb &= 0xFFFFFFu;
+    if (rgb == s_color_now) return;
+    s_color_now = rgb;
+    struct uvm2_color_marks *c = &s_colors[s_buf];
+    if (c->n && c->m[c->n - 1u].cmd == s_count) {
+        /* Changed again before any command: the entry takes the new colour, and goes if that is
+         * the colour already in effect before it (a caller that sets two colours a stroke). */
+        const uint32_t before = c->n >= 2u ? c->m[c->n - 2u].rgb : 0u;
+        if (rgb == before) c->n--; else c->m[c->n - 1u].rgb = rgb;
+        return;
+    }
+    if (c->n >= UVM2_COLOR_MARKS) { uvm2_color_dropped++; return; }
+    c->m[c->n].cmd = s_count;
+    c->m[c->n].rgb = rgb;
+    c->n++;
+}
+
 /* OUTSIDE THE #ifdef UVM2_DUAL_CORE: it is used by UNCONDITIONAL code.
  *
  * These used to be inside, next to `s_len[2]`, and with that EVERY single-core target
@@ -128,6 +162,7 @@ static uint32_t s_frame_no = 1;
 
 const uint8_t *uvm2_frame_buffer(uint32_t frame) { return s_cmds[frame & 1u]; }
 uint32_t        uvm2_frame_length(uint32_t frame) { return s_len[frame & 1u]; }
+const struct uvm2_color_marks *uvm2_frame_colors(uint32_t frame) { return colors_of(frame & 1u); }
 #endif
 static uint32_t s_frames;
 /* For uvm2_last_list (single core): the closed frame's length, and whether a frame is open —
@@ -253,9 +288,25 @@ const uint8_t *uvm2_list_buffer(void) { return s_cmds[s_buf]; }
 /* The list back to `count` commands and `cycles` (uvm2_list_commands / uvm2_list_cycles read
  * before): what was drawn since is taken out again. The debug monitor builds its pause sign on
  * top of a frame this way, keeps a copy and leaves the frame as it was (uvm2_monitor.c). */
+/* THE COLOUR TABLE REWINDS WITH THE LIST. Its entries name commands by number, so the ones for
+ * the commands taken out go too; and if the colour still set is not the one in effect at the new
+ * end, it is marked there again, so what is drawn next keeps it. */
+static void color_rewind(uint32_t count)
+{
+    struct uvm2_color_marks *c = &s_colors[s_buf];
+    while (c->n && c->m[c->n - 1u].cmd >= count) c->n--;
+    const uint32_t in_effect = c->n ? c->m[c->n - 1u].rgb : 0u;
+    if (in_effect != s_color_now) {
+        if (c->n >= UVM2_COLOR_MARKS) { uvm2_color_dropped++; return; }
+        c->m[c->n].cmd = count;
+        c->m[c->n].rgb = s_color_now;
+        c->n++;
+    }
+}
+
 void uvm2_list_rewind(uint32_t count, uint32_t cycles)
 {
-    if (count <= s_count) { s_count = count; s_cycles = cycles; }
+    if (count <= s_count) { s_count = count; s_cycles = cycles; color_rewind(count); }
     uvm2_draw_invalidate();
 }
 /* Everything the game drew in this frame out again, back to where uvm2_frame_begin left the
@@ -896,6 +947,7 @@ void uvm2_draw_init(void)
     vx_cart_refresh();         /* this draws before the first frame_begin */
     if (BEAM_VIA_SR) set_z(UVM2_Z_PRIME, UVM2_HOLD_DELAY);   /* s_z_last starts there too */
 
+    uvm2_color_exec = 0;
     uvm2_stats.bus_cycles = uvm2_exec(s_cmds[s_buf], s_count);
     uvm2_stats.commands   = s_count;
     s_count = 0;
@@ -2993,6 +3045,13 @@ void uvm2_frame_begin(void)
     s_frame_open = 1;
     s_count = 0;
     s_cycles = 0;
+    /* The colour table opens with the list; a colour still set is carried in at command 0. */
+    s_colors[s_buf].n = 0;
+    if (s_color_now) {
+        s_colors[s_buf].m[0].cmd = 0;
+        s_colors[s_buf].m[0].rgb = s_color_now;
+        s_colors[s_buf].n = 1;
+    }
     s_limit = UVM2_CMD_CAPACITY - UVM2_CMD_RESERVE;
     s_dropped              = 0;
     s_ramps_clamped        = 0;
@@ -3482,9 +3541,11 @@ void uvm2_frame_end(void)
             if (h != uvm2_sig_emitted) uvm2_sig_copy_bad++;
         }
 #endif
+        uvm2_color_exec = colors_of(s_buf);
         cycles = uvm2_exec(s_stage, s_count);
     }
 #else
+    uvm2_color_exec = colors_of(s_buf);
     cycles = uvm2_exec(s_cmds[s_buf], s_count);
 #endif
 #if defined(UVM2_PIO_STREAM) && !defined(UVM2_HOST)
