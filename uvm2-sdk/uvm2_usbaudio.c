@@ -59,11 +59,16 @@ enum { ST_OFF, ST_WAIT, ST_ENUM, ST_PLAY, ST_CANT, ST_FAIL };
                      USB_SIE_CTRL_PULLDOWN_EN_BITS | USB_SIE_CTRL_EP0_INT_1BUF_BITS)
 
 /* ── the ring ── */
-#define RING_LOG2   11u
-#define RING        (1u << RING_LOG2)
+/* THE RING IS THE JACK'S (uvm2_usbaudio_start). Its own was 8 KB of .bss in every game, and
+ * with v1.4.15 nine AAE ports stopped linking; the jack's DMA ring sits idle with SOUND USB,
+ * since uvm2_jack stops the DAC before it routes here. Back to JACK, the DAC writes the ring
+ * again, but the reader below only takes what uvm2_usbaudio_write_lr wrote (s_w - r), so the
+ * headphones get silence, not the DAC's samples. */
+#define RING        s_ring_words
 #define PREFILL     1024u               /* frames behind the writer when a stream starts: 32 ms,
                                            more than one game frame's burst (640 at 50 Hz) */
-static uint32_t s_ring[RING];           /* L << 16 | R */
+static uint32_t *s_ring;                /* L << 16 | R; the jack's, set by uvm2_usbaudio_start */
+static uint32_t s_ring_words = 1u;
 static volatile uint32_t s_w, s_r;      /* free-running: frames written / read */
 static uint32_t s_frac, s_step;         /* the reader's position between frames, Q16 */
 
@@ -569,9 +574,12 @@ fail:
 #define SVC_PRIO 0xC0u
 #define USB_PRIO 0x40u
 
-void uvm2_usbaudio_start(void)
+void uvm2_usbaudio_start(uint32_t *ring, uint32_t words)
 {
     if (s_started) return;
+    if (!ring || words < 2u * PREFILL || (words & (words - 1u))) return;   /* no ring, no stream */
+    s_ring = ring;
+    s_ring_words = words;
     s_started = 1;
     usb_clock();
     host_up();
@@ -674,7 +682,7 @@ const char *uvm2_usbaudio_report(void)
 
 #else
 /* No USB audio: the host build, a debug build with the monitor on the port, or asked off. */
-void uvm2_usbaudio_start(void) { }
+void uvm2_usbaudio_start(uint32_t *ring, uint32_t words) { (void)ring; (void)words; }
 void uvm2_usbaudio_poll(void) { }
 void uvm2_usbaudio_write_lr(const int16_t *l, const int16_t *r, int n) { (void)l; (void)r; (void)n; }
 int  uvm2_usbaudio_space(void) { return 0; }

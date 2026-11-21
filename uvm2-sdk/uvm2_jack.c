@@ -34,9 +34,10 @@
 #include "uvm2_usbaudio.h"   /* SOUND USB: the same sound out of USB headphones instead */
 #include <stdint.h>
 
-/* SOUND USB on the OPTIONS screen (uvm2_config.c defines it; this weak 0 is for a build without
- * the config, the debug board's). Read once, at init: the DAC or the headphones, never both. */
-__attribute__((weak)) volatile int32_t uvm2_setting_audio_usb = 0;
+/* WHERE THE SOUND GOES IS NOT A SETTING: USB headphones on the cartridge's USB-C take it while
+ * they are plugged in, the jack's DAC the rest of the time (route(), below). The jack has no
+ * detect contact on the UVMC2 (J7: the two outputs and ground, nothing to a GPIO), so "the
+ * headphones are there" is the only thing that can be known, and it is enough. */
 
 /* THE RING IS ONE NUMBER, NOT TWO. The DMA's ring wrap needs a power-of-two buffer,
  * aligned to its own size, and it is told the size in LOG2 OF BYTES. Keeping a word
@@ -112,7 +113,9 @@ static uint32_t s_w;                        /* next word the CPU will write   */
  * second state machine and a second DMA channel, both feeding the same pins. So the second
  * call RESTARTS what the first built (uvm2_jack_set) and answers what it answered. */
 static int      s_inited;
-static int      s_usb;      /* SOUND USB: everything goes to uvm2_usbaudio, the DAC never starts */
+static int      s_usb;      /* headphones playing: everything goes to uvm2_usbaudio, DAC stopped */
+static int      s_dac;      /* the DAC's PIO program and DMA channel are set up (once) */
+static int      s_dac_on;   /* and running */
 
 /* side-set: bit 0 = WS (GPIO44), bit 1 = BCK (GPIO45). Two instructions per bit:
  * BCK low while the data bit changes, BCK high to latch it. 16 bits with WS=0,
@@ -120,17 +123,10 @@ static int      s_usb;      /* SOUND USB: everything goes to uvm2_usbaudio, the 
 static uint16_t s_prog[8];
 static const pio_program_t s_program = { .instructions = s_prog, .length = 8, .origin = -1 };
 
-int uvm2_jack_init(void)
+/* THE DAC, SET UP ONCE AND THEN STARTED AND STOPPED: headphones come and go while the game
+ * runs, and each time the DAC gives way to them or takes over again. */
+static int dac_setup(void)
 {
-    if (s_inited) return uvm2_jack_set(1);
-    s_inited = 1;
-    if (uvm2_setting_audio_usb) {
-        /* SOUND USB: no DAC, the cartridge's USB-C as a host; headphones may come at any time */
-        uvm2_usbaudio_start();
-        s_usb = 1;
-        s_ok = 1;
-        return 1;
-    }
     PIO pio = pio2;
     if (pio_set_gpio_base(pio, 16) != 0) return 0;
     const uint ss = 2;
@@ -196,8 +192,39 @@ int uvm2_jack_init(void)
                           dma_encode_endless_transfer_count(), true);
     pio_sm_set_enabled(pio, (uint)s_sm, true);
     s_w = AHEAD / 2;
-    s_ok = 1;
+    s_dac = 1;
+    s_dac_on = 1;
     return 1;
+}
+
+static int dac_start(void)
+{
+    if (!s_dac) return dac_setup();
+    if (!s_dac_on) {
+        /* What was left in the ring would play again before the new owner's first
+         * write reached it: a fragment of the last sound, out of nowhere. */
+        for (uint32_t i = 0; i < RING_WORDS; i++) s_ring[i] = 0;
+        dma_channel_set_read_addr((uint)s_dma, s_ring, false);
+        dma_channel_set_trans_count((uint)s_dma, dma_encode_endless_transfer_count(), true);
+        pio_sm_set_enabled(pio2, (uint)s_sm, true);
+        s_w = AHEAD / 2;
+        s_dac_on = 1;
+    }
+    return 1;
+}
+
+static void dac_stop(void)
+{
+    if (!s_dac_on) return;
+    pio_sm_set_enabled(pio2, (uint)s_sm, false);
+    dma_channel_abort((uint)s_dma);
+    s_dac_on = 0;
+}
+
+int uvm2_jack_init(void)
+{
+    s_inited = 1;
+    return uvm2_jack_set(1);
 }
 
 static uint32_t read_pos(void)
@@ -205,16 +232,27 @@ static uint32_t read_pos(void)
     return ((uint32_t)dma_hw->ch[s_dma].read_addr - (uint32_t)(uintptr_t)s_ring) / 4u & (RING_WORDS - 1u);
 }
 
+/* The headphones or the DAC, whichever is there. Plugging them in starts their stream inside
+ * uvm2_usbaudio_poll, which clears the shared ring; the DAC is stopped here in the same call,
+ * before the game writes another sample to it. */
+static int route(void)
+{
+    if (uvm2_usbaudio_playing()) {
+        dac_stop();
+        s_usb = 1;
+        return 1;
+    }
+    s_usb = 0;
+    return dac_start();
+}
+
 int uvm2_jack_space(void)
 {
-    if (s_usb) {
-        uvm2_usbaudio_poll();   /* asked once a frame by whoever feeds the jack: attach, detach */
-        if (!s_ok) return 0;
-        /* playing: what keeps its ring ahead; no headphones yet: a frame's worth all the same,
-           so the game's sound keeps its time (and is dropped) until some are plugged in */
-        return uvm2_usbaudio_playing() ? uvm2_usbaudio_space() : UVM2_JACK_RATE / 50;
-    }
+    uvm2_usbaudio_poll();       /* asked once a frame by whoever feeds the jack: attach, detach */
     if (!s_ok) return 0;
+    if (!uvm2_usbaudio_playing() != !s_usb) s_ok = route();
+    if (!s_ok) return 0;
+    if (s_usb) return uvm2_usbaudio_space();
     uint32_t rd = read_pos();
     uint32_t ahead = (s_w - rd) & (RING_WORDS - 1u);
     if (ahead > RING_WORDS - 256u) {                      /* fell behind: re-sync */
@@ -259,27 +297,18 @@ uint32_t uvm2_jack_base(void)    { return pio_get_gpio_base(pio2); }
  * Vectrex's own sound chip). Starting it the first time does the set-up. */
 int uvm2_jack_set(int on)
 {
-    if (s_usb) { s_ok = on ? 1 : 0; return s_ok; }    /* the headphones: nothing to start or stop */
-    if (on) {
-        if (!s_inited) return uvm2_jack_init();
-        if (!s_ok && s_dma >= 0 && s_sm >= 0) {
-            /* What was left in the ring would play again before the new owner's first
-             * write reached it: a fragment of the last sound, out of nowhere. */
-            for (uint32_t i = 0; i < RING_WORDS; i++) s_ring[i] = 0;
-            dma_channel_set_read_addr((uint)s_dma, s_ring, false);
-            dma_channel_set_trans_count((uint)s_dma, dma_encode_endless_transfer_count(), true);
-            pio_sm_set_enabled(pio2, (uint)s_sm, true);
-            s_w = AHEAD / 2;
-            s_ok = 1;
-        }
-        return s_ok;
-    }
-    if (s_ok) {
-        pio_sm_set_enabled(pio2, (uint)s_sm, false);
-        dma_channel_abort((uint)s_dma);
+    if (!on) {
+        dac_stop();                 /* the headphones: nothing to stop, the writes just end */
         s_ok = 0;
+        return 0;
     }
-    return 0;
+    s_inited = 1;
+    /* The cartridge's USB-C as a host from the first sound on, waiting for headphones; their
+     * stream borrows the DAC's ring while they play (the DAC is stopped then). Once: later
+     * calls return at once. */
+    uvm2_usbaudio_start(s_ring, RING_WORDS);
+    s_ok = route();
+    return s_ok;
 }
 
 #else

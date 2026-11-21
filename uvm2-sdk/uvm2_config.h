@@ -129,12 +129,10 @@ int uvm2_config_native_hz(void);
  * board has no jack and the choice does not exist there. Whoever reads it fences itself off
  * with its own UVM2-only guard. */
 extern volatile int32_t uvm2_setting_audio;
-/* AND WHERE THE CARTRIDGE'S SOUND GOES when uvm2_setting_audio is 0: 0 the jack's DAC, 1 USB
- * headphones on the cartridge's USB-C (uvm2_usbaudio.c), never both. The OPTIONS screen's
- * SOUND line shows the two as one: JACK, VECTREX, USB. Kept apart so that every game that
- * already asks `uvm2_setting_audio == 0` ("sound out of the cartridge") keeps working: they
- * start the jack driver as always, and the driver sends it where this says. Saved in the same
- * config field: audio 0 jack, 1 Vectrex, 2 USB. */
+/* NO LONGER READ (v1.4.18): the cartridge's sound goes to USB headphones whenever they are
+ * plugged into the cartridge's USB-C, and to the jack otherwise (uvm2_jack.c), so there is no
+ * SOUND USB to choose. Kept so that code written for v1.4.15-17 still links; a config saved
+ * with audio 2 (USB) reads as the jack. */
 extern volatile int32_t uvm2_setting_audio_usb;
 /* The headphones' volume as last saved, 0..16; -1 never saved (uvm2_usbaudio.c starts at 12). */
 extern volatile int32_t uvm2_setting_usb_volume;

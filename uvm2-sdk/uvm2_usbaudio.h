@@ -13,10 +13,11 @@
  * (16-bit stereo if it has one, else 24-bit), sets the sample rate, and streams one packet a
  * millisecond as isochronous transactions on the controller's EPX.
  *
- * IT SITS UNDER uvm2_jack, chosen on the OPTIONS screen (SOUND USB, uvm2_setting_audio_usb):
- * then whatever a game writes to the jack (uvm2_jack_write/_lr, which the VPy jukebox calls)
- * comes here instead of the DAC, resampled from UVM2_JACK_RATE to the device's rate. A game
- * does not call any of this; uvm2_jack does. Headphones can come and go at any time.
+ * IT SITS UNDER uvm2_jack, and nothing chooses it: the port is a host from the jack's first
+ * sound on, and while headphones are plugged in and playing, whatever a game writes to the
+ * jack (uvm2_jack_write/_lr, which the VPy jukebox calls) comes here instead of the DAC,
+ * resampled from UVM2_JACK_RATE to the device's rate. Unplugged, the DAC takes over again. A
+ * game does not call any of this; uvm2_jack does.
  *
  * Not with UVM2_USB_MONITOR (the debug monitor owns the same port, as a device).
  */
@@ -29,7 +30,10 @@
 extern "C" {
 #endif
 
-void uvm2_usbaudio_start(void);              /* the port as a host, waiting for a device */
+/* The port as a host, waiting for a device. `ring` is the jack's DMA ring (`words`, a power of
+ * two, at least 2048): with SOUND USB the DAC never starts, so the stream borrows its memory
+ * instead of keeping 8 KB of its own in every game's SRAM. */
+void uvm2_usbaudio_start(uint32_t *ring, uint32_t words);
 void uvm2_usbaudio_poll(void);               /* once a frame: attach, enumerate, detach */
 void uvm2_usbaudio_write_lr(const int16_t *l, const int16_t *r, int n);   /* UVM2_JACK_RATE */
 int  uvm2_usbaudio_space(void);              /* samples to write now to stay ahead */

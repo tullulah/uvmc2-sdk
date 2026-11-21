@@ -3,6 +3,30 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.18 — USB headphones take the sound by themselves, and 8 KB back
+
+* Changed: no more SOUND USB. USB headphones plugged into the cartridge's USB-C take the
+  jack's sound by themselves while they play, and the jack's DAC takes it back when they are
+  unplugged, at any time, from the game or its menus. The OPTIONS screen's SOUND line is
+  `JACK / VECTREX` again, and only in the games that declare `UVM2_SETTING_AUDIO` (those with
+  a Vectrex version of their sound). Every game that sounds out of the jack gets the
+  headphones with no change, including the ones that never had a SOUND line. The jack itself
+  cannot be detected: on the UVMC2 its socket has no detect contact wired to anything.
+* Fixed: a SOUND change on the OPTIONS screen only took effect on the next launch, because
+  the Vectrex Studio card had already started the jack for its jingle. Moot now, and the jack
+  driver starts and stops its DAC whenever the route changes (`uvm2_jack.c`: `route()`).
+* Changed: the USB stream has no ring of its own: it borrows the jack's DMA ring, idle while
+  the headphones play (`uvm2_usbaudio_start(ring, words)`). v1.4.15-17 kept 8 KB of `.bss` for
+  it in every game, and up to 8 KB more of padding in front of the jack's aligned ring: nine
+  AAE ports stopped linking. Boxing Bugs and TomCat fit again; the others are still over (see
+  the v1.4.16 entry: the Rust crate and core 1's loop moved to SRAM).
+* Kept: `uvm2_setting_audio_usb` still exists so that code written for v1.4.15-17 links, but
+  nothing reads it. A config saved with SOUND USB (`audio` 2) reads as the jack, in the game
+  and in the calibration wizard, whose AUDIO line is `JACK / CONSOLE` again.
+* Since the host now starts with the jack in every game that uses it, SVCall goes below the
+  USB interrupt in all of them (only under `UVM2_DUAL_CORE`, as in v1.4.15). `UVM2_NO_USB_AUDIO`
+  still leaves it all out.
+
 ## v1.4.17 — colour with the list, hidden folders on the card, TURN, and the volume kept
 
 Brings in the `color-sync` work (until now only on one machine, installed there as a local

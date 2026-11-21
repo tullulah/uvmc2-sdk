@@ -255,7 +255,7 @@ struct field { const char *name; int32_t *value; int32_t min, max, step;
 static const char *const LBL_ONOFF[] = { "OFF", "ON" };
 /* JACK first because 0 is the jack: a config file written before this setting existed brings
  * a zero, and on the UVMC2 the jack is what it was already doing. See uvm2_config.h. */
-static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE", "USB" };   /* the config's audio: 0, 1, 2 */
+static const char *const LBL_AUDIO[] = { "JACK", "CONSOLE" };   /* the config's audio: 0, 1 (USB headphones need no setting) */
 /* WHICH FIGURE. Not stored: it points at a local below, so it behaves like every other
  * field and saves nothing. What you calibrate against is a choice made at the screen, not a
  * property of the console. */
@@ -366,8 +366,10 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
          * existed, and the field table is what was missing — so a game could declare it and
          * the player still had no way to change it. The SDK does not route anything here: it
          * moves the value, and the game that declared it reads uvm2_setting_audio and decides
-         * what that means. */
-        if (mine & UVM2_SETTING_AUDIO)  fields[n++] = (struct field){ "AUDIO",  &c.audio,      0, 2, 1, LBL_AUDIO };
+         * what that means. A 2 is SOUND USB from v1.4.15-17, gone: the jack, and never an index
+         * past LBL_AUDIO's end. */
+        if (c.audio < 0 || c.audio > 1) c.audio = 0;
+        if (mine & UVM2_SETTING_AUDIO)  fields[n++] = (struct field){ "AUDIO",  &c.audio,      0, 1, 1, LBL_AUDIO };
     }
     int sel = 0, saved = 0;
     /* THE STICK'S REST POSITION IS NOT ZERO, AND ASSUMING IT WAS BROKE THIS SCREEN.

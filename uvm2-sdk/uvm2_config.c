@@ -85,7 +85,7 @@ static const struct { const char *n; uint16_t off; unsigned bit; } FIELDS[] = {
 volatile int32_t uvm2_setting_hz = UVM2_HZ_NATIVE, uvm2_setting_menu = 1, uvm2_setting_rotate = 0;
 int uvm2_config_native_hz(void) { return UVM2_HZ_NATIVE; }
 volatile int32_t uvm2_setting_audio = 0;   /* 0 = the jack, which is what it already did */
-volatile int32_t uvm2_setting_audio_usb = 0;   /* with audio 0: 1 = USB headphones instead of the jack */
+volatile int32_t uvm2_setting_audio_usb = 0;   /* unused since v1.4.18: see uvm2_config.h */
 volatile int32_t uvm2_setting_usb_volume = -1;  /* the headphones' volume, 0..16; -1 never saved */
 /* the screen's shape: 1:1 and the 15500 square every vpy3d game was composed in */
 #define SCREEN_ASPECT_DEFAULT 256
@@ -256,7 +256,7 @@ UVM2_COLD void uvm2_config_current(struct uvm2_config *c)
     c->hz       = uvm2_setting_hz;
     c->start_menu = uvm2_setting_menu;
     c->rotate     = uvm2_setting_rotate;
-    c->audio      = uvm2_setting_audio ? 1 : uvm2_setting_audio_usb ? 2 : 0;   /* jack, Vectrex, USB */
+    c->audio      = uvm2_setting_audio ? 1 : 0;   /* jack (or USB headphones, plugged in), Vectrex */
     c->aspect_q8  = uvm2_screen_aspect_q8;
     c->win_x      = uvm2_screen_win_x;
     c->win_y      = uvm2_screen_win_y;
@@ -290,9 +290,9 @@ UVM2_COLD void uvm2_config_apply(const struct uvm2_config *c)
     uvm2_setting_rotate = c->rotate ? 1 : 0;
     uvm2_draw_rotate((int)uvm2_setting_rotate);
     /* The game routes Vectrex-or-cartridge itself (uvm2_setting_audio); the SDK's jack driver
-     * routes the cartridge's sound to the DAC or USB (uvm2_setting_audio_usb). See uvm2_config.h. */
+     * sends the cartridge's sound to USB headphones when they are plugged in. 2 (SOUND USB,
+     * v1.4.15-17) reads as the cartridge. */
     uvm2_setting_audio = c->audio == 1;
-    uvm2_setting_audio_usb = c->audio == 2;
     /* ZERO IS "AN OLD FILE", as with the holds above: a shape of 0 means nothing was saved. */
     if (c->aspect_q8 > 0) uvm2_screen_aspect_q8 = c->aspect_q8;
     if (c->win_x > 0)     uvm2_screen_win_x = c->win_x;
