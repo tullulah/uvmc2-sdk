@@ -31,6 +31,12 @@
  * If any resource is unavailable, uvm2_jack_init() returns 0 and the game falls
  * back to the Vectrex's own sound chip. */
 #include "uvm2_jack.h"
+#include "uvm2_usbaudio.h"   /* SOUND USB: the same sound out of USB headphones instead */
+#include <stdint.h>
+
+/* SOUND USB on the OPTIONS screen (uvm2_config.c defines it; this weak 0 is for a build without
+ * the config, the debug board's). Read once, at init: the DAC or the headphones, never both. */
+__attribute__((weak)) volatile int32_t uvm2_setting_audio_usb = 0;
 
 /* THE RING IS ONE NUMBER, NOT TWO. The DMA's ring wrap needs a power-of-two buffer,
  * aligned to its own size, and it is told the size in LOG2 OF BYTES. Keeping a word
@@ -106,6 +112,7 @@ static uint32_t s_w;                        /* next word the CPU will write   */
  * second state machine and a second DMA channel, both feeding the same pins. So the second
  * call RESTARTS what the first built (uvm2_jack_set) and answers what it answered. */
 static int      s_inited;
+static int      s_usb;      /* SOUND USB: everything goes to uvm2_usbaudio, the DAC never starts */
 
 /* side-set: bit 0 = WS (GPIO44), bit 1 = BCK (GPIO45). Two instructions per bit:
  * BCK low while the data bit changes, BCK high to latch it. 16 bits with WS=0,
@@ -117,6 +124,13 @@ int uvm2_jack_init(void)
 {
     if (s_inited) return uvm2_jack_set(1);
     s_inited = 1;
+    if (uvm2_setting_audio_usb) {
+        /* SOUND USB: no DAC, the cartridge's USB-C as a host; headphones may come at any time */
+        uvm2_usbaudio_start();
+        s_usb = 1;
+        s_ok = 1;
+        return 1;
+    }
     PIO pio = pio2;
     if (pio_set_gpio_base(pio, 16) != 0) return 0;
     const uint ss = 2;
@@ -193,6 +207,13 @@ static uint32_t read_pos(void)
 
 int uvm2_jack_space(void)
 {
+    if (s_usb) {
+        uvm2_usbaudio_poll();   /* asked once a frame by whoever feeds the jack: attach, detach */
+        if (!s_ok) return 0;
+        /* playing: what keeps its ring ahead; no headphones yet: a frame's worth all the same,
+           so the game's sound keeps its time (and is dropped) until some are plugged in */
+        return uvm2_usbaudio_playing() ? uvm2_usbaudio_space() : UVM2_JACK_RATE / 50;
+    }
     if (!s_ok) return 0;
     uint32_t rd = read_pos();
     uint32_t ahead = (s_w - rd) & (RING_WORDS - 1u);
@@ -206,6 +227,7 @@ int uvm2_jack_space(void)
 void uvm2_jack_write(const int16_t *s, int n)
 {
     if (!s_ok) return;
+    if (s_usb) { uvm2_usbaudio_write_lr(s, s, n); return; }
     for (int i = 0; i < n; i++) {
         uint32_t v = (uint16_t)s[i];
         s_ring[s_w] = (v << 16) | v;                      /* same on L and R */
@@ -216,6 +238,7 @@ void uvm2_jack_write(const int16_t *s, int n)
 void uvm2_jack_write_lr(const int16_t *l, const int16_t *r, int n)
 {
     if (!s_ok) return;
+    if (s_usb) { uvm2_usbaudio_write_lr(l, r, n); return; }
     for (int i = 0; i < n; i++) {
         s_ring[s_w] = ((uint32_t)(uint16_t)l[i] << 16) | (uint32_t)(uint16_t)r[i];
         s_w = (s_w + 1u) & (RING_WORDS - 1u);
@@ -236,6 +259,7 @@ uint32_t uvm2_jack_base(void)    { return pio_get_gpio_base(pio2); }
  * Vectrex's own sound chip). Starting it the first time does the set-up. */
 int uvm2_jack_set(int on)
 {
+    if (s_usb) { s_ok = on ? 1 : 0; return s_ok; }    /* the headphones: nothing to start or stop */
     if (on) {
         if (!s_inited) return uvm2_jack_init();
         if (!s_ok && s_dma >= 0 && s_sm >= 0) {

@@ -21,7 +21,8 @@
  *     PLAY
  *     SCREEN VERTICAL / HORIZONTAL     UVM2_SETTING_ROTATE (horizontal arcade machines):
  *                                      how the CONSOLE stands; HORIZONTAL turns the drawing
- *     SOUND JACK / VECTREX             UVM2_SETTING_AUDIO  (games with sound on the jack)
+ *     SOUND JACK / VECTREX / USB       UVM2_SETTING_AUDIO  (games with sound on the jack;
+ *                                      USB: headphones on the cartridge's USB-C instead) 
  *     REFRESH <game's> / 50 / 60 / MAX always (the game's own rate first: UVM2_HZ)
  *     BRIGHTNESS 100                   always, percent (a gain on every intensity, uvm2_draw.c)
  *     CONTROLS                         always: which console button does each of the game's
@@ -160,7 +161,7 @@ static const char *label(int opt)
      * drawing turned 90 degrees to fill it. Named the other way round at first (after the
      * cabinet) and on the console "HORIZONTAL" was the default and changed nothing. */
     case OPT_SCREEN:    return uvm2_setting_rotate ? "SCREEN HORIZONTAL" : "SCREEN VERTICAL";
-    case OPT_SOUND:     return uvm2_setting_audio ? "SOUND VECTREX" : "SOUND JACK";
+    case OPT_SOUND:     return uvm2_setting_audio ? "SOUND VECTREX" : uvm2_setting_audio_usb ? "SOUND USB" : "SOUND JACK";
     case OPT_REFRESH:   return refresh_label();
     case OPT_BRIGHT:    return bright_label();
     case OPT_CONTROLS:  return "CONTROLS";
@@ -174,7 +175,13 @@ static int change(int opt, int dir)
 {
     switch (opt) {
     case OPT_SCREEN:  uvm2_setting_rotate = !uvm2_setting_rotate; return 1;
-    case OPT_SOUND:   uvm2_setting_audio  = !uvm2_setting_audio;  return 1;
+    case OPT_SOUND: {          /* JACK, VECTREX, USB, round: one of the three, never two */
+        int v = uvm2_setting_audio ? 1 : uvm2_setting_audio_usb ? 2 : 0;
+        v = (v + (dir < 0 ? 2 : 1)) % 3;
+        uvm2_setting_audio = v == 1;
+        uvm2_setting_audio_usb = v == 2;
+        return 1;
+    }
     case OPT_START:   uvm2_setting_menu   = !uvm2_setting_menu;   return 1;
     case OPT_REFRESH:
         uvm2_setting_hz = refresh_step(dir);

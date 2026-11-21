@@ -94,6 +94,7 @@ add_executable(${UVM2_NAME}
     ${UVM2_SDK_DIR}/uvm2_psram.c
     ${UVM2_SDK_DIR}/uvm2_monitor.c
     ${UVM2_SDK_DIR}/uvm2_jack.c
+    ${UVM2_SDK_DIR}/uvm2_usbaudio.c
     ${UVM2_SDK_DIR}/uvm2_svc_entry.s
     ${UVM2_SDK_DIR}/uvm2_pico_main.c
     ${UVM2_SDK_DIR}/uvm2_pico_svc.S

@@ -3,6 +3,29 @@
 Releases are the repository's tags (`vX.Y.Z`); Vectrex Studio's IDE installs them by tag. Each
 entry says what changes for a game built with that version.
 
+## v1.4.15 — the game's sound out of USB headphones
+
+* New: USB headphones on the cartridge's USB-C (`uvm2_usbaudio.c`). The cartridge is the USB
+  host: it powers them (VBUS is on the +5 V rail with the console on), enumerates them, picks
+  their playback format (16-bit stereo if there is one, else 24-bit; UAC 1 or 2) and sends a
+  millisecond of sound per USB frame, resampled from the jack's 32 kHz to theirs (48 or
+  44.1 kHz). Plugged and unplugged at any time. Measured with Apple's USB-C EarPods: 1000
+  packets a second, none empty, clean. A minimal host of its own, not TinyUSB.
+* New: the OPTIONS screen's SOUND line has a third value, `SOUND JACK / VECTREX / USB`, one at
+  a time: with USB the jack's DAC is not started and everything the game sends to the jack
+  goes to the headphones. Nothing to change in a game: it keeps asking
+  `uvm2_setting_audio == 0` ("sound out of the cartridge"), and the jack driver sends it where
+  the new `uvm2_setting_audio_usb` says. Saved in the same config field (`audio` 0 jack, 1
+  Vectrex, 2 USB; old files still read). The calibration wizard's AUDIO line has USB too.
+  Rebuild a game to get it; a VPy game with `audio = true` in its `[uvm2]` section has it.
+* Changed: when SOUND USB starts the port, SVCall goes below the USB interrupt on core 0, and
+  only under `UVM2_DUAL_CORE` (there core 0's SVCs never touch the bus). Core 0 waits for the
+  frame inside SYS_WAIT_RECAL's SVC, and at SVCall's default priority the USB interrupt only
+  got in a few times a frame (263 packets a second: noise). Nothing may execute `svc` from an
+  interrupt after that; no handler in the SDK does.
+* Not with `UVM2_USB_MONITOR` (the debug monitor owns the port), and `UVM2_NO_USB_AUDIO`
+  leaves it out.
+
 ## v1.4.14 — raster images and filled shapes, the way Exidy's vector boards draw them
 
 * New: `DRAW_RASTER(img, x, y, pw, ph, shear, b)` (vpy.h). An image as rows of runs -- so many

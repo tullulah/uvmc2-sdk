@@ -120,6 +120,13 @@ int uvm2_config_native_hz(void);
  * board has no jack and the choice does not exist there. Whoever reads it fences itself off
  * with its own UVM2-only guard. */
 extern volatile int32_t uvm2_setting_audio;
+/* AND WHERE THE CARTRIDGE'S SOUND GOES when uvm2_setting_audio is 0: 0 the jack's DAC, 1 USB
+ * headphones on the cartridge's USB-C (uvm2_usbaudio.c), never both. The OPTIONS screen's
+ * SOUND line shows the two as one: JACK, VECTREX, USB. Kept apart so that every game that
+ * already asks `uvm2_setting_audio == 0` ("sound out of the cartridge") keeps working: they
+ * start the jack driver as always, and the driver sends it where this says. Saved in the same
+ * config field: audio 0 jack, 1 Vectrex, 2 USB. */
+extern volatile int32_t uvm2_setting_audio_usb;
 /* The screen's shape (see aspect_q8 above), for vpy3d to read. Defaults 256, 15500, 15500. */
 extern volatile int32_t uvm2_screen_aspect_q8, uvm2_screen_win_x, uvm2_screen_win_y;
 
