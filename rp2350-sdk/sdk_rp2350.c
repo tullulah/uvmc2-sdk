@@ -144,9 +144,17 @@ struct uvm2_api {
     void (*game_boot)(void);
     void (*settings)(int32_t *, int);
     unsigned (*pad_actions)(void);
+    /* version 9: the picture fitted to the tube (uvm2_view_field) applied to one point, as the
+     * .um2's own draw path does with uvm2_view_map. Without it the field was declared and
+     * never used here: Sundance stood off to the left. */
+    void (*view_map)(int32_t *, int32_t *);
 };
 #define UVM2_API        ((const struct uvm2_api *)0x20077000u)
 #define UVM2_API_MAGIC  0x50415356u   /* 'VSAP' */
+/* The fit, when this BIOS has it (table version 9); an older one draws the game's own units. */
+#define VIEW_MAP2(x0, y0, x1, y1) do {                                                   \
+        if (UVM2_API->version >= 9u) { UVM2_API->view_map(&(x0), &(y0));                 \
+                                       UVM2_API->view_map(&(x1), &(y1)); } } while (0)
 #define BEAM_ZERO()       UVM2_API->draw_reset()
 #define BEAM_INTENSITY(b) UVM2_API->draw_intensity((int)(signed char)(b) & 0x7F)
 static void api_raster(int x, int y, const unsigned char *s, int n) {
@@ -345,6 +353,7 @@ void v_directDraw32(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b)
 #endif
 #ifdef VPY_DUAL_CORE
     {
+    VIEW_MAP2(x0, y0, x1, y1);
 #ifdef UVM2_MEASURE_DRAW
     /* The arguments are evaluated OUTSIDE this span on purpose: VS_Q4 is the caller's
      * own arithmetic, and charging it to the BIOS would hide it. */
@@ -398,6 +407,7 @@ void v_directGapped(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
 {
     if (b == 0) return;
 #ifdef VPY_DUAL_CORE
+    VIEW_MAP2(x0, y0, x1, y1);
     UVM2_API->draw_intensity((int)b);
     UVM2_API->draw_move_abs_q4(VS_Q4(x0), VS_Q4(y0));
     UVM2_API->draw_delta_patterned(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0),
@@ -427,6 +437,7 @@ int v_directSweepSR(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t b,
     if (b == 0) return n;
 #ifdef VPY_DUAL_CORE
     if (UVM2_API->magic != UVM2_API_MAGIC || UVM2_API->version < 4u) return 0;
+    VIEW_MAP2(x0, y0, x1, y1);
     UVM2_API->draw_intensity((int)b);
     UVM2_API->draw_move_abs_q4(VS_Q4(x0), VS_Q4(y0));
     return UVM2_API->draw_sweep_sr(VS_Q4(x1) - VS_Q4(x0), VS_Q4(y1) - VS_Q4(y0),

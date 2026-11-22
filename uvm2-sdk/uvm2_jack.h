@@ -38,6 +38,12 @@ void uvm2_jack_write(const int16_t *s, int n);  /* mono, UVM2_JACK_RATE */
 void uvm2_jack_write_lr(const int16_t *l, const int16_t *r, int n);
 int  uvm2_jack_ok(void);
 int  uvm2_jack_set(int on);                     /* start/stop PIO2 + DMA entirely */
+#ifdef UVM2_USB_JACK
+/* The debug cart (rp2350-sdk/rp2350_jack.c), whose jack is USB headphones: 1 while they
+ * play. Unplugged, a game keeps its console path, so this is what picks between the two. */
+int  uvm2_jack_usb_playing(void);
+int  uvm2_jack_usb_wait(void);      /* at boot: waits (bounded) for headphones to be up */
+#endif
 
 /* ── WHAT IT DECIDED, so a game can say it out loud ────────────────────────
  *

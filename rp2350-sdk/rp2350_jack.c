@@ -115,5 +115,37 @@ void uvm2_jack_write(const int16_t *s, int n) { uvm2_usbaudio_write_lr(s, s, n);
 int uvm2_jack_ok(void) { return s_on; }
 int uvm2_jack_set(int on) { (void)on; return s_on; }
 
-/* 1 while headphones take the sound: a game's console PSG path goes quiet then (az_psg.c) */
-int uvm2_jack_usb_playing(void) { return s_on && uvm2_usbaudio_playing(); }
+/* 1 while headphones take the sound: a game's console path goes quiet then (az_psg.c, and the
+ * xx_jack_enabled of the other jack modules, which ask it to choose their path each frame).
+ * It polls the host too, at most once a millisecond: a game on its console path never calls
+ * uvm2_jack_space, and without a poll the headphones would never be enumerated. */
+int uvm2_jack_usb_playing(void)
+{
+    static uint32_t s_last;
+    if (!s_on) return 0;
+    const uint32_t now = timer0_hw->timerawl;
+    if (now - s_last >= 1000u) { s_last = now; uvm2_usbaudio_poll(); }
+    return uvm2_usbaudio_playing();
+}
+
+/* For a game that decides its sound path ONCE, at boot (cine_jack.c: several games set their
+ * synthesis up only if the jack is on): wait for the headphones to be up before it asks. Up to
+ * 300 ms for something to be plugged in at all, then up to 2 s for it to enumerate and start;
+ * so with nothing plugged the boot is 300 ms longer, and with headphones it is as long as they
+ * take. Returns uvm2_jack_usb_playing(). */
+int uvm2_jack_usb_wait(void)
+{
+    enum { ST_WAIT = 1, ST_ENUM = 2 };          /* uvm2_usbaudio.c's */
+    if (!s_on) return 0;
+    const uint32_t t0 = timer0_hw->timerawl;
+    for (;;) {
+        uvm2_usbaudio_poll();
+        const int st = uvm2_usbaudio_state();
+        const uint32_t dt = timer0_hw->timerawl - t0;
+        if (st != ST_WAIT && st != ST_ENUM) break;          /* playing, or a device it cannot use */
+        if (st == ST_WAIT && dt >= 300000u) break;          /* nothing plugged in */
+        if (dt >= 2300000u) break;
+        busy_wait_us_32(1000u);
+    }
+    return uvm2_usbaudio_playing();
+}
