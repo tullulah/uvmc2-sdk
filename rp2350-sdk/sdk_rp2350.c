@@ -148,6 +148,8 @@ struct uvm2_api {
      * .um2's own draw path does with uvm2_view_map. Without it the field was declared and
      * never used here: Sundance stood off to the left. */
     void (*view_map)(int32_t *, int32_t *);
+    /* version 10: the size of the file the last read opened (uvm2_sd_read_rom below) */
+    uint32_t (*file_size)(void);
 };
 #define UVM2_API        ((const struct uvm2_api *)0x20077000u)
 #define UVM2_API_MAGIC  0x50415356u   /* 'VSAP' */
@@ -228,6 +230,31 @@ void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah)
     if (API_HAS_OPTIONS()) UVM2_API->view_field(x0, x1, y0, y1, aw, ah);
 }
 int uvm2_draw_rotated(void) { return API_HAS_OPTIONS() ? UVM2_API->draw_rotated() : 0; }
+
+/* THE UVMC2's uvm2_sd_read_rom ON THIS CART: roms/<name> whole into dst, up to max; the bytes
+ * read, or 0 (no file, an older BIOS, a read that failed). Through the BIOS's game reader,
+ * which does the card's work in the executor's gaps -- a read from this core while the other
+ * drives the bus comes back as garbage -- and waits for it. One byte first, which opens the
+ * file, so that file_size (table version 10) says how much there is: the reader refuses a read
+ * past the end. Major Havoc's figures (mhavoc.c, roms/mhavoc_figures.bin). */
+uint32_t uvm2_sd_read_rom(const char *name, unsigned char *dst, uint32_t max)
+{
+    if (UVM2_API->magic != UVM2_API_MAGIC || UVM2_API->version < 10u) return 0;
+    char path[48] = "roms/";
+    unsigned k = 5;
+    while (*name && k < sizeof path - 1) path[k++] = *name++;
+    path[k] = 0;
+    unsigned char probe;
+    int r;
+    if (UVM2_API->file_read_start(path, 0, &probe, 1) != 0) return 0;
+    while ((r = UVM2_API->file_read_poll()) > 0) { }
+    if (r < 0) return 0;
+    uint32_t n = UVM2_API->file_size();
+    if (n > max) n = max;
+    if (n == 0 || UVM2_API->file_read_start(path, 0, dst, n) != 0) return 0;
+    while ((r = UVM2_API->file_read_poll()) > 0) { }
+    return r < 0 ? 0 : n;
+}
 /* The game's six now, the CONTROLS map applied (aae_pad.h's AP_MAPPED). On an older BIOS, the
  * stick straight, as the map does by default. */
 uint8_t uvm2_pad_actions(void)
