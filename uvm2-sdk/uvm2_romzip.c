@@ -51,8 +51,15 @@ __attribute__((weak)) extern const char game_romset_name[];
 #    define UVM2_ROMZIP_PSRAM_BASE 0x15400000u
 #  endif
 static unsigned char *const s_zip = (unsigned char *)(uintptr_t)UVM2_ROMZIP_PSRAM_BASE;
+/* AND IN THE PSRAM IT IS NOT CAPPED BY THE REPO'S ZIP. UVM2_ROMZIP_MAX is sized from the zip
+ * next to the game's sources (uvm2.mk), which is right for an array in SRAM and wrong here: the
+ * player's card can carry another dump of the same set, a little bigger (Star Wars: 57142
+ * bytes against 56320, "ROM FILE NOT FOUND", 2026-11-22). Here the room is the 2 MB up to the
+ * AAE ROM staging at 6 MB (aae-src: AAE_ROM_STAGE_PSRAM 0x15600000). */
+#define ROMZIP_CAP (2u * 1024u * 1024u)
 #else
 static unsigned char s_zip[UVM2_ROMZIP_MAX] __attribute__((aligned(8)));
+#define ROMZIP_CAP UVM2_ROMZIP_MAX
 #endif
 static uintptr_t s_desc[4];                    /* [0]=magic [1]=base [2]=size */
 
@@ -122,7 +129,7 @@ static int cat(char *d, int n, int max, const char *s)
 
 static uint32_t try_path(const char *path)
 {
-    uint32_t n = uvm2_sd_read(path, s_zip, UVM2_ROMZIP_MAX);
+    uint32_t n = uvm2_sd_read(path, s_zip, ROMZIP_CAP);
     uvm2_romzip_error = uvm2_sd_error;
     return n;
 }

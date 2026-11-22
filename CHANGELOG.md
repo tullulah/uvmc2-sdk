@@ -26,6 +26,10 @@ entry says what changes for a game built with that version.
 * Since the host now starts with the jack in every game that uses it, SVCall goes below the
   USB interrupt in all of them (only under `UVM2_DUAL_CORE`, as in v1.4.15). `UVM2_NO_USB_AUDIO`
   still leaves it all out.
+* Fixed: a romset in PSRAM (the default) was still capped at `UVM2_ROMZIP_MAX`, which uvm2.mk
+  sizes from the zip next to the game's sources. A player's card with another dump of the same
+  set, a little bigger, read as "ROM FILE NOT FOUND" (Star Wars: 57142 bytes against 56320).
+  In PSRAM the cap is now the 2 MB set aside for it; in SRAM it stays `UVM2_ROMZIP_MAX`.
 
 ## v1.4.17 — colour with the list, hidden folders on the card, TURN, and the volume kept
 
