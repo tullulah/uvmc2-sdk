@@ -65,8 +65,13 @@ enum { ST_OFF, ST_WAIT, ST_ENUM, ST_PLAY, ST_CANT, ST_FAIL };
  * again, but the reader below only takes what uvm2_usbaudio_write_lr wrote (s_w - r), so the
  * headphones get silence, not the DAC's samples. */
 #define RING        s_ring_words
-#define PREFILL     1024u               /* frames behind the writer when a stream starts: 32 ms,
-                                           more than one game frame's burst (640 at 50 Hz) */
+/* frames behind the writer when a stream starts, and what uvm2_usbaudio_space keeps it at:
+   32 ms, more than one game frame's burst (640 at 50 Hz). A build whose frames run longer asks
+   for more (the debug cart's rp2350_jack.c: 2048); the ring must hold twice this. */
+#ifndef UVM2_USBAUDIO_AHEAD
+#define UVM2_USBAUDIO_AHEAD 1024u
+#endif
+#define PREFILL     (UVM2_USBAUDIO_AHEAD)
 static uint32_t *s_ring;                /* L << 16 | R; the jack's, set by uvm2_usbaudio_start */
 static uint32_t s_ring_words = 1u;
 static volatile uint32_t s_w, s_r;      /* free-running: frames written / read */

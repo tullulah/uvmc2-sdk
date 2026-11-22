@@ -148,6 +148,32 @@ uint8_t uvm2_buttons_remap(uint8_t pressed)
     return (uint8_t)((pressed & 0xF0u) | (uvm2_pad_remap((uint8_t)(pressed & 0x0Fu)) & 0x0Fu));
 }
 
+/* THE CONSOLE'S SIX AS THE MAP SEES THEM, from the controller cache (buttons ACTIVE LOW, the
+ * axes as uvm2_read_axes packs them): the four buttons (1 = pressed), the stick up (bit 4) and
+ * the stick down (bit 5). Down has a hysteresis (pushed fully, released back above
+ * UVM2_STICK_REARM): a turn that sags must not drop a coin, which is how the turning ports
+ * read it before the stick was in the map. Stateful, but only in the stick's own position, so
+ * asking twice in a frame gives the same answer.
+ *
+ * Here and not in uvm2_svc.c, which had it until 2026-11-22: the debug cart's BIOS answers the
+ * game's button reads too and does not build uvm2_svc.c, so both now call this one. */
+uint8_t uvm2_pad_six(uint8_t buttons_low, uint32_t axes)
+{
+    static uint8_t s_down;
+    const int8_t y = (int8_t)(axes >> 16);
+    if (y <= UVM2_STICK_DOWN) s_down = 1;
+    else if (y > UVM2_STICK_REARM) s_down = 0;
+    return (uint8_t)((~buttons_low & 0x0Fu) | (y > UVM2_STICK_UP ? 0x10u : 0u) | (s_down ? 0x20u : 0u));
+}
+
+/* What the game's own buttons read as (1 = pressed): its four from the six (a stick action
+ * given to one of its buttons is that button), controller 2 as it is. */
+uint8_t uvm2_pad_game_buttons(uint8_t buttons_low, uint32_t axes)
+{
+    const uint8_t raw = (uint8_t)~buttons_low;
+    return (uint8_t)((raw & 0xF0u) | (uvm2_pad_remap(uvm2_pad_six(buttons_low, axes)) & 0x0Fu));
+}
+
 void uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4)
 {
     s_btn_name[0] = b1; s_btn_name[1] = b2; s_btn_name[2] = b3; s_btn_name[3] = b4;

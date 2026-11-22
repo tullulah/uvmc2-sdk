@@ -99,6 +99,9 @@ gm_ctor_loop:
     pop     {r0, r1}
     b       gm_ctor_loop
 gm_ctor_done:
+    @ The game's OPTIONS screen, as on the UVMC2 (sdk_rp2350.c): after the constructors, so a
+    @ C++ game's settings exist, and before main.
+    bl      rp2350_boot
     bl      main
 gm_spin:                    @ main() loops forever; spin if it ever returns
     b       gm_spin

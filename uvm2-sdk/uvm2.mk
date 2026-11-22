@@ -438,17 +438,48 @@ RP2350_LDFLAGS ?= -nostdlib -Wl,--gc-sections -Wl,-T,$(RP2350_SDK)/rp2350_game_r
                   -Wa,--defsym,DUAL_CORE_FLAG=0x44430001
 # -g: the line table the IDE's debugger needs (Debug on Cartridge, the SWD build mode). It does
 # not change the image: the _sd.bin is objcopied out of the ELF without the debug sections.
-RP2350_CART_CFLAGS = $(filter-out $(UVM2_UM2_ONLY),$(UVM2_CFLAGS_CLEAN)) -DVPY_DUAL_CORE -g
+# -mfloat-abi=soft OUT: a game's own CFLAGS may still say it (aztarac's do), and with that and
+# UVM2_FPU_FLAGS' softfp both on the line gcc finds no multilib and links the default libgcc,
+# ARMv4T: "conflicting CPU architectures ARM v8-M.mainline vs ARM v4T". The FPU is the SDK's rule.
+RP2350_CART_CFLAGS = $(filter-out $(UVM2_UM2_ONLY) -mfloat-abi=soft,$(UVM2_CFLAGS_CLEAN)) -DVPY_DUAL_CORE -g
+# UVM2_BIOS_OPTIONS: the game's uvm2_game_settings (its OPTIONS screen's declarations) is built
+# here too, and the debug cart's BIOS shows the screen (API version 8, sdk_rp2350.c).
+RP2350_CART_CFLAGS += -DUVM2_BIOS_OPTIONS
 # UVM2_DEBUG_CFLAGS: what the IDE's debug builds add (-Og), after the game's own flags so its
 # -O is the one gcc keeps: locals stay where the debugger can read and set them. The uvm2
 # recipe passes it to CMake as UVM2_GAME_OPTS (always, empty or not: a cached debug
 # configuration must not outlive the debug build).
 RP2350_CART_CFLAGS += $(UVM2_DEBUG_CFLAGS)
 
-rp2350-cart $(UVM2_NAME)_rp2350: $(UVM2_DEPS) | $(RP2350_BUILD)
+# THE JACK OUT OF USB HEADPHONES on the debug cart, which has no DAC: RP2350_USB_AUDIO = 1 links
+# rp2350_jack.c (uvm2_jack on top of the USB host) and uvm2_usbaudio.c, and defines
+# UVM2_USB_JACK for the game's own jack code (az_jack.c and the like) to build its real body.
+# The two files include the pico-sdk's headers (none of its code): from UVM2_PICO_SDK, with
+# rp2350-sdk/pico_bare/ for the two CMake would generate. Compiled on their own, so the game's
+# sources never see the pico-sdk's include path. UVM2_DUAL_CORE: the frame's wait is an SVC on
+# the game's core (the BIOS's rec_wait_recal), and SVCall goes below the USB interrupt there,
+# as on the UVMC2 (uvm2_usbaudio_start); that core's SVCs do not touch the bus.
+RP2350_USB_AUDIO ?= 0
+# 64 ms ahead and not the UVMC2's 32: a game here runs its frames slower and less evenly (Aztarac
+# found the ring empty for up to 13% of its samples a second with 1024).
+RP2350_USB_AHEAD ?= 2048
+ifeq ($(RP2350_USB_AUDIO),1)
+RP2350_PICO_INCS = -I$(RP2350_SDK)/pico_bare \
+    $(addprefix -I,$(wildcard $(UVM2_PICO_SDK)/src/common/*/include) \
+                   $(wildcard $(UVM2_PICO_SDK)/src/rp2350/*/include) \
+                   $(wildcard $(UVM2_PICO_SDK)/src/rp2_common/*/include))
+RP2350_USB_OBJS = $(RP2350_BUILD)/rp2350_jack.o $(RP2350_BUILD)/usbaudio.o
+RP2350_CART_CFLAGS += -DUVM2_USB_JACK
+$(RP2350_BUILD)/rp2350_jack.o: $(RP2350_SDK)/rp2350_jack.c | $(RP2350_BUILD)
+	$(UVM2_CC) $(RP2350_CART_CFLAGS) $(RP2350_PICO_INCS) -c $< -o $@
+$(RP2350_BUILD)/usbaudio.o: $(UVM2_SDK)/uvm2_usbaudio.c | $(RP2350_BUILD)
+	$(UVM2_CC) $(RP2350_CART_CFLAGS) -DUVM2_DUAL_CORE -DUVM2_USBAUDIO_AHEAD=$(RP2350_USB_AHEAD) $(RP2350_PICO_INCS) -c $< -o $@
+endif
+
+rp2350-cart $(UVM2_NAME)_rp2350: $(UVM2_DEPS) $(RP2350_USB_OBJS) | $(RP2350_BUILD)
 	$(UVM2_LINKER) $(RP2350_CART_CFLAGS) $(RP2350_LDFLAGS) \
 	    $(RP2350_SDK)/rp2350_start.s $(UVM2_SRCS) $(UVM2_CXXSRCS) $(RP2350_SDK)/sdk_rp2350.c \
-	    $(UVM2_LDLIBS) -lgcc -o $(RP2350_BUILD)/$(UVM2_NAME).elf
+	    $(RP2350_USB_OBJS) $(UVM2_LDLIBS) -lgcc -o $(RP2350_BUILD)/$(UVM2_NAME).elf
 	$(UVM2_OBJCOPY) -O binary $(RP2350_BUILD)/$(UVM2_NAME).elf $(RP2350_BUILD)/$(UVM2_NAME)_sd.bin
 	@echo "=== Build (rp2350 SD game, dual core through the BIOS table): $(RP2350_BUILD)/$(UVM2_NAME)_sd.bin ==="
 

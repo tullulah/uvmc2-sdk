@@ -208,6 +208,11 @@ enum { UVM2_ACT_UP = 0x10u, UVM2_ACT_DOWN = 0x20u };
 uint8_t uvm2_pad_actions(void);
 uint8_t uvm2_pad_remap(uint8_t physical);    /* six bits as the console has them -> the game's */
 int     uvm2_buttons_phys(int i);            /* entry i's physical input: 0-3 buttons, 4 up, 5 down */
+/* The two above from the controller cache (buttons active low, axes packed as uvm2_read_axes):
+ * the six physical inputs, and the game's buttons with the map applied (1 = pressed, P2 in 4-7).
+ * What uvm2_svc.c and the debug cart's BIOS answer the game's reads with. */
+uint8_t uvm2_pad_six(uint8_t buttons_low, uint32_t axes);
+uint8_t uvm2_pad_game_buttons(uint8_t buttons_low, uint32_t axes);
 
 /* ── THE STICK ON THE CONTROLS SCREEN, AND THE SECOND LAYOUT ─────────────────────────────
  *

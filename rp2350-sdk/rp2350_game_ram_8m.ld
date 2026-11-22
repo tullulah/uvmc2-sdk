@@ -76,6 +76,9 @@ SECTIONS {
         __sram_text_vma = .;
         *(.sram_text)
         *(.sram_text.*)
+        /* the pico-sdk's __not_in_flash_func (uvm2_usbaudio.c's interrupt): an orphan, it went
+           to SRAM past __sram_text_end, linked there and never copied */
+        *(.time_critical*)
         . = ALIGN(4);
         __sram_text_end = .;
     } > GAME_SRAM AT> GAME_RAM

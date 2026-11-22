@@ -71,6 +71,9 @@ void v_init(void)          { dc_cfg_init(); }
 #else
 void v_init(void)          {}
 #endif
+#if !(defined(VPY_DUAL_CORE) && !defined(UVM2_PICO_RUNTIME))
+void rp2350_boot(void)     {}   /* rp2350_start.s calls it: the OPTIONS screen is the table's */
+#endif
 void v_setRefresh(int hz)  { (void)hz; }   /* uvm2_set_refresh sets the pace */
 
 #ifdef VPY_DUAL_CORE
@@ -119,6 +122,28 @@ struct uvm2_api {
      * character down from 36.4 commands to 21.2 (measured, uvm2_raster_text.c). Check
      * `version >= 4` before calling it: an older BIOS ends at `set_analog`. */
     int (*draw_sweep_sr)(int, int, const unsigned char *, int, int);
+    /* versions 5-7, named for the order only: the games that use them (MGS, VF) carry their
+     * own declarations */
+    void (*set_worker)(void (*)(void));
+    int  (*file_read_start)(const char *, unsigned, void *, unsigned);
+    int  (*file_read_poll)(void);
+    void (*file_set_work)(uint32_t *, unsigned);
+    void (*stream_finish)(void);
+    int  (*stream_running)(void);
+    /* version 8: THE GAME'S OPTIONS SCREEN, the .um2's own, shown by the BIOS (rp2350_boot,
+     * below). Check `version >= 8`: an older BIOS ends at `stream_running`. */
+    void (*config_title)(const char *);
+    void (*config_buttons)(const char *, const char *, const char *, const char *);
+    void (*config_game)(const char *, unsigned);
+    int  (*config_load)(void);
+    void (*config_stick)(const char *, const char *, const char *);
+    void (*config_turn)(const char *, const char *, const char *, const char *,
+                        const char *, const char *, const char *);
+    void (*view_field)(int, int, int, int, int, int);
+    int  (*draw_rotated)(void);
+    void (*game_boot)(void);
+    void (*settings)(int32_t *, int);
+    unsigned (*pad_actions)(void);
 };
 #define UVM2_API        ((const struct uvm2_api *)0x20077000u)
 #define UVM2_API_MAGIC  0x50415356u   /* 'VSAP' */
@@ -153,6 +178,73 @@ void uvm2_set_refresh(unsigned hz) { UVM2_API->set_refresh(hz); }
 static void dc_cfg_init(void) {
     struct uvm2_config c; UVM2_API->config_current((int32_t *)&c);
     uvm2_setting_hz = c.hz; uvm2_setting_menu = c.start_menu;
+}
+
+/* ── THE GAME'S OPTIONS SCREEN ON THIS CARTRIDGE (BIOS API version 8) ──────────────────────
+ *
+ * The same as on the UVMC2: the game names its settings in uvm2_game_settings() (its main.c,
+ * the .um2's weak hook), and before main() runs the calibration combo (2+3 held) and the
+ * OPTIONS screen come up -- here drawn by the BIOS, which builds uvm2_options.c, with the
+ * declarations passed through the table. The settings a game reads are copies, filled from the
+ * BIOS's when the screen closes; the buttons' map is the BIOS's own (read_buttons applies it).
+ * On an older BIOS none of this runs and the game starts as it always did. */
+volatile int32_t uvm2_setting_rotate = 0, uvm2_setting_audio = 0, uvm2_setting_turn = 0,
+                 uvm2_setting_buttons = 0, uvm2_setting_bright = 0;
+#define API_HAS_OPTIONS() (UVM2_API->magic == UVM2_API_MAGIC && UVM2_API->version >= 8u)
+void uvm2_config_title(const char *t) { if (API_HAS_OPTIONS()) UVM2_API->config_title(t); }
+void uvm2_config_buttons(const char *b1, const char *b2, const char *b3, const char *b4)
+{
+    if (API_HAS_OPTIONS()) UVM2_API->config_buttons(b1, b2, b3, b4);
+}
+void uvm2_config_game(const char *name, unsigned settings)
+{
+#ifndef UVM2_USB_JACK
+    /* SOUND picks the jack or the console, and this cartridge's jack is USB headphones, which
+     * only a build with RP2350_USB_AUDIO=1 drives (rp2350_jack.c): without it, no SOUND line */
+    settings &= ~(unsigned)UVM2_SETTING_AUDIO;
+#endif
+    if (API_HAS_OPTIONS()) UVM2_API->config_game(name, settings);
+}
+int uvm2_config_load(void) { return API_HAS_OPTIONS() ? UVM2_API->config_load() : 0; }
+void uvm2_config_stick(const char *sideways, const char *up, const char *down)
+{
+    if (API_HAS_OPTIONS()) UVM2_API->config_stick(sideways, up, down);
+}
+void uvm2_config_turn(const char *b1, const char *b2, const char *b3, const char *b4,
+                      const char *sideways, const char *up, const char *down)
+{
+    if (API_HAS_OPTIONS()) UVM2_API->config_turn(b1, b2, b3, b4, sideways, up, down);
+}
+void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah)
+{
+    if (API_HAS_OPTIONS()) UVM2_API->view_field(x0, x1, y0, y1, aw, ah);
+}
+int uvm2_draw_rotated(void) { return API_HAS_OPTIONS() ? UVM2_API->draw_rotated() : 0; }
+/* The game's six now, the CONTROLS map applied (aae_pad.h's AP_MAPPED). On an older BIOS, the
+ * stick straight, as the map does by default. */
+uint8_t uvm2_pad_actions(void)
+{
+    if (API_HAS_OPTIONS()) return (uint8_t)UVM2_API->pad_actions();
+    const uint32_t a = UVM2_API->read_axes();
+    const int8_t y = (int8_t)(a >> 16);
+    return (uint8_t)((UVM2_API->read_buttons() & 0x0Fu) | (y > UVM2_STICK_UP ? 0x10u : 0u)
+                     | (y <= UVM2_STICK_DOWN ? 0x20u : 0u));
+}
+
+/* The .um2's hook; a game that declares nothing has this empty one (uvm2_config.c's, there). */
+__attribute__((weak)) void uvm2_game_settings(void) { }
+
+/* rp2350_start.s, before main(): the hook, the combo and the screen, then the copies. */
+void rp2350_boot(void)
+{
+    if (!API_HAS_OPTIONS()) return;
+    uvm2_game_settings();
+    UVM2_API->game_boot();
+    int32_t v[7];
+    UVM2_API->settings(v, 7);
+    uvm2_setting_hz = v[0]; uvm2_setting_menu = v[1]; uvm2_setting_rotate = v[2];
+    uvm2_setting_audio = v[3]; uvm2_setting_turn = v[4]; uvm2_setting_buttons = v[5];
+    uvm2_setting_bright = v[6];
 }
 #else
 #define BEAM_ZERO()       sys_reset0ref()
