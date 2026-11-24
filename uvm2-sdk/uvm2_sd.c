@@ -662,6 +662,13 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     return write_all(&f, data, n);
 }
 
+/* A package's installer and uninstaller (uvm2_uvp.c) take files off the card. */
+int uvm2_sd_remove(const char *path)
+{
+    if (!begin()) return 0;
+    return f_unlink(path) == FR_OK;
+}
+
 #if defined(UVM2_USB_MONITOR) || defined(UVM2_SD_STREAM)
 /* A FILE WRITTEN AS IT ARRIVES: the USB uploads of the monitor (uvm2_monitor.c) and of the SD
  * bridge (sdbridge/), a .um2 sent from the IDE in pieces, so it never has to sit whole in

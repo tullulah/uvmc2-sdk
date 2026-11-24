@@ -156,6 +156,34 @@ int uvm2_sd_write(const char *path, const unsigned char *data, uint32_t n)
     return write_file(path, data, n, FA_WRITE | FA_CREATE_ALWAYS);
 }
 
+int uvm2_sd_remove(const char *path)
+{
+    return f_unlink(path) == FR_OK;
+}
+
+/* A file written in pieces (uvm2_sd.h): what a package's installer copies out. One at a time. */
+static FIL s_stream;
+static int s_streaming;
+int uvm2_sd_stream_open(const char *path)
+{
+    if (s_streaming) { f_close(&s_stream); s_streaming = 0; }
+    make_folders(path);
+    if (f_open(&s_stream, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return 0;
+    s_streaming = 1;
+    return 1;
+}
+int uvm2_sd_stream_put(const unsigned char *data, uint32_t n)
+{
+    UINT put = 0;
+    return s_streaming && f_write(&s_stream, data, (UINT)n, &put) == FR_OK && put == n;
+}
+int uvm2_sd_stream_close(void)
+{
+    if (!s_streaming) return 0;
+    s_streaming = 0;
+    return f_close(&s_stream) == FR_OK;
+}
+
 /* ── A FILE READ IN PIECES (uvm2_sd_open / next / seek / close) ───────────────
  *
  * The contract's handle keeps FatFs's FIL in 128 opaque bytes. This kernel's FatFs is built

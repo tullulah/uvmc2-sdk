@@ -111,6 +111,13 @@ static void make_parents(const char *path)
     }
 }
 
+int uvm2_sd_remove(const char *path)
+{
+    char p[512];
+    if (!card_path(path, p, sizeof p)) return 0;
+    return remove(p) == 0;
+}
+
 int uvm2_sd_write2(const char *path, const unsigned char *a, uint32_t na,
                    const unsigned char *b, uint32_t nb)
 {
