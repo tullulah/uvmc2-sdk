@@ -486,3 +486,24 @@ rp2350-cart $(UVM2_NAME)_rp2350: $(UVM2_DEPS) $(RP2350_USB_OBJS) | $(RP2350_BUIL
 $(RP2350_BUILD):
 	mkdir -p $(RP2350_BUILD)
 .PHONY: rp2350-cart $(UVM2_NAME)_rp2350
+
+
+# ── A PITREX (Pi Zero 2 W): make pitrex -> build_pitrex/<name>.img ────────────────────────
+#
+# The same sources and the game's own defines against the SDK's PiTrex build (../pitrex/
+# pitrex.mk says what is shared and what is that board's). What is taken out is what names the
+# RP2350: its CPU and float flags, the .um2-only settings (UVM2_UM2_ONLY), the PSRAM. The image
+# goes on a PiTrex card as piZero2/<name>.img and its menu lists it by itself.
+#
+# A game with a pitrex target of its own sets UVM2_NO_PITREX = 1 before including this file.
+ifndef UVM2_NO_PITREX
+UVM2_NOT_PITREX = -mthumb -mcpu=% -mfloat-abi=% -mfpu=% -DVPY_DUAL_CORE -DUVM2_ROMZIP_IN_PSRAM=1 \
+                  -DUVM2_PSRAM_START% -DUVM2_CMDS_IN_PSRAM% -DUVM2_ROMZIP_MAX=% -Wdouble-promotion
+# UVM2_UM2_ONLY STAYS: those are the flags of "the SDK is linked into this image", which is
+# what a PiTrex image is too. Dropping them built Kuroishi as its debug-cartridge flavour — the
+# one that expects a BIOS underneath — and its title menu had no SETTINGS (2026-11-24).
+PITREX_CFLAGS ?= $(filter-out $(UVM2_NOT_PITREX),$(UVM2_CFLAGS_CLEAN))
+PITREX_SRCS   ?= $(UVM2_SRCS_KEPT)
+PITREX_V_API  ?= 1
+include $(UVM2_SDK)/../pitrex/pitrex.mk
+endif

@@ -62,6 +62,15 @@ int  uvm2_draw_rotated(void);
 #define UVM2_HAS_VIEW_FIT 1     /* from v1.4.11: a game can test for it */
 void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah);
 void uvm2_view_map(int32_t *x, int32_t *y);
+/* The half extents of what a Vectrex's tube shows, in deflection units (a device unit is 127
+ * of them), when the console has not been told its own (WIN X / WIN Y in the calibration
+ * screen): what one console showed, measured by photograph. uvm2_draw.c says how it is used. */
+#ifndef UVM2_VIEW_REF_WIN_X
+#define UVM2_VIEW_REF_WIN_X 18000
+#endif
+#ifndef UVM2_VIEW_REF_WIN_Y
+#define UVM2_VIEW_REF_WIN_Y 20500
+#endif
 
 /* SYS_MOVE / SYS_DRAW_DELTA — relative, blanked and lit respectively. */
 void uvm2_draw_move(int dx, int dy);

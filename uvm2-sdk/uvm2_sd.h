@@ -22,10 +22,18 @@
  * The visible names from before, config/ and roms/, are still READ when the hidden one does
  * not have the file, so a card set up for an older SDK keeps its settings and its romsets.
  * They are never written: anything saved goes to .conf/, created on the first save. */
-#define UVM2_SD_CONF      ".conf/"
-#define UVM2_SD_CONF_OLD  "config/"
-#define UVM2_SD_ROMS      ".roms/"
-#define UVM2_SD_ROMS_OLD  "roms/"
+/* FROM THE CARD'S TOP FOLDER on a PiTrex: a program there may change folder (a port of the
+ * baremetal tree's starts in its own games/<name>/, uvm2_pitrex_main.c), and the settings, the
+ * romsets and the reports are the card's, not the game's. Its FatFs takes "/" as the top. */
+#ifdef UVM2_PITREX
+#define UVM2_SD_ROOT      "/"
+#else
+#define UVM2_SD_ROOT      ""
+#endif
+#define UVM2_SD_CONF      UVM2_SD_ROOT ".conf/"
+#define UVM2_SD_CONF_OLD  UVM2_SD_ROOT "config/"
+#define UVM2_SD_ROMS      UVM2_SD_ROOT ".roms/"
+#define UVM2_SD_ROMS_OLD  UVM2_SD_ROOT "roms/"
 
 /* 0 = no card, or it did not start. Non-zero = ready to read. */
 int uvm2_sd_init(void);

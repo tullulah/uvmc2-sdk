@@ -84,6 +84,8 @@ static inline uint32_t uvm2_us(void)
 {
 #ifdef UVM2_HOST
     return 0;
+#elif defined(UVM2_PITREX)
+    return uvm2_now_us();              /* the board's own microseconds (uvm2_bus.h) */
 #else
     return *(volatile uint32_t *)0x400B000Cu;
 #endif
@@ -132,6 +134,7 @@ void uvm2_stream_start(void);
 void uvm2_core1_start(void);
 #endif
 
+#ifndef UVM2_PITREX      /* a PiTrex is brought up by its own start-up (pitrex/uvm2_pitrex_main.c) */
 void uvm2_runtime_init(void)
 {
     /* First, before anything with state: .bss is still whatever was in SRAM. */
@@ -256,6 +259,8 @@ void uvm2_runtime_init(void)
 #  endif
 #endif
 }
+
+#endif /* !UVM2_PITREX */
 
 /* r0-r3 of the interrupted code sit at frame[0..3]; frame[6] is the stacked PC,
  * which points just past the `svc` instruction, so the immediate is at [-2].
@@ -554,3 +559,17 @@ void uvm2_svc_dispatch(uint32_t *frame)
         break;
     }
 }
+
+#ifdef UVM2_PITREX
+/* THE SAME CALLS WITHOUT THE EXCEPTION. On the cartridges the game's bridge (sdk_rp2350.c)
+ * reaches the dispatcher through `svc`; on a PiTrex that instruction belongs to the
+ * baremetal kernel's own handler, so the bridge calls this instead. It builds the frame the
+ * exception would have stacked, so there is ONE dispatcher and one table of numbers. */
+uint32_t uvm2_svc_call(uint32_t num, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3)
+{
+    const uint8_t insn[2] = { (uint8_t)num, 0xDFu };      /* Thumb `svc #num`, as stacked */
+    uint32_t frame[8] = { r0, r1, r2, r3, 0, 0, (uint32_t)(uintptr_t)(insn + 2), 0 };
+    uvm2_svc_dispatch(frame);
+    return frame[0];
+}
+#endif

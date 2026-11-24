@@ -4,8 +4,12 @@
 #include "uvm2_sd.h"
 #include <string.h>
 
+/* UVM2_CONFIG_NO_FLASH: a board with no flash of its own (the PiTrex boots from the card).
+ * The card is then the only store, and the flash path below is not compiled. */
+#ifndef UVM2_CONFIG_NO_FLASH
 #include "hardware/flash.h"
 #include "hardware/sync.h"
+#endif
 
 /* A BIOS that keeps cold code in flash defines UVM2_COLD (the debug cartridge does: this file
  * runs at boot and while calibrating, and the BIOS's RAM code has a size past which its input
@@ -388,6 +392,9 @@ UVM2_COLD static int load_from_sd(struct uvm2_config *c, const char *path, int g
 }
 
 /* ── THE FLASH ───────────────────────────────────────────────────────────────────────── */
+#ifdef UVM2_CONFIG_NO_FLASH
+UVM2_COLD static int load_from_flash(struct uvm2_config *c) { (void)c; return 0; }
+#else
 UVM2_COLD static const struct saved *in_flash(void)
 {
     return (const struct saved *)(XIP_BASE + UVM2_CONFIG_FLASH_OFF);
@@ -400,6 +407,7 @@ UVM2_COLD static int load_from_flash(struct uvm2_config *c)
     *c = g->c;
     return 1;
 }
+#endif
 
 /* .conf/<file>, and if it is not there the config/<file> of a card set up before .conf/
  * existed: its settings are kept, and the next save writes them to .conf/. */
@@ -528,6 +536,7 @@ UVM2_COLD int uvm2_config_save(void)
 }
 
 /* ── THE FLASH PATH, HALTED ───────────────────────────────────────────────────────── */
+#ifndef UVM2_CONFIG_NO_FLASH
 static int save_to_flash_DO_NOT_USE(void)
 
 {
@@ -571,3 +580,4 @@ static int save_to_flash_DO_NOT_USE(void)
      * later when somebody notices the calibration "does not save". */
     return load_from_flash(&g.c);
 }
+#endif /* UVM2_CONFIG_NO_FLASH */

@@ -342,6 +342,97 @@ unsigned uvm2_smp_pos(unsigned voice, unsigned fps)
     return (unsigned)(((uint64_t)v->cursor * fps) / v->rate);
 }
 
+/* ── A STREAM: PCM the game renders as it goes, through the same DAC ──────────
+ *
+ * A .vsmp is a recording that already exists; a stream is sound that is being made — the
+ * mixers the arcade ports write for the line jack (16 bits at the jack's rate). On a board
+ * with no jack that sound has this one place to go: it enters the mix as ONE more voice.
+ *
+ * The same clock as the voices, for the same reason (the list is built a frame before it
+ * sounds): the read position advances by bus cycles, exactly. And because the DAC is written
+ * less often than the stream's rate, what one write carries is the MEAN of the samples that
+ * fell due since the last one — taking one and dropping the rest would fold everything above
+ * half the write rate back into the band.
+ *
+ * Written and read by the core that builds the list, like everything else here.
+ * An empty ring is silence, counted (uvm2_smp_stream_starved): the game fell behind. */
+#define STREAM_RING       4096u            /* samples; a power of two */
+#define STREAM_FULL_SCALE 32768            /* the stream's range each side of zero */
+#define STREAM_DEV_MAX    (SMP_MID - 1)    /* the DAC's, each side of its midpoint */
+/* THE STREAM'S LEVEL FOLLOWS ITS OWN PEAK, because a fixed one cannot be right.
+ *
+ * A mix written for a 16-bit line output keeps its peaks well clear of full scale and has
+ * sounds forty decibels apart; the DAC has fifteen steps. Sent as written (the first night,
+ * 2026-11-24, on the console: "it crackles, and not every sound plays") the loud sounds use
+ * two or three of those steps — a square wave where there was a waveform — and the quiet
+ * ones none at all.
+ *
+ * So the level is set by what is playing: the largest sample of the recent past is put at the
+ * DAC's full scale. `s_stream_peak` jumps up to a louder sample at once (a peak must never
+ * clip) and comes down slowly, by 1/2^STREAM_PEAK_FALL of itself per DAC write — at 8000
+ * writes a second and 12, half of it in about a third of a second, long enough that a tone
+ * does not pump and short enough that a quiet passage is raised before it is over. It never
+ * goes below STREAM_PEAK_FLOOR: silence is not turned up into its own noise. */
+#define STREAM_PEAK_FALL   12
+#define STREAM_PEAK_FLOOR  (STREAM_FULL_SCALE / 32)
+static int32_t s_stream_peak = STREAM_PEAK_FLOOR;
+static int16_t  s_stream[STREAM_RING];
+static uint32_t s_stream_put, s_stream_get;      /* free-running; the difference is the fill */
+static uint32_t s_stream_rate, s_stream_rem;
+static int      s_stream_dev;                    /* what the stream adds to the mix now */
+uint32_t        uvm2_smp_stream_starved;
+
+void uvm2_smp_stream_open(uint32_t rate)
+{
+    if (rate == 0u) return;
+    if (!s_stream_rate) s_active++;              /* the list carries DAC writes from now on */
+    s_stream_rate = rate;
+    s_stream_put = s_stream_get = s_stream_rem = 0u;
+    s_stream_dev = 0;
+}
+
+void uvm2_smp_stream_close(void)
+{
+    if (s_stream_rate) s_active--;
+    s_stream_rate = 0u;
+    s_stream_dev = 0;
+}
+
+uint32_t uvm2_smp_stream_fill(void) { return s_stream_put - s_stream_get; }
+
+void uvm2_smp_stream_write(const int16_t *samples, int n)
+{
+    for (int i = 0; i < n && uvm2_smp_stream_fill() < STREAM_RING; i++)
+        s_stream[s_stream_put++ & (STREAM_RING - 1u)] = samples[i];
+}
+
+/* `cycles` bus cycles of the stream: the mean of what fell due, as a deviation of the DAC. */
+static void stream_advance(uint32_t cycles)
+{
+    if (!s_stream_rate) return;
+    int32_t sum = 0;
+    uint32_t due = 0;
+    s_stream_rem += cycles * s_stream_rate;
+    while (s_stream_rem >= UVM2_BUS_HZ) {
+        s_stream_rem -= UVM2_BUS_HZ;
+        if (s_stream_put != s_stream_get) sum += s_stream[s_stream_get++ & (STREAM_RING - 1u)];
+        else uvm2_smp_stream_starved++;
+        due++;
+    }
+    if (!due) return;                            /* less than a sample went by: as it was */
+    const int32_t mean = sum / (int32_t)due;
+    const int32_t size = mean < 0 ? -mean : mean;
+    s_stream_peak -= s_stream_peak >> STREAM_PEAK_FALL;
+    if (s_stream_peak < STREAM_PEAK_FLOOR) s_stream_peak = STREAM_PEAK_FLOOR;
+    if (size > s_stream_peak) s_stream_peak = size;
+    /* the peak at the DAC's full scale, rounded to the nearest step */
+    const int32_t scaled = mean * STREAM_DEV_MAX;
+    int dev = (int)((scaled + (scaled < 0 ? -s_stream_peak : s_stream_peak) / 2) / s_stream_peak);
+    if (dev >  STREAM_DEV_MAX) dev =  STREAM_DEV_MAX;
+    if (dev < -STREAM_DEV_MAX) dev = -STREAM_DEV_MAX;
+    s_stream_dev = dev;
+}
+
 /* Advance every voice by `cycles` bus cycles.
  *
  * THE ARITHMETIC IS INTEGER AND EXACT on purpose: `rem` accumulates cycle*Hz and
@@ -355,6 +446,7 @@ unsigned uvm2_smp_pos(unsigned voice, unsigned fps)
 static void advance(uint32_t cycles)
 {
     unsigned i;
+    stream_advance(cycles);
     for (i = 0; i < UVM2_SMP_VOICES; i++) {
         struct voice *v = &s_voice[i];
         if (!v->active) continue;
@@ -405,6 +497,7 @@ static uint8_t mix(void)
             acc += (int)sample_at(&s_voice[i], s_voice[i].cursor) - SMP_MID;
             n++;
         }
+    if (s_stream_rate) { acc += s_stream_dev; n++; }     /* the stream: one more voice */
     /* ONE BIT OF HEADROOM, AND THE THRESHOLD IS THREE VOICES. The divisor is 2 — not
      * the number of voices, and not nothing. Both extremes were tried on hardware and
      * both are in the traces:

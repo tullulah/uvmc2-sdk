@@ -32,8 +32,10 @@
 /* THE CONSOLE'S RESET BUTTON IS WATCHED (uvm2_core1.c, reset_poll): one press starts the game
  * again, two in a row go back to the UVMC2's menu. On in every dual-core game since v1.4.0;
  * UVM2_NO_RESET_BUTTON turns it off. Not in a BIOS (the Vectrex Studio cartridge's firmware
- * has its own). */
-#if defined(UVM2_DUAL_CORE) && !defined(UVM2_NO_RESET_BUTTON) && !defined(UVM2_BIOS)
+ * has its own). A PiTrex watches the button too, its own way: there it goes back to the
+ * PiTrex menu (reset_poll's first branch), and the restart below — the RP2350 bootrom's — is
+ * not built. */
+#if defined(UVM2_DUAL_CORE) && !defined(UVM2_NO_RESET_BUTTON) && !defined(UVM2_BIOS) && !defined(UVM2_PITREX)
 #define UVM2_RESET_WATCH 1
 #else
 #define UVM2_RESET_WATCH 0
@@ -67,11 +69,15 @@
  * uvm2_draw.c and executes it itself, so there is no SDK core 1 and none is needed. That is
  * that cartridge's BIOS+svc model, kept deliberately. The only board-specific thing that
  * changes in this file is the bus word, UVM2_VIA_WORD. */
+/* AND THE PITREX (`UVM2_PITREX`), which is another board and not a variant of this one: a
+ * Raspberry Pi has no PIO, and its board synchronises every write to E in hardware
+ * (pitrex/uvm2_bus_pitrex.c), which is the job the PIO stream does here. So it is excused
+ * from UVM2_PIO_STREAM and from nothing else: a PiTrex game draws with core 1 too. */
 #if !defined(UVM2_BENCH_NO_CORE1) && !defined(UVM2_BIOS)
 #  if !defined(UVM2_DUAL_CORE)
 #    error "UVM2: UVM2_DUAL_CORE is missing. A game draws with core 1; if this is a bench that measures the executor in isolation, declare UVM2_BENCH_NO_CORE1 in its build block and say why."
 #  endif
-#  if !defined(UVM2_PIO_STREAM)
+#  if !defined(UVM2_PIO_STREAM) && !defined(UVM2_PITREX)
 #    error "UVM2: UVM2_PIO_STREAM is missing (it brings PIO and DMA). The SIO path exists to bisect, not to play; if this is a bench, declare UVM2_BENCH_NO_CORE1."
 #  endif
 #endif
@@ -88,7 +94,18 @@ extern "C" {
 #define UVM2_SIO_BASE       0xD0000000u
 #define UVM2_MMIO(addr)     (*(volatile uint32_t *)(uintptr_t)(addr))
 #define UVM2_REG(off)       UVM2_MMIO(UVM2_SIO_BASE + (off))
+#ifdef UVM2_PITREX
+/* On a Pi the running core is in the CPU's own MPIDR, not in a peripheral register. */
+static inline uint32_t uvm2_pitrex_cpuid(void)
+{
+    uint32_t v;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(v));
+    return v & 3u;
+}
+#define UVM2_CPUID          uvm2_pitrex_cpuid()
+#else
 #define UVM2_CPUID          UVM2_REG(0x000)   /* 0 or 1: which core is running */
+#endif
 #define UVM2_GPIO_IN        UVM2_REG(0x004)
 #define UVM2_GPIO_OUT       UVM2_REG(0x010)
 #define UVM2_GPIO_OUT_SET   UVM2_REG(0x018)

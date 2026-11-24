@@ -73,6 +73,42 @@ void uvm2_print_text(int x, int y, const char *str, int scale, int intensity)
     }
 }
 
+/* uvm2_print_text with the grid's step given in 1/16 of a unit instead of in half units:
+ * the same glyphs, the same re-centre before each one, the same order of strokes. */
+#define TEXT_MAX_CHARS    256
+#define GLYPH_STEPS_TALL  6
+#define GLYPH_STEPS_APART 7
+void uvm2_print_text_q4(int x_q4, int y_q4, const char *str, int step_q4, int intensity,
+                        int max_chars)
+{
+    if (step_q4 <= 0) return;
+    if (intensity <= 0) intensity = 100;
+    if (max_chars <= 0 || max_chars > TEXT_MAX_CHARS) max_chars = TEXT_MAX_CHARS;
+    int cur_x = x_q4;
+    const int adj_y = y_q4 - GLYPH_STEPS_TALL * step_q4;
+
+    for (int i = 0; i < max_chars; i++) {
+        int n;
+        const unsigned char ch = (unsigned char)str[i];
+        if (ch == 0 || ch == 0x80) break;
+        const uint8_t *st = glyph(ch, &n);
+        if (st) {
+            int bx = 0, by = 0;   /* beam, relative to centre after the reset */
+            uvm2_draw_reset();
+            uvm2_draw_intensity(intensity);
+            for (int s = 0; s < n; s += 3) {
+                const int tx = cur_x + st[s + 1] * step_q4;
+                const int ty = adj_y + st[s + 2] * step_q4;
+                if (st[s] == 1) uvm2_draw_move_q4(tx - bx, ty - by);
+                else            uvm2_draw_delta_q4(tx - bx, ty - by);
+                bx = tx;
+                by = ty;
+            }
+        }
+        cur_x += GLYPH_STEPS_APART * step_q4;
+    }
+}
+
 /* THE SAME FONT, DRAWN THE WAY A GAME DRAWS ITS TEXT: no re-zero between glyphs.
  *
  * uvm2_print_text re-centres the beam before every glyph, and that hides exactly what the

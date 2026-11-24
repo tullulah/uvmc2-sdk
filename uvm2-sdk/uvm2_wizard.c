@@ -513,7 +513,7 @@ UVM2_COLD int uvm2_config_wizard_with(void (*figure)(void))
         }
         uvm2_frame_end();
 
-input:
+input: ;   /* the empty statement: before C23 a label cannot sit on a declaration (GCC 10) */
         /* THE CONTROLLER, ON EDGES. Without this one tap moves the value thirty times: the
          * loop runs at 50 Hz and a finger takes longer. */
         uint8_t b = (uint8_t)~uvm2_cached_buttons;

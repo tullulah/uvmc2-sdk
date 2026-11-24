@@ -111,6 +111,17 @@
 #define UVM2_SMP_REG 10u
 #endif
 
+/* ── A STREAM through the same DAC (uvm2_smp.c says what it is for) ──
+ * 16-bit mono PCM at `rate` Hz, written as the game renders it. Open it once; from then on
+ * the list carries DAC writes whether or not anything is written, and an empty stream is
+ * silence. uvm2_smp_stream_fill says how many samples are waiting, which is what a game
+ * paces its rendering by. */
+void     uvm2_smp_stream_open(uint32_t rate);
+void     uvm2_smp_stream_close(void);
+void     uvm2_smp_stream_write(const int16_t *samples, int n);
+uint32_t uvm2_smp_stream_fill(void);
+extern uint32_t uvm2_smp_stream_starved;   /* samples that fell due with nothing written */
+
 /** Start `data` (a .vsmp: .word rate, .word n, packed 4-bit, low nibble = even
  *  sample) on voice `voice`. `loop` != 0 repeats it forever. Re-triggering a
  *  voice restarts it, which is what AAE expects. */
