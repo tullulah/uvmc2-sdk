@@ -26,17 +26,34 @@ int uvm2_sd_error = UVM2_SD_OK;
  * does on the cartridges, where it is at the top. So a relative path that is not on the card
  * is looked for again under gamedata/. Reading only: what a game writes goes where it says. */
 #define GAMES_DIR "gamedata/"
-static const char *in_games(const char *path, char *buf, size_t max)
+#define GAMES_PATH_MAX 128
+
+/* Whether a path is on the card. "" is the top, which always is; a folder may come with its
+ * trailing '/' (the card-wide search, uvm2_romzip.c's scan, opens "kuroishi/"), which f_stat
+ * does not take. Both went unseen the first time: the search started in gamedata/ instead of
+ * at the top, and never got into a folder — Kuroishi found no KUROISHI.PAK and played its
+ * effects without music (2026-11-24). */
+static int on_card(const char *path)
 {
     FILINFO info;
+    char bare[GAMES_PATH_MAX];
+    size_t n = strlen(path);
+    if (n == 0) return 1;
+    if (n >= sizeof bare) return 0;
+    memcpy(bare, path, n + 1u);
+    while (n > 0 && bare[n - 1u] == '/') bare[--n] = 0;
+    return n == 0 || f_stat(bare, &info) == FR_OK;
+}
+
+static const char *in_games(const char *path, char *buf, size_t max)
+{
     const size_t n = sizeof GAMES_DIR - 1u;
-    if (!path || path[0] == '/' || f_stat(path, &info) == FR_OK) return path;
+    if (!path || path[0] == '/' || on_card(path)) return path;
     if (n + strlen(path) >= max) return path;
     memcpy(buf, GAMES_DIR, n);
     strcpy(buf + n, path);
-    return f_stat(buf, &info) == FR_OK ? buf : path;
+    return on_card(buf) ? buf : path;
 }
-#define GAMES_PATH_MAX 128
 
 int uvm2_sd_init(void) { return 1; }      /* mounted by the kernel before main() */
 
@@ -243,8 +260,16 @@ int uvm2_sd_dir_open(const char *path, uvm2_sd_dir *d)
     d->magic = 0;
     for (slot = 0; slot < OPEN_DIRS && s_dir_used[slot]; slot++) { }
     if (slot == OPEN_DIRS) { uvm2_sd_error = UVM2_SD_TOO_BIG; return 0; }
-    /* "" and "/" are the root in the contract; FatFs wants "/" for it. */
-    if (f_opendir(&s_dir[slot], (path[0] == 0) ? "/" : path) != FR_OK) { uvm2_sd_error = UVM2_SD_MISSING; return 0; }
+    /* "" and "/" are the root in the contract; FatFs wants "/" for it. A folder comes from the
+     * card-wide search with its trailing '/' ("gamedata/"), which this kernel's FatFs does not
+     * open: the search never got below the top, and Kuroishi's pack in gamedata/kuroishi/ was
+     * "not on the card" (its report, 2026-11-24: found nowhere in 74 ms, 35 pieces missing). */
+    char bare[GAMES_PATH_MAX];
+    size_t n = strlen(path);
+    if (n >= sizeof bare) { uvm2_sd_error = UVM2_SD_TOO_BIG; return 0; }
+    memcpy(bare, path, n + 1u);
+    while (n > 1u && bare[n - 1u] == '/') bare[--n] = 0;
+    if (f_opendir(&s_dir[slot], (bare[0] == 0) ? "/" : bare) != FR_OK) { uvm2_sd_error = UVM2_SD_MISSING; return 0; }
     s_dir_used[slot] = 1;
     d->dir[0] = slot;
     d->count  = 0;
