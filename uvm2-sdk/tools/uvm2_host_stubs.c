@@ -22,6 +22,9 @@
 /* the config loader (uvm2_config.c): no SD card on a host */
 WEAK void uvm2_config_load(void) {}
 WEAK volatile int uvm2_have_calibration = 0;
+/* the picture's fit to the tube (uvm2_config.c), at its defaults there: square, full window */
+WEAK volatile int32_t uvm2_screen_aspect_q8 = 256;
+WEAK volatile int32_t uvm2_screen_win_x = 15500, uvm2_screen_win_y = 15500;
 
 /* the sample player (uvm2_smp.c): silent */
 WEAK unsigned uvm2_smp_s_active = 0;           /* uvm2_smp_active() is inline over this */

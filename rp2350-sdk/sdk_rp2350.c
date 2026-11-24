@@ -32,6 +32,23 @@
 /* ── The BIOS svc calls that remain (Thumb `svc #imm`; r0-r3, AAPCS). On the cartridge the
  * drawing does NOT go through svc (it goes through the table); these are sound, music and
  * raster text for the .um2, whose bridge is uvm2_svc.c. ── */
+#ifdef UVM2_PITREX
+/* A PiTrex runs the .um2's dispatcher (uvm2_svc.c) by a plain call: `svc` there is the
+ * baremetal kernel's. Same numbers, same arguments. */
+uint32_t uvm2_svc_call(uint32_t num, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3);
+#define SYS(n, a, b, c, d) uvm2_svc_call((n), (uint32_t)(a), (uint32_t)(b), (uint32_t)(c), (uint32_t)(d))
+static inline void sys_reset0ref(void)       { SYS(0, 0, 0, 0, 0); }
+static inline void sys_wait_recal(void)      { SYS(1, 0, 0, 0, 0); }
+static inline void sys_set_intensity(int b)  { SYS(2, b, 0, 0, 0); }
+static inline void sys_psg_write(int reg,int val){ SYS(5, reg, val, 0, 0); }
+static inline int  sys_read_buttons(void)    { return (int)SYS(7, 0, 0, 0, 0); }
+static inline int  sys_read_axes(void)       { return (int)SYS(13, 0, 0, 0, 0); }
+static inline int  sys_sample_pos(int fps)   { return (int)SYS(10, fps, 0, 0, 0); }
+static inline void sys_play_music(const void *p){ SYS(21, (uintptr_t)p, 0, 0, 0); }
+static inline void sys_stop_music(void)      { SYS(22, 0, 0, 0, 0); }
+static inline void sys_play_sfx(const void *p){ SYS(23, (uintptr_t)p, 0, 0, 0); }
+static inline void sys_raster_text(int x,int y,const unsigned char*s,int n){ SYS(26, x, y, (uintptr_t)s, n); }
+#else
 static inline void sys_reset0ref(void)       { __asm__ volatile("svc #0"  ::: "r0","r1","r2","r3","memory"); }
 static inline void sys_wait_recal(void)      { __asm__ volatile("svc #1"  ::: "r0","r1","r2","r3","memory"); }
 static inline void sys_set_intensity(int b)  { register int r0 __asm__("r0")=b; __asm__ volatile("svc #2" : "+r"(r0) :: "memory"); }
@@ -51,6 +68,8 @@ static inline void sys_play_sfx(const void *p){ register const void *r0 __asm__(
  * arrived at the SFX player as a track and hung the core). */
 static inline void sys_raster_text(int x,int y,const unsigned char*s,int n){ register int r0 __asm__("r0")=x; register int r1 __asm__("r1")=y; register const unsigned char* r2 __asm__("r2")=s; register int r3 __asm__("r3")=n; __asm__ volatile("svc #26" :: "r"(r0),"r"(r1),"r"(r2),"r"(r3) : "memory"); }
 
+#endif /* UVM2_PITREX */
+
 /* ── The input, exactly as libvpy and the ports read it (externs). ── */
 uint8_t currentButtonState = 0;
 int8_t  currentJoy1X = 0;
@@ -64,7 +83,9 @@ int8_t  currentJoy1Y = 0;
                                  : (long)(v) * 16 + VPY_SCALE / 2) / VPY_SCALE))
 
 /* ── Lifecycle (the BIOS or the runtime has already set up clocks, pins and VIA). ── */
+#ifndef UVM2_PITREX       /* on a PiTrex this name is the board's own bus bring-up */
 void vectrexinit(int mode) { (void)mode; }
+#endif
 #if defined(VPY_DUAL_CORE) && !defined(UVM2_PICO_RUNTIME)
 static void dc_cfg_init(void);          /* below, with the table-based configuration API */
 void v_init(void)          { dc_cfg_init(); }
@@ -150,6 +171,8 @@ struct uvm2_api {
     void (*view_map)(int32_t *, int32_t *);
     /* version 10: the size of the file the last read opened (uvm2_sd_read_rom below) */
     uint32_t (*file_size)(void);
+    /* version 11: how much of each of the executor's gaps the card may have (uvm2_cart_file.h) */
+    void (*file_set_gap_us)(uint32_t);
 };
 #define UVM2_API        ((const struct uvm2_api *)0x20077000u)
 #define UVM2_API_MAGIC  0x50415356u   /* 'VSAP' */
@@ -231,28 +254,179 @@ void uvm2_view_field(int x0, int x1, int y0, int y1, int aw, int ah)
 }
 int uvm2_draw_rotated(void) { return API_HAS_OPTIONS() ? UVM2_API->draw_rotated() : 0; }
 
+/* THE CARD FROM A GAME ON THIS CART (uvm2_cart_file.h): the BIOS's game reader, which does the
+ * card's work in the executor's gaps -- a read from this core while the other drives the bus
+ * comes back as garbage. */
+#include "uvm2_cart_file.h"
+#define API_HAS_FILES() (UVM2_API->magic == UVM2_API_MAGIC && UVM2_API->version >= 10u)
+/* THE RUNS OF A FILE, LENT TO THE BIOS. Without them it keeps 8 runs of consecutive sectors
+ * and refuses a file in more pieces (SD_ERR_FRAGMENTED, 7): Kuroishi's 2 MB pack, copied onto a
+ * card that has had files deleted, came out in more and could not be opened. 256 runs, 2 KB;
+ * Metal Gear Solid's 21 MB pack lends 1024 the same way (ps1/mgs/host/rp2350.c). */
+/* IN SRAM (.sram_fast, the game's SRAM window, NOLOAD): the BIOS writes it from the executor's
+ * core while the game runs out of the PSRAM, and its writes into the PSRAM then were measured
+ * losing bytes (Starblade's zip directory, 2026-11-22). */
+static uint32_t s_runs[2 * 256] __attribute__((section(".sram_fast")));
+int uvm2_cart_read_start(const char *path, uint32_t off, void *dst, uint32_t n)
+{
+    static int lent;
+    if (!API_HAS_FILES()) return -100;
+    if (!lent) { UVM2_API->file_set_work(s_runs, sizeof s_runs); lent = 1; }
+    return UVM2_API->file_read_start(path, off, dst, n);
+}
+void uvm2_cart_set_gap_us(uint32_t us)
+{
+    if (UVM2_API->magic == UVM2_API_MAGIC && UVM2_API->version >= 11u) UVM2_API->file_set_gap_us(us);
+}
+int uvm2_cart_read_poll(void) { return API_HAS_FILES() ? UVM2_API->file_read_poll() : -100; }
+int uvm2_cart_file_open(const char *path, uint32_t *size)
+{
+    unsigned char probe;
+    int r;
+    if (uvm2_cart_read_start(path, 0, &probe, 1) != 0) return 0;
+    while ((r = uvm2_cart_read_poll()) > 0) { }
+    if (r < 0) return 0;
+    *size = UVM2_API->file_size();
+    return 1;
+}
+
+/* ── THE UVMC2's CARD API ON THIS CART (uvm2_sd.h), with read-ahead ─────────────────────
+ * uvm2_sd_file keeps the path in its opaque FatFs space. Two 8 KB buffers in the game's PSRAM,
+ * written by the BIOS and read here through the uncached alias: a sequential reader is served
+ * from one while the other is being filled, so after the first block it does not wait. */
+#include "uvm2_sd.h"
+struct uvm2_sd_diag uvm2_sd_diag;
+int uvm2_psram_ready = 1;
+void uvm2_qmi_bring_up(void) { }
+int  uvm2_psram_init(void) { return 1; }
+void uvm2_psram_enable_xip(void) { }
+
+#define RA_N 8192u
+static uint8_t s_ra[2][RA_N] __attribute__((aligned(4), section(".sram_fast")));   /* see s_runs */
+static struct { const uvm2_sd_file *f; uint32_t off, len; int state; } s_rb[2];   /* 0 empty 1 reading 2 ready */
+static int s_ra_pend = -1;
+#define CF_PATH(f) ((const char *)(f)->fil)
+static uint8_t *ra_mem(int b)
+{
+    const uintptr_t a = (uintptr_t)s_ra[b];
+    return (uint8_t *)((a >> 24) == 0x11u ? a + 0x04000000u : a);   /* PSRAM: its uncached alias */
+}
+static void ra_poll(void)
+{
+    if (s_ra_pend < 0) return;
+    const int r = uvm2_cart_read_poll();
+    if (r > 0) return;
+    s_rb[s_ra_pend].state = r == 0 ? 2 : 0;
+    s_ra_pend = -1;
+}
+static void ra_wait(void) { while (s_ra_pend >= 0) ra_poll(); }
+static void ra_start(int b, const uvm2_sd_file *f, uint32_t off)
+{
+    if (s_ra_pend >= 0 || off >= f->len) return;
+    const uint32_t n = f->len - off < RA_N ? f->len - off : RA_N;
+    if (uvm2_cart_read_start(CF_PATH(f), off, ra_mem(b), n) != 0) { s_rb[b].state = 0; return; }
+    s_rb[b].f = f; s_rb[b].off = off; s_rb[b].len = n; s_rb[b].state = 1;
+    s_ra_pend = b;
+}
+static void ra_drop(const uvm2_sd_file *f)
+{
+    ra_wait();
+    for (int b = 0; b < 2; b++) if (s_rb[b].f == f) s_rb[b].state = 0;
+}
+int uvm2_sd_open(const char *path, uvm2_sd_file *f)
+{
+    ra_drop(f);
+    char *p = (char *)f->fil;
+    unsigned k = 0;
+    while (path[k] && k < sizeof f->fil - 1) { p[k] = path[k]; k++; }
+    p[k] = 0;
+    uint32_t n;
+    f->pos = 0; f->ok = 0;
+    if (!uvm2_cart_file_open(p, &n)) return 0;
+    f->len = n; f->ok = 1; f->magic = 0x54524143u;   /* 'CART' */
+    return 1;
+}
+uint32_t uvm2_sd_next(uvm2_sd_file *f, unsigned char *dst, uint32_t max)
+{
+    if (!f->ok) return 0;
+    uint32_t want = f->len - f->pos < max ? f->len - f->pos : max, got = 0;
+    while (got < want) {
+        ra_poll();
+        int b = -1;
+        for (int k = 0; k < 2; k++)
+            if (s_rb[k].f == f && s_rb[k].state && f->pos >= s_rb[k].off && f->pos < s_rb[k].off + s_rb[k].len) b = k;
+        if (b < 0) {                                /* not asked for yet: this block, now */
+            ra_wait();
+            const int fb = s_rb[0].f == f && s_rb[0].state == 2 ? 1 : 0;
+            ra_start(fb, f, f->pos);
+            if (s_ra_pend < 0) { f->ok = 0; break; }
+            continue;
+        }
+        if (s_rb[b].state == 1) { ra_wait(); if (s_rb[b].state != 2) { f->ok = 0; break; } }
+        uint32_t k = s_rb[b].off + s_rb[b].len - f->pos;
+        if (k > want - got) k = want - got;
+        const uint8_t *src = ra_mem(b) + (f->pos - s_rb[b].off);
+        for (uint32_t i = 0; i < k; i++) dst[got + i] = src[i];     /* no libc in a cart image */
+        f->pos += k; got += k;
+        const int o = 1 - b;                        /* the next block into the other buffer */
+        const uint32_t next = s_rb[b].off + s_rb[b].len;
+        if (!(s_rb[o].f == f && s_rb[o].state && s_rb[o].off == next)) ra_start(o, f, next);
+    }
+    return got;
+}
+uint32_t uvm2_sd_ready(const void *fv)
+{
+    const uvm2_sd_file *f = (const uvm2_sd_file *)fv;
+    if (!f->ok || f->pos >= f->len) return 0;
+    ra_poll();
+    for (int k = 0; k < 2; k++)
+        if (s_rb[k].f == f && s_rb[k].state && f->pos >= s_rb[k].off && f->pos < s_rb[k].off + s_rb[k].len)
+            return s_rb[k].state == 2 ? s_rb[k].off + s_rb[k].len - f->pos : 0;
+    if (s_ra_pend < 0) ra_start(s_rb[0].f == f && s_rb[0].state == 2 ? 1 : 0, f, f->pos);   /* nobody asked: ask */
+    return 0;
+}
+int uvm2_sd_seek(uvm2_sd_file *f, uint32_t pos)
+{
+    if (!f->ok && f->magic != 0x54524143u) return 0;
+    f->pos = pos < f->len ? pos : f->len;
+    f->ok = 1;
+    return 1;
+}
+void uvm2_sd_close(uvm2_sd_file *f) { ra_drop(f); f->ok = 0; f->magic = 0; }
+/* The UVMC2 searches the whole card; here the places a game's file is kept: .roms/, roms/, the root. */
+int uvm2_sd_find(const char *name, char *out, int max, void *scratch)
+{
+    (void)scratch;
+    static const char *const where[] = { ".roms/", "roms/", "" };
+    for (unsigned w = 0; w < 3; w++) {
+        int k = 0;
+        for (const char *a = where[w]; *a && k < max - 1; a++) out[k++] = *a;
+        for (const char *a = name; *a && k < max - 1; a++) out[k++] = *a;
+        out[k] = 0;
+        uint32_t n;
+        ra_wait();
+        if (uvm2_cart_file_open(out, &n)) return 1;
+    }
+    out[0] = 0;
+    return 0;
+}
+
 /* THE UVMC2's uvm2_sd_read_rom ON THIS CART: roms/<name> whole into dst, up to max; the bytes
- * read, or 0 (no file, an older BIOS, a read that failed). Through the BIOS's game reader,
- * which does the card's work in the executor's gaps -- a read from this core while the other
- * drives the bus comes back as garbage -- and waits for it. One byte first, which opens the
- * file, so that file_size (table version 10) says how much there is: the reader refuses a read
- * past the end. Major Havoc's figures (mhavoc.c, roms/mhavoc_figures.bin). */
+ * read, or 0 (no file, an older BIOS, a read that failed). Opening reads one byte, so that
+ * file_size (table version 10) says how much there is: the reader refuses a read past the end.
+ * Major Havoc's figures (mhavoc.c, roms/mhavoc_figures.bin). */
 uint32_t uvm2_sd_read_rom(const char *name, unsigned char *dst, uint32_t max)
 {
-    if (UVM2_API->magic != UVM2_API_MAGIC || UVM2_API->version < 10u) return 0;
     char path[48] = "roms/";
     unsigned k = 5;
     while (*name && k < sizeof path - 1) path[k++] = *name++;
     path[k] = 0;
-    unsigned char probe;
+    uint32_t n;
     int r;
-    if (UVM2_API->file_read_start(path, 0, &probe, 1) != 0) return 0;
-    while ((r = UVM2_API->file_read_poll()) > 0) { }
-    if (r < 0) return 0;
-    uint32_t n = UVM2_API->file_size();
+    if (!uvm2_cart_file_open(path, &n)) return 0;
     if (n > max) n = max;
-    if (n == 0 || UVM2_API->file_read_start(path, 0, dst, n) != 0) return 0;
-    while ((r = UVM2_API->file_read_poll()) > 0) { }
+    if (n == 0 || uvm2_cart_read_start(path, 0, dst, n) != 0) return 0;
+    while ((r = uvm2_cart_read_poll()) > 0) { }
     return r < 0 ? 0 : n;
 }
 /* The game's six now, the CONTROLS map applied (aae_pad.h's AP_MAPPED). On an older BIOS, the
@@ -758,7 +932,9 @@ typedef struct { char id[16]; int up_n, down_n; vpy_rtt_ring up[1], down[1]; } v
 static char vpy_rtt_up_buf[VPY_RTT_SIZE];
 #endif
 static char vpy_rtt_down_buf[16];
-__attribute__((used)) vpy_rtt_cb _SEGGER_RTT = {
+/* WEAK: a game that keeps its own RTT block (Kuroishi's src/rtt.c, for tools/leer_rtt.sh) has
+ * the same SEGGER layout, and its block wins; vpy_rtt_write below then writes into that one. */
+__attribute__((used, weak)) vpy_rtt_cb _SEGGER_RTT = {
     "SEGGER RTT", 1, 1,
     { { "Terminal", vpy_rtt_up_buf, VPY_RTT_SIZE, 0, 0, 0 } },
     { { "Terminal", vpy_rtt_down_buf, sizeof vpy_rtt_down_buf, 0, 0, 0 } },

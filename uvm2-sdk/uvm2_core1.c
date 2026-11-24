@@ -44,7 +44,8 @@
 #include "uvm2_bus_stream.h"
 #endif
 
-extern uint32_t uvm2_sig_written[2], uvm2_sig_n[2];
+extern uint32_t uvm2_sig_written[], uvm2_sig_n[];   /* uvm2_draw.c: a slot per buffer */
+extern uint32_t uvm2_frame_slots(void);
 
 /* Disagreements between what core 0 wrote and what core 1 reads out of the SAME buffer. If
  * this does not climb, cross-core coherence is ruled out and the fault is one of timing. */
@@ -55,12 +56,22 @@ uint32_t uvm2_sig_failures, uvm2_sig_compared, uvm2_sig_read, uvm2_sig_last_ok;
 
 #ifdef UVM2_DUAL_CORE
 
+/* THE SAME LOOP ON A PITREX. What this file takes from the pico-sdk is a microsecond clock
+ * and the launch of the second core; pitrex/uvm2_pitrex_core.h gives both over the Pi's
+ * system timer and the baremetal kernel's startCore1. Everything that belongs to the RP2350
+ * itself (the bootrom reboot behind the reset button, the stack paint laid out by the
+ * pico-sdk's memory map, uvm2_bus.c's sampling state) is fenced with UVM2_PITREX below. */
+#ifdef UVM2_PITREX
+#include "uvm2_pitrex_core.h"
+#include "uvm2_pitrex.h"
+#else
 #include "pico/multicore.h"
 #include "pico/time.h"
+#endif
 #ifdef UVM2_BIOS
 #define INPUT_HELD() 0
 #endif
-#ifndef UVM2_BIOS
+#if !defined(UVM2_BIOS) && !defined(UVM2_PITREX)
 #include "pico/bootrom.h"
 #include "boot/picoboot_constants.h"
 #endif
@@ -189,6 +200,11 @@ static void psg_drain(void)
  * Seen on SnowBros 2026-08-25, the first VPy game to actually launch core 1. */
 volatile uint8_t  uvm2_cached_buttons = 0xFFu;
 
+/* DIAGNOSTIC: the controller reads, by where (the idle path, after a list), how many saw a
+ * button down, and how many INPUT_HELD skipped. Read by a game's log. Outside UVM2_BIOS's block: the
+ * controller loop below is built for the debug cart's BIOS too, and counts there as well. */
+volatile uint32_t uvm2_btn_reads_idle, uvm2_btn_reads_list, uvm2_btn_pressed_reads, uvm2_btn_held_skips;
+volatile uint32_t uvm2_btn_dbg_state, uvm2_btn_dbg_oe, uvm2_btn_dbg_r7 = 0x100u, uvm2_btn_dbg_via;
 #ifndef UVM2_BIOS
 /* THE CONSOLE'S RESET BUTTON: ONE PRESS STARTS THE GAME AGAIN, TWO IN A ROW (within
  * UVM2_RESET_DOUBLE_US) GO BACK TO THE UVMC2's MENU.
@@ -314,7 +330,20 @@ void uvm2_restart_if_asked(void) { }
  * SRAM pays as little as it can for it (ROTJ with the monitor is at its edge). */
 __attribute__((optimize("Os"))) static void reset_poll(void)
 {
-#if !UVM2_RESET_WATCH
+#if defined(UVM2_PITREX)
+    /* A PITREX: the button goes back to its menu. The console's reset clears the VIA; what is
+     * watched is a bit the start-up set in its interrupt-enable register and that no list
+     * writes (pitrex/uvm2_bus_pitrex.c says why not DDRB, as below). Core 1 only says so:
+     * handing the machine back is the game's core's (uvm2_pitrex_menu_poll, once a frame). */
+    extern volatile uint32_t uvm2_pitrex_reset_seen;
+    if (!(uvm2_via_read(UVM2_VIA_IER) & UVM2_PITREX_RESET_MARK)) {
+        uvm2_pitrex_reset_seen = 1u;
+        /* set again, so that one press is one notice (it does not stick while the button
+         * is still down, and then the next frame notices again: harmless) */
+        uvm2_via_write(UVM2_VIA_IER, 0x80u | UVM2_PITREX_RESET_MARK);
+    }
+    return;
+#elif !UVM2_RESET_WATCH
     return;     /* not watched: see UVM2_RESET_WATCH */
 #else
     static uint32_t first_at;
@@ -349,6 +378,7 @@ __attribute__((optimize("Os"))) static void reset_poll(void)
 #endif
 }
 
+#ifndef UVM2_PITREX   /* the pico-sdk's stack layout; the Pi's stacks are the kernel's */
 /* THE STACK PAINT (see stack0_peak in uvm2_bus.h). The pico-sdk memory map puts core 0's stack
  * in SCRATCH_Y, from __StackTop down to __StackOneTop, and core 1's below it, from
  * __StackOneTop down to __StackOneBottom. A word that still holds the paint has never been
@@ -378,6 +408,7 @@ static void stack_check(void)
     if (__StackOneTop[0]    != STACK_PAINT) uvm2_stats.stack_overflow |= 1u;
     if (__StackOneBottom[0] != STACK_PAINT) uvm2_stats.stack_overflow |= 2u;
 }
+#endif /* UVM2_PITREX */
 #endif
 volatile uint32_t uvm2_cached_axes;
 
@@ -457,7 +488,12 @@ void (*volatile uvm2_worker)(void);
  * chunk (~0.17 ms) to do it in. Each channel reads its buffer as a RING (the buffer aligned to
  * its size): a refill late even past that would replay a stale chunk of real bus words, never
  * memory beyond it. At the end of the commands the running channel's chain is cut. */
-static uint32_t s_chunk[2][UVM2_STREAM_CHUNK] __attribute__((aligned(UVM2_STREAM_CHUNK * 4u)));
+/* UVM2_STREAM_CHUNK_ATTR: where a build puts the two buffers (the debug cart's BIOS: SCRATCH_Y,
+ * its main SRAM has a couple of hundred bytes left) */
+#ifndef UVM2_STREAM_CHUNK_ATTR
+#define UVM2_STREAM_CHUNK_ATTR
+#endif
+static uint32_t s_chunk[2][UVM2_STREAM_CHUNK] __attribute__((aligned(UVM2_STREAM_CHUNK * 4u))) UVM2_STREAM_CHUNK_ATTR;
 static uint32_t s_chunk_n[2];
 static int      s_ch[2] = { 0, -1 };   /* A is vectrex-bus's channel (PIO0 SM0's TX); B claimed */
 static const uint8_t *s_sc_cmds;    /* the pass's commands */
@@ -707,7 +743,9 @@ static void core1_main(void)
                     if (!INPUT_HELD()) {
                         uvm2_cached_buttons = uvm2_read_buttons();
                         uvm2_cached_axes    = uvm2_read_axes();
-                    }
+                        uvm2_btn_reads_idle++;
+                        if ((uvm2_cached_buttons & 0x0Fu) != 0x0Fu) uvm2_btn_pressed_reads++;
+                    } else uvm2_btn_held_skips++;
 #endif
                     uvm2_draw_invalidate();
                     uvm2_core1_gap();
@@ -752,9 +790,9 @@ static void core1_main(void)
             uint32_t n = uvm2_frame_length(served), h = 2166136261u;
             for (uint32_t i = 0; i < n * 3u; i++) { h ^= b[i]; h *= 16777619u; }
             uvm2_sig_read = h;
-            if (n == uvm2_sig_n[served & 1u]) {
+            if (n == uvm2_sig_n[served % uvm2_frame_slots()]) {
                 uvm2_sig_compared++;
-                if (h != uvm2_sig_written[served & 1u]) uvm2_sig_failures++;
+                if (h != uvm2_sig_written[served % uvm2_frame_slots()]) uvm2_sig_failures++;
                 else                                     uvm2_sig_last_ok = h;
             }
         }
@@ -788,10 +826,12 @@ static void core1_main(void)
         uvm2_stats.us_c1_exec_acc += t1 - t0;
         uvm2_stats.us_c1_exec_n++;
 #ifndef UVM2_BIOS
+#ifndef UVM2_PITREX
         {
             static uint32_t since_check;
             if (++since_check >= STACK_CHECK_FRAMES) { since_check = 0; stack_check(); }
         }
+#endif
         reset_poll();
 #endif
 
@@ -854,8 +894,26 @@ static void core1_main(void)
 #ifndef UVM2_NO_INPUT
         if (!INPUT_HELD()) {                       /* see UVM2_RESET_SETTLE */
             uvm2_cached_buttons = uvm2_read_buttons();
+#if !defined(UVM2_BIOS) && !defined(UVM2_PITREX)   /* uvm2_bus.c's sampling state: the debug cart's bus is the BIOS's (Rust), the PiTrex's is its board's */
+            {   /* the bus as the buttons' byte was sampled (uvm2_via_read), and now and then
+                 * the PSG's mixer read back: register 7's bit 6 set makes port A an output */
+                extern uint32_t uvm2_read_oe, uvm2_read_state;
+                extern uint8_t uvm2_psg_read(uint32_t reg);
+                uvm2_btn_dbg_state = uvm2_read_state;
+                uvm2_btn_dbg_oe    = uvm2_read_oe;
+                if ((uvm2_btn_reads_list & 31u) == 0u) {
+                    uvm2_btn_dbg_r7 = uvm2_psg_read(7);
+                    uvm2_btn_dbg_via = (uint32_t)uvm2_via_read(UVM2_VIA_ACR) << 24
+                                     | (uint32_t)uvm2_via_read(UVM2_VIA_PCR) << 16
+                                     | (uint32_t)uvm2_via_read(UVM2_VIA_DDRB) << 8
+                                     | (uint32_t)uvm2_via_read(UVM2_VIA_DDRA);
+                }
+            }
+#endif
             uvm2_cached_axes    = uvm2_read_axes();
-        }
+            uvm2_btn_reads_list++;
+            if ((uvm2_cached_buttons & 0x0Fu) != 0x0Fu) uvm2_btn_pressed_reads++;
+        } else uvm2_btn_held_skips++;
 #endif
         uint32_t t2 = time_us_32();
         uvm2_stats.us_input = t2 - t1;

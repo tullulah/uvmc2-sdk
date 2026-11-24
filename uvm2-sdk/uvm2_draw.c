@@ -50,12 +50,27 @@
 
 /* One buffer single-core, two when core 1 replays: core 0 fills the buffer for
  * frame n while core 1 is still replaying frame n-1.  Single-core builds keep
- * exactly one, so nothing grows for a target that does not use it. */
+ * exactly one, so nothing grows for a target that does not use it.
+ *
+ * UVM2_NBUF=3 (dual core): THREE, for a game slower than its own list. With UVM2_REPLAY_LAST
+ * core 1 redraws list n until n+1 comes; with two buffers the game, done with n+1, wants n's
+ * buffer for n+2 and waits for the redraw in progress to end: half a replay on average (MGS,
+ * 33 ms lists, 17 ms a frame waited, 2026-11-09). With three, n+2 goes in n-1's. Core 1 still
+ * serves every list in order. */
 #ifdef UVM2_DUAL_CORE
-#  define UVM2_NBUF 2u
+#  ifndef UVM2_NBUF
+#    define UVM2_NBUF 2u
+#  endif
+#  if UVM2_NBUF < 2 || UVM2_NBUF > 3
+#    error "UVM2_NBUF: 2 or 3 with UVM2_DUAL_CORE"
+#  endif
 #else
+#  undef UVM2_NBUF
 #  define UVM2_NBUF 1u
 #endif
+/* the per-frame records' slots: as many as buffers, and two single-core (as always) */
+#define UVM2_SLOTS ((UVM2_NBUF) > 1u ? (UVM2_NBUF) : 2u)
+#define UVM2_SLOT(f) ((uint32_t)(f) % UVM2_SLOTS)
 /* THE LIST, IN SRAM OR IN THE EXTERNAL PSRAM.
  *
  * In SRAM the list competes with the game: dkong leaves 3788 bytes free out of the 496 KB,
@@ -100,7 +115,9 @@ static uvm2_cmd_buf *const s_cmds = (uvm2_cmd_buf *)(uintptr_t)UVM2_PSRAM_CMDS_B
 static uint8_t s_cmds[UVM2_NBUF][UVM2_CMD_CAPACITY * 3u];
 #endif
 static uint32_t s_count;
-static uint32_t s_buf;                  /* buffer being filled; always 0 single-core */
+/* buffer being filled; always 0 single-core. Frame 1's own (frame n fills buffer n % NBUF, which
+ * core 1 reads back by n): it started at 0, and the first list core 1 served was empty */
+static uint32_t s_buf = 1u % UVM2_NBUF;
 
 /* The colour table of each list buffer (see uvm2_draw.h). In SRAM even when the list lives
  * in PSRAM: 520 bytes per buffer, and whoever reads it reads it once per list. */
@@ -141,7 +158,7 @@ void uvm2_draw_color(uint32_t rgb)
  * These used to be inside, next to `s_len[2]`, and with that EVERY single-core target
  * stopped compiling. An `#ifdef` is not only an option: it is the boundary of what exists,
  * and putting a variable used outside it in there breaks builds nobody looks at daily. */
-static volatile uint32_t s_cycles_pub[2];
+static volatile uint32_t s_cycles_pub[UVM2_SLOTS];
 /* The bounding box of the frame being built, in device units. */
 static int32_t s_box_x0 = 32767, s_box_y0 = 32767, s_box_x1 = -32768, s_box_y1 = -32768;
 static int32_t s_box_w_prev;
@@ -157,12 +174,18 @@ static uint32_t s_peak_i, s_peak_k, s_peak_n;
  * and no lock is needed — ordering comes from the barriers around them. */
 volatile uint32_t uvm2_frame_request;   /* frames core 0 has finished building */
 volatile uint32_t uvm2_frame_done;      /* frames core 1 has finished replaying */
-static volatile uint32_t s_len[2];
+static volatile uint32_t s_len[UVM2_SLOTS];
 static uint32_t s_frame_no = 1;
 
-const uint8_t *uvm2_frame_buffer(uint32_t frame) { return s_cmds[frame & 1u]; }
-uint32_t        uvm2_frame_length(uint32_t frame) { return s_len[frame & 1u]; }
-const struct uvm2_color_marks *uvm2_frame_colors(uint32_t frame) { return colors_of(frame & 1u); }
+const uint8_t *uvm2_frame_buffer(uint32_t frame) { return s_cmds[UVM2_SLOT(frame)]; }
+uint32_t        uvm2_frame_length(uint32_t frame) { return s_len[UVM2_SLOT(frame)]; }
+uint32_t        uvm2_frame_slots(void) { return UVM2_SLOTS; }
+/* the colour table of that frame's buffer (s_colors has UVM2_NBUF; a slot past it is buffer 0) */
+const struct uvm2_color_marks *uvm2_frame_colors(uint32_t frame)
+{
+    const uint32_t b = UVM2_SLOT(frame);
+    return colors_of(b < UVM2_NBUF ? b : 0u);
+}
 #endif
 static uint32_t s_frames;
 /* For uvm2_last_list (single core): the closed frame's length, and whether a frame is open —
@@ -317,12 +340,31 @@ void uvm2_list_clear_frame(void) { uvm2_list_rewind(s_count_after_begin, s_cycle
 uint32_t uvm2_list_room(void) { return s_limit > s_count ? s_limit - s_count : 0u; }
 
 /* Those of the frame already PUBLISHED, which is the one core 1 replays. */
-uint32_t uvm2_frame_cycles(uint32_t frame) { return s_cycles_pub[frame & 1u]; }
+uint32_t uvm2_frame_cycles(uint32_t frame) { return s_cycles_pub[UVM2_SLOT(frame)]; }
+
+/* WHAT ONE COMMAND COSTS AT LEAST, in bus cycles: the board's, and the list's clock has to
+ * know it.
+ *
+ * On the cartridges a write is one E period and a command with no gap costs exactly that. A
+ * PiTrex's logic leaves an idle period after every access, so there a command costs two
+ * however short its gap (pitrex/uvm2_bus_pitrex.c measures it; pitrex.mk says 2 here). The
+ * executor cannot make that up — it used to try, by taking the excess out of the waits that
+ * followed, and those waits are the ramp finishing and the sample-and-hold charging — so the
+ * frame really is that much longer, and everything that counts by `s_cycles` (the pacer's
+ * filler, the audio's clock, the HUD) has to count the same. */
+#ifndef UVM2_CMD_MIN_CYCLES
+#define UVM2_CMD_MIN_CYCLES 1u
+#endif
+static inline uint32_t cmd_cycles(uint32_t delay)
+{
+    const uint32_t c = delay + 1u;   /* the write takes its E period, and the gap follows */
+    return c < UVM2_CMD_MIN_CYCLES ? UVM2_CMD_MIN_CYCLES : c;
+}
 
 static inline void emit(uint32_t reg, uint32_t data, uint32_t delay)
 {
     if (s_count < s_limit) {
-        s_cycles += delay + 1u;   /* the write takes its E period, and the gap follows */
+        s_cycles += cmd_cycles(delay);
         const uint32_t w = UVM2_CMD(reg, data, delay);
         const uint32_t v = UVM2_CMD_PACK(w);
         uint8_t *d = &s_cmds[s_buf][s_count * 3u];
@@ -592,7 +634,7 @@ static void extend_stroke_t1ch(void)
     if (blank < UVM2_H_T1CH_CONT) blank = UVM2_H_T1CH_CONT;
     uint32_t gap = (v >> 12) + (blank - UVM2_H_T1CH_CONT);
     if (gap > 4095u) gap = 4095u;
-    s_cycles += gap - (v >> 12);
+    s_cycles += cmd_cycles(gap) - cmd_cycles(v >> 12);
     v = (v & 0xFFFu) | (gap << 12);
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16);
 }
@@ -1323,7 +1365,7 @@ static void vxs_extend_last(void *ctx, uint32_t extra_q8)
     uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
     uint32_t gap = (v >> 12) + d;
     if (gap > 4095u) gap = 4095u;
-    s_cycles += gap - (v >> 12);
+    s_cycles += cmd_cycles(gap) - cmd_cycles(v >> 12);
     v = (v & 0xFFFu) | (gap << 12);
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16);
 }
@@ -1504,7 +1546,7 @@ static void vxs_wait_ramp(void *ctx, uint32_t t1, int32_t extra_q8)
         uint32_t take = (uint32_t)d < room ? (uint32_t)d : room;
         v = (v & 0x0FFFu) | ((cur + take) << 12);
         p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16);
-        s_cycles += take;          /* this path does not go through emit: counted by hand */
+        s_cycles += cmd_cycles(cur + take) - cmd_cycles(cur);   /* not through emit: counted by hand */
         d -= (int32_t)take;
     }
     while (d > 0) {                /* very rare remainder (>4095): chained carriers */
@@ -2404,12 +2446,8 @@ int  uvm2_draw_rotated(void)  { return s_rotate; }
  * (uvm2_config.h, over aspect_q8: "about +-18000 x +-20500"). Used only when win_x, win_y and
  * aspect_q8 are all still at their stock values (15500, 15500, 256), which describe a safe
  * square that every vpy3d game was composed in, not the tube. */
-#ifndef UVM2_VIEW_REF_WIN_X
-#define UVM2_VIEW_REF_WIN_X 18000
-#endif
-#ifndef UVM2_VIEW_REF_WIN_Y
-#define UVM2_VIEW_REF_WIN_Y 20500
-#endif
+/* (UVM2_VIEW_REF_WIN_X / _Y are in uvm2_draw.h: a layer that fits someone else's picture to
+ * the tube needs the same two numbers.) */
 #define VIEW_WIN_STOCK    15500
 #define VIEW_ASPECT_STOCK 256
 
@@ -2987,8 +3025,8 @@ static void uvm2_recalibrate(void)
 #ifdef UVM2_DELAY_US
 static void artificial_delay(void)
 {
-    const uint32_t t0 = *(volatile uint32_t *)0x400B000Cu;   /* TIMER0 TIMELR */
-    while ((*(volatile uint32_t *)0x400B000Cu - t0) < (uint32_t)UVM2_DELAY_US) { }
+    const uint32_t t0 = uvm2_now_us();
+    while ((uvm2_now_us() - t0) < (uint32_t)UVM2_DELAY_US) { }
 }
 #endif
 
@@ -3006,7 +3044,15 @@ extern unsigned uvm2_input_count;
 int uvm2_frame_can_begin(void)
 {
     __asm volatile ("dmb" ::: "memory");
-    return (int32_t)(uvm2_frame_done - (s_frame_no - 2u)) >= 0;
+    return (int32_t)(uvm2_frame_done - (s_frame_no - UVM2_NBUF)) >= 0;
+}
+/* Whether closing the open frame now would not wait: a caller that publishes through
+ * SYS_WAIT_RECAL (sdk_rp2350.c's v_WaitRecal) gets the next frame opened at once, so what it
+ * needs is the buffer of the frame after this one -- MGS's drawing on this core (uvm2_render.c). */
+int uvm2_frame_can_publish(void)
+{
+    __asm volatile ("dmb" ::: "memory");
+    return (int32_t)(uvm2_frame_done - (s_frame_no + 1u - UVM2_NBUF)) >= 0;
 }
 #endif
 
@@ -3032,7 +3078,7 @@ void uvm2_frame_begin(void)
     __asm volatile ("dmb" ::: "memory");
     {
         uint32_t rotations = 0;
-        while ((int32_t)(uvm2_frame_done - (s_frame_no - 2u)) < 0) { rotations++; }
+        while ((int32_t)(uvm2_frame_done - (s_frame_no - UVM2_NBUF)) < 0) { rotations++; }
         uvm2_stats.wait_spins = rotations;
     }
     __asm volatile ("dmb" ::: "memory");
@@ -3110,7 +3156,7 @@ void uvm2_frame_begin(void)
 /* PER BUFFER, not a single one: with double buffering core 0 signs the frame it has just
  * built and core 1 replays the PREVIOUS one. Comparing the two without indexing is comparing
  * different frames, which never match and say nothing. */
-uint32_t uvm2_sig_written[2], uvm2_sig_n[2];
+uint32_t uvm2_sig_written[UVM2_SLOTS], uvm2_sig_n[UVM2_SLOTS];
 
 /* THE FRAME PERIOD IS MEASURED ON BOTH PATHS.
  *
@@ -3227,8 +3273,10 @@ static void frame_filler(void)
     const uint32_t cap = uvm2_filler_cap;
     const uint32_t target = cap && cap < uvm2_pacer_cycles ? cap : uvm2_pacer_cycles;
     if (target == 0u) return;                   /* no fixed pace, no leftover */
-    const uint32_t HDR = 3u+1u + 6u+1u + 3u+1u + 6u+1u + 0u+1u + 212u+1u;   /* 236 */
-    const uint32_t ALT = 6u+1u + 0u+1u + 41u+1u;                            /*  50 */
+    /* what the commands below cost (236 and 50 where a command with no gap costs one cycle) */
+    const uint32_t HDR = cmd_cycles(3) + cmd_cycles(6) + cmd_cycles(3) + cmd_cycles(6)
+                       + cmd_cycles(0) + cmd_cycles(212);
+    const uint32_t ALT = cmd_cycles(6) + cmd_cycles(0) + cmd_cycles(41);
     if (s_cycles + HDR + ALT > target) return;  /* not even one fits: leave the silence */
 
     emit(UVM2_VIA_PORTA, 0x40, 3);
@@ -3261,8 +3309,9 @@ static void frame_filler(void)
      * wrapped `gap` below zero and the T1CH went out saturated at 4095 — a frame ~2.7 ms
      * long. Found on the host (2026-10-05) when a closing-gap sweep moved a Star Wars
      * frame's remainder onto 8. */
-    if (remainder >= 6u + 1u + 0u + 1u + 1u) {
-        const uint32_t gap = remainder - (6u + 1u + 0u + 1u + 1u);
+    const uint32_t unit_fixed = cmd_cycles(6) + cmd_cycles(0) + 1u;   /* all of it but the gap */
+    if (remainder >= unit_fixed) {
+        const uint32_t gap = remainder - unit_fixed;
         uint32_t t1 = gap > 10u ? gap - 10u : 1u;   /* the gap is t1 + 10 */
         if (t1 > 255u) t1 = 255u;
         emit(UVM2_VIA_PORTA, (n & 1u) ? 0x40 : 0xC0, 6);
@@ -3280,6 +3329,11 @@ static void frame_filler(void)
 void uvm2_frame_end(void)
 {
     uint32_t cycles = 0;
+#ifdef UVM2_PITREX
+    /* The four buttons held: back to the PiTrex menu, if it started this image
+     * (pitrex/uvm2_pitrex_main.c). The cartridges' way out is their reset button, below. */
+    { extern void uvm2_pitrex_menu_poll(void); uvm2_pitrex_menu_poll(); }
+#endif
 #if UVM2_RESET_WATCH
     /* One press of the console's reset button: the game starts again from here, the game's
      * core putting its globals back (uvm2_core1.c, reset_poll). */
@@ -3401,8 +3455,8 @@ void uvm2_frame_end(void)
         const volatile uint8_t *list = (const volatile uint8_t *)&s_cmds[s_buf][0];
         uint32_t h = 2166136261u;
         for (uint32_t i = 0; i < s_count * 3u; i++) { h ^= list[i]; h *= 16777619u; }
-        uvm2_sig_written[s_buf & 1u] = h;
-        uvm2_sig_n[s_buf & 1u]       = s_count;
+        uvm2_sig_written[UVM2_SLOT(s_buf)] = h;
+        uvm2_sig_n[UVM2_SLOT(s_buf)]       = s_count;
 #ifdef UVM2_CMDS_IN_PSRAM
         /* THE SAME SUM, BOTH SIDES. `h` is what the CHIP hands back on re-reading the list
          * through the uncached alias; uvm2_sig_emitted is what emit() asked to be written. If
@@ -3495,14 +3549,14 @@ void uvm2_frame_end(void)
 #ifndef UVM2_REPLAY_LAST
     {
         uint32_t rotations = 0;
-        while ((int32_t)(uvm2_frame_done - (s_frame_no - 1u)) < 0) { rotations++; }
+        while ((int32_t)(uvm2_frame_done - (s_frame_no - (UVM2_NBUF - 1u))) < 0) { rotations++; }
         uvm2_stats.wait_spins = rotations;
     }
 #endif
     /* With UVM2_REPLAY_LAST that wait is at the top of uvm2_frame_begin instead: see there. */
 
     s_frame_no++;
-    s_buf = s_frame_no & 1u;
+    s_buf = s_frame_no % UVM2_NBUF;
     (void)cycles;
     measure_period();
     return;
@@ -3622,7 +3676,7 @@ void uvm2_frame_end(void)
      * overrun and it re-locks from now. */
     {
         static uint32_t s_end_us;
-        const uint32_t now = *(volatile uint32_t *)0x400B000Cu;   /* TIMER0 TIMELR */
+        const uint32_t now = uvm2_now_us();   /* the board's microseconds: uvm2_bus.h */
         if (uvm2_pacer_cycles == 0) {
             s_frame_cycles = cycles;
             s_end_us = now;
@@ -3631,7 +3685,7 @@ void uvm2_frame_end(void)
             const uint32_t target = s_end_us + period_us;
             const int32_t remaining = (int32_t)(target - now);
             if (remaining > 0 && (uint32_t)remaining <= period_us) {
-                while ((int32_t)(target - *(volatile uint32_t *)0x400B000Cu) > 0) { }
+                while ((int32_t)(target - uvm2_now_us()) > 0) { }
                 s_frame_cycles = uvm2_pacer_cycles;
                 s_end_us = target;
             } else {
@@ -3683,12 +3737,12 @@ const uint8_t *uvm2_last_list(uint32_t *n, uint32_t *which)
 {
 #ifdef UVM2_DUAL_CORE
     const uint32_t f = s_frame_no - 1u;           /* 0 = nothing published yet */
-    *which = f & 1u;
+    *which = UVM2_SLOT(f);
     if (f == 0u) { *n = 0; return 0; }
     while ((int32_t)(uvm2_frame_done - f) < 0) { }
     __asm volatile ("dmb" ::: "memory");
-    *n = s_len[f & 1u];
-    return s_cmds[f & 1u];
+    *n = s_len[UVM2_SLOT(f)];
+    return s_cmds[UVM2_SLOT(f)];
 #else
     *which = 0;
     *n = (s_frame_open || s_frames == 0u) ? 0u : s_last_len;
