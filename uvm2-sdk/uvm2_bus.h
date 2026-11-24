@@ -98,9 +98,13 @@ extern "C" {
 /* On a Pi the running core is in the CPU's own MPIDR, not in a peripheral register. */
 static inline uint32_t uvm2_pitrex_cpuid(void)
 {
+#if defined(__ARM_ARCH) && __ARM_ARCH < 7
+    return 0u;          /* the first Zero: one core, and no MPIDR to ask */
+#else
     uint32_t v;
     __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(v));
     return v & 3u;
+#endif
 }
 #define UVM2_CPUID          uvm2_pitrex_cpuid()
 #else

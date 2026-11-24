@@ -11,6 +11,7 @@
  *   0x8000             where a program is read to and started, with the MMU off and the
  *                      registers the firmware gave the first kernel
  */
+#include "uvm2_pitrex_cpu.h"
 #include <stdint.h>
 #include <string.h>
 #include "uvm2_bus.h"
@@ -109,7 +110,7 @@ int uvm2_pitrex_launch(const char *path, const char *param1, const char *param2,
 
     /* As the baremetal tree's loader does it (loaderMain.c, startWithCurrentSettings): the
      * program is a kernel and sets the machine up again from nothing. */
-    __asm__ volatile("isb\n dsb\n dmb" ::: "memory");
+    PITREX_ISB(); PITREX_DSB(); PITREX_DMB();
     mmu_disable();
     cache_flush();
     {

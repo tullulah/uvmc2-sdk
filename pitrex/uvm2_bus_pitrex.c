@@ -18,6 +18,7 @@
  * TIME is the ARM cycle counter (PMCCNTR, enabled by the baremetal start-up), turned into
  * bus cycles by uvm2_cycles_per_e_q8, which is measured against the VIA's own timer 2.
  */
+#include "uvm2_pitrex_cpu.h"
 #include <stdint.h>
 #include "uvm2_bus.h"
 #include "uvm2_pitrex.h"
@@ -44,12 +45,7 @@ uvm2_pitrex_bus_t uvm2_pitrex_bus;
 
 /* ── Time ─────────────────────────────────────────────────────────────────── */
 
-static inline uint32_t ccnt(void)
-{
-    uint32_t v;
-    __asm__ volatile("mrc p15, 0, %0, c9, c13, 0" : "=r"(v));
-    return v;
-}
+static inline uint32_t ccnt(void) { return pitrex_ccnt(); }   /* uvm2_pitrex_cpu.h */
 
 uint32_t uvm2_now_us(void) { return BCM_ST_CLO; }
 
@@ -190,6 +186,7 @@ static void measure_latch_point(void)
 
 void uvm2_bus_init(void)
 {
+    pitrex_ccnt_enable();      /* the Zero 1's start-up leaves it off (uvm2_pitrex_cpu.h) */
     uvm2_bus_halt();
     if (uvm2_pitrex_bus.init_result <= 0) return;
     uvm2_pitrex_bus.stage = UVM2_PITREX_STAGE_MEASURE_E;
@@ -245,12 +242,16 @@ static inline void forget_code(void)
     __asm__ volatile("mcr p15, 0, %0, c7, c5, 0\n"      /* ICIALLU: this core's instruction cache */
                      "mcr p15, 0, %0, c7, c5, 6\n"      /* BPIALL:  its branch predictor */
                      "mcr p15, 0, %0, c8, c7, 0\n"      /* TLBIALL: its translations */
-                     "dsb\n isb" : : "r"(0) : "memory");
+                     : : "r"(0) : "memory");
+    PITREX_DSB();
+    PITREX_ISB();
 }
 
 static inline void park_if_asked(void)
 {
+#ifdef UVM2_DUAL_CORE
     if (uvm2_pitrex_park_request && UVM2_CPUID == 1u) { forget_code(); parkCore1(); }
+#endif
 }
 
 uint32_t uvm2_exec(const uint8_t *cmds, uint32_t count)

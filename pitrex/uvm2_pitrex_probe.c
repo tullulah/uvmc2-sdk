@@ -18,6 +18,7 @@
  * The pin map is the board's (pitrexio-gpio.c): data on GPIO16-23, A0-A3 on GPIO7-10, A12
  * and A14 on GPIO11-12, R/#W on 13, RDY on 24, LATCH_EN on 25.
  */
+#include "uvm2_pitrex_cpu.h"
 #include <stdint.h>
 #include "uvm2_bus.h"
 #include "uvm2_pitrex.h"
@@ -40,14 +41,9 @@
 
 uvm2_pitrex_probe_t uvm2_pitrex_probe;
 
-static inline uint32_t ccnt(void)
-{
-    uint32_t v;
-    __asm__ volatile("mrc p15, 0, %0, c9, c13, 0" : "=r"(v));
-    return v;
-}
+static inline uint32_t ccnt(void) { return pitrex_ccnt(); }   /* uvm2_pitrex_cpu.h */
 
-static inline void barrier(void) { __asm__ volatile("dmb" ::: "memory"); }
+static inline void barrier(void) { PITREX_DMB(); }
 
 static inline void spin(uint32_t from, uint32_t span)
 {

@@ -25,21 +25,41 @@ VECTREX_DRAW_CABI := $(abspath $(PITREX_DIR)/../vectrex-draw/cabi)
 
 PITREX_BM        ?= $(HOME)/projects/pitrex-baremetal
 PITREX_TOOLCHAIN ?= /opt/arm-toolchain/bin
+# THE BOARD: zero2 (Raspberry Pi Zero 2 W, the default) or zero1 (the first Zero). One card
+# takes both: the Pi's firmware boots its own kernel by model (config.txt's [pi0] and [pi02]).
+PITREX_BOARD     ?= zero2
+ifeq ($(PITREX_BOARD),zero1)
+PITREX_BUILD     ?= build_pitrex1
+else
 PITREX_BUILD     ?= build_pitrex
+endif
 
 PITREX_CC      := $(PITREX_TOOLCHAIN)/arm-none-eabi-gcc
 PITREX_OBJCOPY := $(PITREX_TOOLCHAIN)/arm-none-eabi-objcopy
 PITREX_NM      := $(PITREX_TOOLCHAIN)/arm-none-eabi-nm
+ifeq ($(PITREX_BOARD),zero1)
+# The Zero's ARM1176JZF-S, ARMv6 with VFP: the flags of the baremetal tree's BUILD_FOR=zero1,
+# whose libraries are in its lib/ (built with `make BUILD_FOR=zero1` in pitrex/baremetal,
+# pitrex/vectrex). One core: the list is replayed in series (PITREX_DUAL_CORE below).
+PITREX_LIB     := $(PITREX_BM)/pitrex/lib
+PITREX_ARCH    := -mhard-float -mfloat-abi=hard -mfpu=vfp -march=armv6zk -mtune=arm1176jzf-s
+PITREX_RASPPI  := 1
+PITREX_RUST_TARGET := arm-unknown-linux-gnueabihf
+PITREX_DUAL_CORE   := 0
+else
 PITREX_LIB     := $(PITREX_BM)/pitrex/lib7
 
 # The Zero 2's Cortex-A53, in AArch32 with the hard-float ABI: the same flags the baremetal
 # libraries were built with (its Rules.mk, BUILD_FOR=zero2).
 PITREX_ARCH := -mhard-float -mfloat-abi=hard -mfpu=neon-fp-armv8 -march=armv8-a -mtune=cortex-a53
+PITREX_RASPPI  := 3
 
 # The beam model, for the same CPU and ABI. rustc 1.91 ships no core for a bare-metal
 # ARMv7-A hard-float target, and the crate is no_std: the Linux target of that CPU gives the
-# same code and the same ABI, and nothing of Linux is linked.
+# same code and the same ABI, and nothing of Linux is linked. (The Zero's: its ARMv6 Linux
+# target, the same way.)
 PITREX_RUST_TARGET := armv7-unknown-linux-gnueabihf
+endif
 PITREX_DRAW_LIB    := $(VECTREX_DRAW_CABI)/target/$(PITREX_RUST_TARGET)/release/libvectrex_draw_cabi.a
 
 # UVM2_PITREX          this board's branches in shared code
@@ -47,7 +67,7 @@ PITREX_DRAW_LIB    := $(VECTREX_DRAW_CABI)/target/$(PITREX_RUST_TARGET)/release/
 # UVM2_SUBUNITS        geometry in 1/16 of a unit, as every other build (uvm2.mk)
 # RASPPI/USE_PL011_UART what the baremetal headers key on
 PITREX_DEFS := -DUVM2_PITREX -DUVM2_CONFIG_NO_FLASH -DUVM2_SUBUNITS \
-               -DUVM2_HZ=$(or $(UVM2_HZ),50) -DRASPPI=3 -DUSE_PL011_UART=1
+               -DUVM2_HZ=$(or $(UVM2_HZ),50) -DRASPPI=$(PITREX_RASPPI) -DUSE_PL011_UART=1
 # DUAL CORE IS THE BUILD: core 1 replays the lists with the cartridges' own loop
 # (uvm2_core1.c). PITREX_DUAL_CORE=0 is there to bisect, like UVM2_BENCH_NO_CORE1 on the
 # cartridges: the same kernel with the list replayed in series on core 0.
@@ -100,6 +120,12 @@ PITREX_DEFS += -DUVM2_CMD_MIN_CYCLES=2u
 PITREX_SPEAKER ?= 1
 ifeq ($(PITREX_SPEAKER),1)
 PITREX_DEFS += -DUVM2_PITREX_SPEAKER
+endif
+# PITREX_REPORTS=1: every program writes its reports to the card's logs/ (start-up, frame 600,
+# exit). Off by default: only a fault is written (uvm2_pitrex_main.c, report_wanted).
+PITREX_REPORTS ?= 0
+ifeq ($(PITREX_REPORTS),1)
+PITREX_DEFS += -DUVM2_PITREX_REPORTS
 endif
 # the image's name, for its reports on the card (logs/<name>_<n>.log)
 PITREX_DEFS += -DUVM2_PITREX_NAME='"$(UVM2_NAME)"'
@@ -255,14 +281,17 @@ $(PITREX_BUILD)/$(UVM2_NAME).elf: $(PITREX_ENTRY_OBJ) $(PITREX_SDK_OBJS) $(PITRE
 	    $(PITREX_ENTRY_OBJ) $(PITREX_SDK_OBJS) $(PITREX_GAME_OBJS) $(PITREX_CXX_OBJS) $(PITREX_DRAW_LIB) \
 	    $(PITREX_CXX_LIBS) -lm -lc $(PITREX_LIB)/linkerHeapDefBoot.ld -lbaremetal -lgcc
 
-# The Pi's firmware jumps to the LOAD address, not to the ELF's entry point: _start has to
-# be the first thing in the image. Checked here, because an image that fails this boots into
-# whatever came first and draws nothing.
+# The Pi's firmware jumps to the LOAD address, not to the ELF's entry point: the baremetal
+# tree's entry code has to be the first thing in the image. Checked here, because an image that
+# fails this boots into whatever came first and draws nothing. The Zero 2's entry starts with
+# _start; the Zero's with a few instructions before it (baremetalEntry_6.S, _preStart), so what
+# is checked is where its section starts: the entry object's .init, first in the link.
 PITREX_LOAD_ADDR := 00008000
 $(PITREX_BUILD)/kernel7l.img: $(PITREX_BUILD)/$(UVM2_NAME).elf
-	@start=$$($(PITREX_NM) $< | awk '$$3 == "_start" { print $$1 }'); \
-	 if [ "$$start" != "$(PITREX_LOAD_ADDR)" ]; then \
-	     echo "pitrex: _start is at 0x$$start, not at the load address 0x$(PITREX_LOAD_ADDR)" >&2; exit 1; fi
+	@start=$$($(PITREX_TOOLCHAIN)/arm-none-eabi-objdump -h $< | awk '$$2 == ".init" { print substr($$4, length($$4) - 7) }'); \
+	 entry=$$($(PITREX_NM) $< | awk '$$3 == "_start" { print $$1 }'); \
+	 if [ "$$start" != "$(PITREX_LOAD_ADDR)" ] || [ -z "$$entry" ]; then \
+	     echo "pitrex: the entry code (.init) is at 0x$$start, not at the load address 0x$(PITREX_LOAD_ADDR)" >&2; exit 1; fi
 	$(PITREX_OBJCOPY) $< -O binary $@
 	@echo "pitrex: $@ ($$(wc -c < $@ | tr -d ' ') bytes)"
 

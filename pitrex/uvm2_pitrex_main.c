@@ -7,6 +7,9 @@
  * THERE IS NO PROBE ON THIS BOARD, so what start-up measures goes to the SD card
  * (uvm2_pitrex_report): put the card in a computer and read UVM2.LOG.
  */
+#include "uvm2_pitrex_cpu.h"
+#define STR_(x) #x
+#define STR(x)  STR_(x)
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -74,7 +77,9 @@ int uvm2_game_main(void);
 #define UVM2_PITREX_NAME "uvm2"
 #endif
 
-extern unsigned int auxControl;            /* libbaremetal: core 0's CPUECTLR at start-up */
+/* libbaremetal: core 0's CPUECTLR at start-up (the Zero 2's start-up only: weak, 0 on a Zero) */
+extern unsigned int auxControl __attribute__((weak));
+#define AUX_CONTROL (&auxControl ? auxControl : 0u)
 
 static uint32_t s_report_index;
 static uint32_t s_frames;                  /* frame closes seen (uvm2_pitrex_menu_poll) */
@@ -84,6 +89,9 @@ static volatile uint32_t s_core1_cpuectlr, s_core1_sctlr, s_core1_beats;
 
 static inline uint32_t read_cpuectlr(void)
 {
+#ifdef PITREX_ARMV6
+    return 0u;          /* a Cortex-A53 register: the Zero's ARM11 has none */
+#endif
     uint32_t lo, hi;
     __asm__ volatile("mrrc p15, 1, %0, %1, c15" : "=r"(lo), "=r"(hi));
     (void)hi;
@@ -100,9 +108,24 @@ static inline uint32_t read_sctlr(void)
  * defines it; the default says nothing. */
 __attribute__((weak)) const char *uvm2_pitrex_game_note(void) { return ""; }
 
+/* REPORTS ONLY WHEN SOMETHING WENT WRONG, UNLESS ASKED (pitrex.mk, PITREX_REPORTS=1). Each
+ * report is a file written to the card, six per run: at start-up, before the first frame, at
+ * frame 600 — where it stops the picture for about half a second — and on the way out. For
+ * the card a player gets that is time and wear for nothing. A fault is still written: it is
+ * the only trace there is, and by then nothing is running to be slowed down. */
+static int report_wanted(void)
+{
+#ifdef UVM2_PITREX_REPORTS
+    return 1;
+#else
+    return uvm2_pitrex_fault[FAULT_KIND] != 0u || FAULT_KEPT->magic == FAULT_KEPT_MAGIC;
+#endif
+}
+
 int uvm2_pitrex_report(void)
 {
     static char txt[REPORT_MAX];
+    if (!report_wanted()) return 1;
     const uvm2_pitrex_bus_t *b = &uvm2_pitrex_bus;
     const uint32_t q8 = uvm2_cycles_per_e_q8;
     int n = 0;
@@ -113,7 +136,7 @@ int uvm2_pitrex_report(void)
          (int)s_last_open, (int)s_last_write, (int)s_last_close,
          (unsigned)s_last_written, (unsigned)s_last_wanted);
     LINE("cpuectlr         core0 at boot %08X  core0 now %08X  core1 %08X   (bit 6 = caches coherent between cores)\r\n",
-         (unsigned)auxControl, (unsigned)read_cpuectlr(), (unsigned)s_core1_cpuectlr);
+         (unsigned)AUX_CONTROL, (unsigned)read_cpuectlr(), (unsigned)s_core1_cpuectlr);
     LINE("sctlr            core0 %08X  core1 %08X   (bit 0 MMU, bit 2 data cache)\r\n",
          (unsigned)read_sctlr(), (unsigned)s_core1_sctlr);
     LINE("menu             %d   (1 = started by the PiTrex loader: the four buttons held go back to it)\r\n",
@@ -258,7 +281,7 @@ __attribute__((used)) void core1_run(void)
     s_core1_cpuectlr = read_cpuectlr();
     s_core1_sctlr    = read_sctlr();
     s_core1_alive = 1u;
-    __asm__ volatile("dmb" ::: "memory");
+    PITREX_DMB();
     /* DIAGNOSIS: hold here, off the bus, until core 0 has written its report with this
      * core alive. If that report lands and the next one does not, it is the loop (the bus)
      * that breaks the card's writes, not the second core being awake. */
@@ -270,8 +293,6 @@ __attribute__((used)) void core1_run(void)
 /* The park loop hands the core over with whatever stack the previous program left it (a
  * core parked from inside a game is still at that game's depth), so the entry starts from the
  * top of core 1's own stack, the one the kernel's start-up gave it (globalVars.h). */
-#define STR_(x) #x
-#define STR(x)  STR_(x)
 __attribute__((naked)) static void core1_entry(void)
 {
     __asm__ volatile("ldr sp, =" STR(__svc_stack_top1) "\n\t"
@@ -286,16 +307,15 @@ void multicore_launch_core1(void (*entry)(void))
     if (s_core1_alive) return;                           /* already in the loop */
     uvm2_pitrex_bus.core1_state_before = *(volatile uint32_t *)CORE1_STATE;
     s_core1_entry = entry;
-    __asm__ volatile("dmb" ::: "memory");
+    PITREX_DMB();
     /* Whoever parked core 1 — this SDK, which makes it forget (uvm2_bus_pitrex.c, forget_code),
      * or a program of the baremetal tree, which does not — it must not run a previous
      * program's code at this one's addresses: every core's instruction cache, branch predictor
      * and translations are dropped from here (the ...IS forms reach the other cores while they
      * are in the coherent group, CPUECTLR bit 6, which the report shows for both). */
-    __asm__ volatile("mcr p15, 0, %0, c7, c1, 0\n"      /* ICIALLUIS */
-                     "mcr p15, 0, %0, c7, c1, 6\n"      /* BPIALLIS */
-                     "mcr p15, 0, %0, c8, c3, 0\n"      /* TLBIALLIS */
-                     "dsb\n isb" : : "r"(0) : "memory");
+    PITREX_FORGET_CODE_ALL_CORES();      /* ICIALLUIS, BPIALLIS, TLBIALLIS: uvm2_pitrex_cpu.h */
+    PITREX_DSB();
+    PITREX_ISB();
     startCore1((unsigned int)core1_entry);
     const uint32_t t0 = uvm2_now_us();
     while (!s_core1_alive && (uint32_t)(uvm2_now_us() - t0) < CORE1_START_TIMEOUT_US) { }
@@ -353,7 +373,7 @@ int uvm2_pitrex_park_core1(void)
 {
 #ifdef UVM2_DUAL_CORE
     uvm2_pitrex_park_request = 1u;
-    __asm__ volatile("dmb" ::: "memory");
+    PITREX_DMB();
     const uint32_t t0 = uvm2_now_us();
     while (*(volatile uint32_t *)CORE1_STATE != CORE_PARKING) {
         if ((uint32_t)(uvm2_now_us() - t0) > CORE1_PARK_US) { uvm2_pitrex_park_request = 0u; return 0; }
@@ -445,7 +465,8 @@ void uvm2_pitrex_menu_poll(void)
 
 static inline void tlb_flush(void)
 {
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0\n dsb\n isb" : : "r"(0) : "memory");
+    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" : : "r"(0) : "memory");   /* TLBIALL */
+    PITREX_DSB(); PITREX_ISB();
 }
 
 /* What a game calls before it uses that memory on a cartridge (uvm2_psram.h): bring the QSPI
@@ -465,7 +486,7 @@ static void psram_windows(void)
         /* the first window's own entry (its attributes), with nothing but itself as target */
         PAGE_TABLE[to] = PAGE_TABLE[from];
     }
-    __asm__ volatile("dsb" ::: "memory");
+    PITREX_DSB();
     tlb_flush();
 }
 
@@ -532,6 +553,13 @@ __asm__(
 "    cpsid if, #0x13\n"                      /* the supervisor's mode: its lr and sp are the program's */
 "    str   lr, [r1, #8]\n"
 "    str   sp, [r1, #12]\n"
+#ifdef PITREX_ARMV6
+"    mov   r3, #0\n"                         /* the Zero's one core (it has no MPIDR) */
+"    str   r3, [r1, #24]\n"
+"    str   r2, [r1, #0]\n"                   /* the kind last: it is what says there is one */
+"    ldr   sp, =" STR(__svc_stack_top0) "\n"
+"    b     uvm2_pitrex_fault_core0\n"
+#else
 "    mrc   p15, 0, r3, c0, c0, 5\n"          /* which core */
 "    and   r3, r3, #3\n"
 "    str   r3, [r1, #24]\n"
@@ -541,6 +569,7 @@ __asm__(
 "    ldrne sp, =" STR(__svc_stack_top1) "\n"
 "    beq   uvm2_pitrex_fault_core0\n"
 "    b     parkCore1\n"                      /* core 1: off the bus, where the menu expects it */
+#endif
 "    .ltorg\n"
 );
 
@@ -557,7 +586,7 @@ static void fault_handlers(void)
     at[VECTOR_UNDEFINED] = (uint32_t)uvm2_pitrex_fault_undefined;
     at[VECTOR_PREFETCH]  = (uint32_t)uvm2_pitrex_fault_prefetch;
     at[VECTOR_DATA]      = (uint32_t)uvm2_pitrex_fault_data;
-    __asm__ volatile("dsb\n isb" ::: "memory");
+    PITREX_DSB(); PITREX_ISB();
 }
 
 /* Core 0 after a fault, on a fresh stack: the report, then the menu.
@@ -661,7 +690,7 @@ void uvm2_runtime_init(void)
         for (;;) { }          /* nobody would replay the lists: the report says so */
     }
     s_core1_go = 1u;
-    __asm__ volatile("dmb" ::: "memory");
+    PITREX_DMB();
     {
         const uint32_t t0 = uvm2_now_us();
         while ((uint32_t)(uvm2_now_us() - t0) < 200000u) { }   /* let it take the loop */
