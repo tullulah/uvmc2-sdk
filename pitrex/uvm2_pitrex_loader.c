@@ -88,19 +88,41 @@ static void copy_param(char *dst, const char *src)
     dst[n] = 0;
 }
 
+/* UVM2_PITREX_LAUNCH_LOG: every launch leaves a line in /logs/launch.txt — the image, what
+ * opening and reading it gave, whether core 1 parked. For a menu entry that "does nothing". */
+#ifdef UVM2_PITREX_LAUNCH_LOG
+#include <stdio.h>
+static void launch_log(const char *path, int open_r, int read_r, unsigned got, int parked)
+{
+    FIL l;
+    char line[192];
+    f_mkdir("/logs");
+    if (f_open(&l, "/logs/launch.txt", FA_WRITE | FA_OPEN_APPEND) != FR_OK) return;
+    const int n = snprintf(line, sizeof line, "%s open=%d read=%d bytes=%u parked=%d\n", path, open_r, read_r, got, parked);
+    UINT w;
+    f_write(&l, line, (UINT)n, &w);
+    f_close(&l);
+}
+#else
+#define launch_log(p, o, r, g, k) do { } while (0)
+#endif
+
 int uvm2_pitrex_launch(const char *path, const char *param1, const char *param2, int button)
 {
     FIL f;
     UINT got = 0;
     /* The image first, while the picture is still up: nothing lives at PROGRAM_ADDR while
      * this image runs, and a file that fails to read leaves the menu as it was. */
-    if (f_open(&f, path, FA_READ) != FR_OK) return 0;
+    const FRESULT o = f_open(&f, path, FA_READ);
+    if (o != FR_OK) { launch_log(path, o, -1, 0, -1); return 0; }
     const FRESULT r = f_read(&f, (void *)PROGRAM_ADDR, PROGRAM_MAX_BYTES, &got);
     f_close(&f);
-    if (r != FR_OK || got == 0) return 0;
+    if (r != FR_OK || got == 0) { launch_log(path, o, r, got, -1); return 0; }
 
     /* The program takes the bus. */
-    if (!uvm2_pitrex_park_core1()) return -1;
+    const int parked = uvm2_pitrex_park_core1();
+    launch_log(path, o, r, got, parked);
+    if (!parked) return -1;
 
     copy_param(s_settings.parameter1, param1);
     copy_param(s_settings.parameter2, param2);

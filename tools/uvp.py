@@ -19,6 +19,9 @@ with 8 MB of PSRAM and a 20 MB game needs. It holds:
     uvmc2/<name>.um2              the UVMC2 cartridge's executable
     pitrex/zero2/<name>.img       the PiTrex's, Raspberry Pi Zero 2 W
     pitrex/zero1/<name>.img       the PiTrex's, the first Raspberry Pi Zero
+    roms/...                      ONLY in a package made with --with-roms, for private testing:
+                                  the romset it needs, which a package for anyone else never
+                                  carries. The installer puts it in the card's roms/.
     gamedata/...                  the files the game opens by relative path — its music, its
                                   settings as shipped. A board's installer puts them where its
                                   games look (on a PiTrex card gamedata/; on a UVMC2 card the
@@ -68,6 +71,9 @@ TARGETS = {          # manifest key -> folder in the package and the file's exte
     'pitrex_zero1': ('pitrex/zero1', '.img'),
 }
 DEFAULT_MENU = 'Games'
+# what the UVMC2's installer reads whole (uvm2_uvp.c, ZIP_DIR_MAX and TEXT_MAX there)
+UVMC2_DIR_MAX = 16384
+UVMC2_TEXT_MAX = 16384
 
 
 def toml_str(s):
@@ -104,6 +110,17 @@ def pack(a):
     spec = read_project(a.project)
     pkg = spec.get('package', {})
     ident = pkg.get('id', a.name)
+    # the romset the game declares in its own sources (const char game_romset_name[] = "x.zip"),
+    # when uvp.toml does not say: the SDK's romset loader reads it, so it is the truth
+    if 'romsets' not in spec.get('needs', {}):
+        import re
+        for folder, _, names in os.walk(os.path.join(a.project, 'src')):
+            for n in names:
+                if n.endswith(('.c', '.h')):
+                    m = re.search(r'game_romset_name\s*\[\s*\]\s*=\s*"([^"]+)"', open(os.path.join(folder, n), errors='replace').read())
+                    if m:
+                        spec.setdefault('needs', {})['romsets'] = [m.group(1)]
+                        break
     built = {'uvmc2': a.um2, 'pitrex_zero2': a.zero2, 'pitrex_zero1': a.zero1}
     targets = {}
     payload = {}
@@ -119,8 +136,8 @@ def pack(a):
     for inner, src in spec.get('files', {}).items():
         files[inner] = os.path.join(a.project, src)
     for inner, src in files.items():
-        if not inner.startswith('gamedata/'):
-            sys.exit('uvp: %s: a package\'s files go under gamedata/' % inner)
+        if not inner.startswith('gamedata/') and not (a.with_roms and inner.startswith('roms/')):
+            sys.exit('uvp: %s: a package\'s files go under gamedata/ (roms/ only with --with-roms)' % inner)
         if not os.path.isfile(src):
             sys.exit('uvp: %s: %s is not there' % (inner, src))
         payload[inner] = src
@@ -141,12 +158,21 @@ def pack(a):
         lines += ['', '[[entry]]', 'title = %s' % toml_str(e['title']), 'param = %s' % toml_str(e.get('param', ''))]
         if 'menu' in e:
             lines.append('menu = %s' % toml_str(e['menu']))
-    for inner in sorted(p for p in payload if p.startswith('gamedata/')):
+    if a.with_roms:
+        lines += ['', '# PRIVATE TESTING ONLY: this package carries ROMs (--with-roms). Not for anyone else.',
+                  '[private]', 'carries_roms = 1']
+    for inner in sorted(p for p in payload if p.startswith(('gamedata/', 'roms/'))):
         data = open(payload[inner], 'rb').read()
         lines += ['', '[[file]]', 'path = %s' % toml_str(inner), 'size = %d' % len(data),
                   'crc32 = %d' % (zlib.crc32(data) & 0xffffffff)]
     manifest = '\n'.join(lines) + '\n'
 
+    if 'uvmc2' in targets:
+        directory = sum(46 + len(p.encode()) for p in list(payload) + ['manifest.toml'])
+        record = len(manifest.split('\n[[file]]')[0]) + sum(len(p) + 12 for p in payload)
+        if len(manifest.encode()) >= UVMC2_TEXT_MAX or directory > UVMC2_DIR_MAX or record >= UVMC2_TEXT_MAX:
+            sys.exit('uvp: %s: too many files for the UVMC2 installer (manifest %d, directory %d bytes, '
+                     'limit %d): fewer files, or no UVMC2 target' % (ident, len(manifest), directory, UVMC2_TEXT_MAX))
     out = a.out or os.path.join(a.project, 'build_uvp', ident + '.uvp')
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     tmp = out + '.tmp'
@@ -181,6 +207,8 @@ def main():
     k.add_argument('--zero2')
     k.add_argument('--zero1')
     k.add_argument('--out')
+    k.add_argument('--with-roms', action='store_true',
+                   help='allow roms/ in the package: private end-to-end testing only')
     s = sub.add_parser('show')
     s.add_argument('file')
     a = p.parse_args()

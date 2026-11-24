@@ -10,11 +10,30 @@
 
 #define UVP_EXT        ".uvp"
 #define PATH_MAX_UVP   128
-#define CHUNK          4096u           /* a piece copied at a time */
+/* A PIECE COPIED AT A TIME. On the PiTrex the card driver (the baremetal tree's sd.c) sends one
+ * read or write command per call — CMD18 / CMD25 for several blocks — and the card's cost is
+ * per command, not per byte: copying in 4 KB pieces made installing crawl there, where the
+ * UVMC2, with its own driver, was quick (2026-11-24). The Pi has memory to spare for a big
+ * piece; the UVMC2's SRAM does not, and does not need it. */
+#ifdef UVM2_PITREX
+#define CHUNK          (256u * 1024u)
+#else
+#define CHUNK          4096u
+#endif
 #define ZIP_TAIL_MAX   1024u           /* the end record (tools/uvp.py writes no comment) */
+/* A package's central directory and its manifest are read whole. On the PiTrex memory is
+ * plentiful; the UVMC2 installer keeps them small, and tools/uvp.py refuses to pack, for a
+ * UVMC2 target, a package that would not fit (UVMC2_DIR_MAX, UVMC2_TEXT_MAX there). WW VI's
+ * 122 files did not fit in 16 KB: its record came to ~20 KB and it was never installed
+ * (2026-11-25). */
+#ifdef UVM2_PITREX
+#define ZIP_DIR_MAX    (128u * 1024u)
+#define TEXT_MAX       (128u * 1024u)  /* a manifest, a record */
+#else
 #define ZIP_DIR_MAX    16384u          /* the central directory: ~200 files */
 #define TEXT_MAX       16384u          /* a manifest, a record */
-#define PENDING_MAX    8
+#endif
+#define PENDING_MAX    128             /* a clean card: every game a package (make_uvps.py) */
 #define ZIP_END_SIG    0x06054b50u
 #define ZIP_DIR_SIG    0x02014b50u
 #define ZIP_LOCAL_SIG  0x04034b50u
@@ -31,6 +50,7 @@ static const struct { const char *from, *to; } MAP[] = {
     { "pitrex/zero2/", "/games/" },
     { "pitrex/zero1/", "/piZero1/" },
     { "gamedata/",     "/gamedata/" },
+    { "roms/",         "/roms/" },          /* only a package for private testing has any */
 };
 #else
 #define TOP            ""
@@ -38,9 +58,19 @@ static const struct { const char *from, *to; } MAP[] = {
 static const struct { const char *from, *to; } MAP[] = {
     { "uvmc2/",        "" },
     { "gamedata/",     "" },
+    { "roms/",         "roms/" },           /* only a package for private testing has any */
 };
 #endif
 #define RECORDS        TOP ".uvp"
+#ifdef UVM2_PITREX
+extern uint32_t uvm2_now_us(void);       /* how long an install took, in its record */
+/* WHERE THE TIME GOES, in the record too: reading the package, writing the files, opening and
+ * closing them. A slow install is one of the three, and this says which. */
+static uint32_t s_us_read, s_us_write, s_us_open;
+#define TIMED(acc, expr) do { const uint32_t t_ = uvm2_now_us(); expr; acc += uvm2_now_us() - t_; } while (0)
+#else
+#define TIMED(acc, expr) do { expr; } while (0)
+#endif
 
 /* ── small pieces ── */
 static uint32_t le16(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8; }
@@ -183,20 +213,23 @@ static int extract(uvm2_sd_file *f, const entry_t *e, const char *dst,
                    uvm2_uvp_progress progress, const char *title, uint32_t *done, uint32_t total)
 {
     uint32_t start, left = e->size, crc = 0;
+    int opened, put;
     if (e->method != 0 || !zip_data(f, e, &start) || !uvm2_sd_seek(f, start)) return 0;
-    if (!uvm2_sd_stream_open(dst)) return 0;
+    TIMED(s_us_open, opened = uvm2_sd_stream_open(dst));
+    if (!opened) return 0;
     while (left) {
         const uint32_t want = left < CHUNK ? left : CHUNK;
         uint32_t got = 0, k;
-        while (got < want && (k = uvm2_sd_next(f, s_chunk + got, want - got)) > 0) got += k;
+        TIMED(s_us_read, while (got < want && (k = uvm2_sd_next(f, s_chunk + got, want - got)) > 0) got += k);
         if (got != want) break;
         crc = crc32_update(crc, s_chunk, got);
-        if (!uvm2_sd_stream_put(s_chunk, got)) break;
+        TIMED(s_us_write, put = uvm2_sd_stream_put(s_chunk, got));
+        if (!put) break;
         left -= got;
         *done += got;
         if (progress) progress(title, *done, total);
     }
-    uvm2_sd_stream_close();
+    TIMED(s_us_open, uvm2_sd_stream_close());
     if (left || crc != e->crc) { uvm2_sd_remove(dst); return 0; }
     return 1;
 }
@@ -249,10 +282,20 @@ static int install(const char *path, uvm2_uvp_progress progress)
     /* the same game again (a new version): the old one's files go first; what it wrote stays */
     uvm2_uvp_uninstall(m.id);
 
-    /* the record: the manifest, then what this puts on the card */
+    /* the record: the manifest without its [[file]] list (tools/uvp.py writes it last; the
+     * [installed] list below says the same, with the card's paths), then what this puts on
+     * the card */
+    {
+        char *list = strstr(s_text, "\n[[file]]");
+        if (list) list[1] = 0;
+    }
     uint32_t r = (uint32_t)snprintf(s_record, TEXT_MAX, "%s\n[installed]\nfiles = [", s_text);
     for (at = 0; zip_entry(&at, &e); ) if (destination(e.name, dst, sizeof dst)) total += e.size;
     int first = 1;
+#ifdef UVM2_PITREX
+    const uint32_t t0 = uvm2_now_us();
+    s_us_read = s_us_write = s_us_open = 0;
+#endif
     for (at = 0; ok && zip_entry(&at, &e); ) {
         if (!destination(e.name, dst, sizeof dst)) continue;
         ok = extract(&f, &e, dst, progress, m.title, &done, total);
@@ -264,7 +307,12 @@ static int install(const char *path, uvm2_uvp_progress progress)
     }
     uvm2_sd_close(&f);
     if (ok) {
-        r += (uint32_t)snprintf(s_record + r, TEXT_MAX - r, "]\n");
+        r += (uint32_t)snprintf(s_record + r, TEXT_MAX - r, "]\nbytes = %u\n", (unsigned)total);
+#ifdef UVM2_PITREX
+        r += (uint32_t)snprintf(s_record + r, TEXT_MAX - r, "install_ms = %u\nread_ms = %u\nwrite_ms = %u\nopen_close_ms = %u\n",
+                                (unsigned)((uvm2_now_us() - t0) / 1000u), (unsigned)(s_us_read / 1000u),
+                                (unsigned)(s_us_write / 1000u), (unsigned)(s_us_open / 1000u));
+#endif
         ok = uvm2_sd_stream_open(rec) && uvm2_sd_stream_put((const unsigned char *)s_record, r);
         uvm2_sd_stream_close();
     }

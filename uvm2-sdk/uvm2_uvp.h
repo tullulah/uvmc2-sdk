@@ -7,6 +7,8 @@
  *   pitrex/zero2/<name>.img    games/<name>.img                   -
  *   pitrex/zero1/<name>.img    piZero1/<name>.img                 -
  *   gamedata/<path>            gamedata/<path>                    <path> at the top
+ *   roms/<path>                roms/<path>                        roms/<path>
+ *                              (a package made for private testing only: tools/uvp.py)
  *
  * (On a UVMC2 card a game's folders are at the top, where its games open them; on a PiTrex
  * card the SDK looks for them under gamedata/ too.)

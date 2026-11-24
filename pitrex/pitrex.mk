@@ -88,6 +88,21 @@ else
 PITREX_DEFS += -DUVM2_BENCH_NO_CORE1
 PITREX_CORE_SRCS :=
 endif
+
+# THE CARD DRIVER, ENDED PROPERLY. The baremetal tree's sd.c reads and writes several blocks
+# with CMD18 / CMD25 and never ends them: no CMD12, and the controller is not told to send one.
+# The card stays in its receive state; the next command finds it there — a state the driver's
+# check before each command does not handle — fails, and the driver starts the card again from
+# nothing, half-second waits included. Every write paid that: installing a package wrote at
+# 16 KB/s, 95% of its time in writing (the records of 2026-11-25: 54 s of 57). gen_sd.sh makes
+# the controller send the CMD12 (auto CMD12) and the check stop a card left receiving. The
+# driver is compiled here, from the tree, and takes the place of the library's.
+PITREX_SD_GEN := $(PITREX_BUILD)/gen/pitrex_sd.c
+PITREX_SD_OK  := $(shell sh $(PITREX_DIR)/gen_sd.sh $(PITREX_BM)/pitrex/baremetal/sd.c $(PITREX_SD_GEN))
+ifneq ($(PITREX_SD_OK),ok)
+$(error pitrex: the baremetal tree's sd.c is not as gen_sd.sh expects: look at what changed there)
+endif
+# (added to PITREX_BOARD_SRCS below, once that is defined)
 # The romset's zip is read whole into a buffer before the game starts (uvm2_romzip.c). On the
 # cartridges that buffer is sized from the zip, to the KB, because it is their SRAM; here it
 # is ordinary memory, so it is sized once for the largest set a card may carry.
@@ -124,6 +139,10 @@ endif
 # PITREX_REPORTS=1: every program writes its reports to the card's logs/ (start-up, frame 600,
 # exit). Off by default: only a fault is written (uvm2_pitrex_main.c, report_wanted).
 PITREX_REPORTS ?= 0
+# PITREX_LAUNCH_LOG=1 (a resident menu): each launch leaves a line in logs/launch.txt
+ifeq ($(PITREX_LAUNCH_LOG),1)
+PITREX_DEFS += -DUVM2_PITREX_LAUNCH_LOG
+endif
 ifeq ($(PITREX_REPORTS),1)
 PITREX_DEFS += -DUVM2_PITREX_REPORTS
 endif
@@ -171,6 +190,9 @@ ifeq ($(PITREX_LOADER),1)
 PITREX_BOARD_SRCS += $(PITREX_DIR)/uvm2_pitrex_loader.c
 # ...and the menu installs Universal Vectrex Packages (uvm2_uvp.c, tools/uvp.py)
 PITREX_BOARD_SRCS += $(UVM2_SDK)/uvm2_uvp.c $(UVM2_SDK)/uvm2_toml.c
+PITREX_BOARD_SRCS += $(PITREX_SD_GEN)
+# it includes its own folder's headers, as when the tree builds it
+$(PITREX_BUILD)/sdk/pitrex_sd.o: PITREX_SDK_CFLAGS += -I$(PITREX_BM)/pitrex/baremetal
 PITREX_ENTRY_OBJ  := $(PITREX_BUILD)/sdk/uvm2_pitrex_loader_entry.o
 # The C heap of a resident image starts past what it keeps beyond its end, not at its end
 # (uvm2_pitrex_loader.c, "THE HEAP").
@@ -224,7 +246,7 @@ ifneq ($(words $(PITREX_ALL_GAME_NAMES)),$(words $(sort $(PITREX_ALL_GAME_NAMES)
 $(error pitrex: a C and a C++ source share a file name; their objects would collide)
 endif
 
-vpath %.c $(UVM2_SDK) $(PITREX_DIR)
+vpath %.c $(UVM2_SDK) $(PITREX_DIR) $(dir $(PITREX_SD_GEN))
 vpath %.S $(PITREX_DIR)
 
 # THE FLAGS ARE A DEPENDENCY. make does not see a define that changed (a bigger command list,
