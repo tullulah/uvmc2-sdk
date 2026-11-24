@@ -169,6 +169,8 @@ PITREX_BOARD_SRCS := $(PITREX_DIR)/uvm2_bus_pitrex.c $(PITREX_DIR)/uvm2_pitrex_m
 # result is loader.pit, the image with the empty 64 MB cut off.
 ifeq ($(PITREX_LOADER),1)
 PITREX_BOARD_SRCS += $(PITREX_DIR)/uvm2_pitrex_loader.c
+# ...and the menu installs Universal Vectrex Packages (uvm2_pitrex_uvp.c, tools/uvp.py)
+PITREX_BOARD_SRCS += $(PITREX_DIR)/uvm2_pitrex_uvp.c $(UVM2_SDK)/uvm2_toml.c
 PITREX_ENTRY_OBJ  := $(PITREX_BUILD)/sdk/uvm2_pitrex_loader_entry.o
 # The C heap of a resident image starts past what it keeps beyond its end, not at its end
 # (uvm2_pitrex_loader.c, "THE HEAP").

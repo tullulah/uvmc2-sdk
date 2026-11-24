@@ -507,3 +507,22 @@ PITREX_SRCS   ?= $(UVM2_SRCS_KEPT)
 PITREX_V_API  ?= 1
 include $(UVM2_SDK)/../pitrex/pitrex.mk
 endif
+
+
+# ── THE UNIVERSAL VECTREX PACKAGE: make uvp -> build_uvp/<id>.uvp ──────────────────────────
+#
+# The game for every board in one file (tools/uvp.py says what is in it and why): the .um2, the
+# PiTrex's two images, and the files it reads from the card. Each board is built first; one that
+# does not build is left out of the package, which says which it has, and the build goes on.
+# What the package is called, which menu it goes in and the rest: uvp.toml beside the Makefile.
+UVP_TOOL ?= $(UVM2_SDK)/../tools/uvp.py
+uvp:
+	-@$(MAKE) --no-print-directory uvm2
+ifndef UVM2_NO_PITREX
+	-@$(MAKE) --no-print-directory pitrex
+	-@$(MAKE) --no-print-directory pitrex PITREX_BOARD=zero1
+endif
+	@python3 -I $(UVP_TOOL) pack --project . --name $(UVM2_NAME) \
+	    --um2 $(UVM2_BUILD)/$(UVM2_NAME).um2 --zero2 build_pitrex/$(UVM2_NAME).img \
+	    --zero1 build_pitrex1/$(UVM2_NAME).img
+.PHONY: uvp
