@@ -21,6 +21,11 @@
 #define UVM2_UVP_H
 #include <stdint.h>
 
+/* HOW MANY PACKAGES A CARD MAY HOLD, installed or waiting: the limit decided for the card,
+ * and the only one. Nothing here keeps a table of that size: the installer takes the packages
+ * one at a time, and a list of the installed ones grows as it is read. */
+#define UVM2_UVP_MAX 999
+
 /* while a package installs: its title, bytes done and bytes in all */
 typedef void (*uvm2_uvp_progress)(const char *title, uint32_t done, uint32_t total);
 /* a line for a menu, for every installed package that has an executable for this board: the

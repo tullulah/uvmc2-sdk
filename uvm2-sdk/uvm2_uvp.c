@@ -33,7 +33,10 @@
 #define ZIP_DIR_MAX    16384u          /* the central directory: ~200 files */
 #define TEXT_MAX       16384u          /* a manifest, a record */
 #endif
-#define PENDING_MAX    128             /* a clean card: every game a package (make_uvps.py) */
+/* A package that fails stays where it is, so the next look at the folder must pass over it:
+ * the ones that failed are remembered, this many of them, and past that the installer stops
+ * rather than read the folder for ever. */
+#define FAILED_MAX     16
 #define ZIP_END_SIG    0x06054b50u
 #define ZIP_DIR_SIG    0x02014b50u
 #define ZIP_LOCAL_SIG  0x04034b50u
@@ -331,22 +334,40 @@ static int install(const char *path, uvm2_uvp_progress progress)
     return ok;
 }
 
-int uvm2_uvp_install_pending(uvm2_uvp_progress progress, char *failed, uint32_t failed_max)
+/* The first package at the top that has not failed already; 0 if there is none. */
+static int next_pending(char *path, char bad[][PATH_MAX_UVP], int nbad)
 {
     uvm2_sd_dir d;
-    char name[PATH_MAX_UVP], names[PENDING_MAX][PATH_MAX_UVP];
+    char name[PATH_MAX_UVP];
     uint32_t size;
-    int n = 0, k, installed = 0;
-    if (failed && failed_max) failed[0] = 0;
-    /* the names first: the folder changes as packages go */
+    int k, found = 0;
     if (!uvm2_sd_dir_open(TOP, &d)) return 0;
-    while (n < PENDING_MAX && (k = uvm2_sd_dir_next(&d, name, sizeof name, &size)) != UVM2_SD_DIR_END)
-        if (k == UVM2_SD_DIR_FILE && name[0] != '.' && ends_with(name, UVP_EXT))
-            snprintf(names[n++], PATH_MAX_UVP, TOP "%s", name);
+    while (!found && (k = uvm2_sd_dir_next(&d, name, sizeof name, &size)) != UVM2_SD_DIR_END) {
+        if (k != UVM2_SD_DIR_FILE || name[0] == '.' || !ends_with(name, UVP_EXT)) continue;
+        snprintf(path, PATH_MAX_UVP, TOP "%s", name);
+        found = 1;
+        for (int i = 0; i < nbad; i++) if (strcmp(bad[i], path) == 0) found = 0;
+    }
     uvm2_sd_dir_close(&d);
-    for (int i = 0; i < n; i++) {
-        if (install(names[i], progress)) { uvm2_sd_remove(names[i]); installed++; }
-        else if (failed) snprintf(failed, failed_max, "%s", base_name(names[i]));
+    return found;
+}
+
+/* ONE AT A TIME, AND NO LIST OF THEM: the folder is looked at again after each install (a
+ * package is deleted once installed, and changing a folder while reading it is not safe), so
+ * there is no table of names to be too small — a card with every game as a package is the
+ * normal case now. */
+int uvm2_uvp_install_pending(uvm2_uvp_progress progress, char *failed, uint32_t failed_max)
+{
+    static char bad[FAILED_MAX][PATH_MAX_UVP];
+    char path[PATH_MAX_UVP];
+    int nbad = 0, installed = 0, tries = 0;
+    if (failed && failed_max) failed[0] = 0;
+    while (tries++ < UVM2_UVP_MAX + FAILED_MAX && nbad < FAILED_MAX && next_pending(path, bad, nbad)) {
+        if (install(path, progress)) { uvm2_sd_remove(path); installed++; }
+        else {
+            snprintf(bad[nbad++], PATH_MAX_UVP, "%s", path);
+            if (failed) snprintf(failed, failed_max, "%s", base_name(path));
+        }
     }
     return installed;
 }
