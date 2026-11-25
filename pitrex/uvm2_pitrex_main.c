@@ -648,6 +648,8 @@ static void game_folder(void)
 #endif
 }
 
+__attribute__((weak)) void uvm2_pitrex_before_core1(void) { }
+
 void uvm2_runtime_init(void)
 {
     uvm2_pitrex_early();
@@ -681,6 +683,9 @@ void uvm2_runtime_init(void)
     /* The romset, before the game, as on the .um2: a port's main() loads its ROMs first thing
      * from what this left in memory. A game with no romset: nothing happens. */
     uvm2_romzip_load();
+    /* The last moment this core has the bus to itself: a program that wants it whole for a
+     * while (the menu's start-up voice, written straight to the DAC) does it here. */
+    uvm2_pitrex_before_core1();
 #ifdef UVM2_DUAL_CORE
     /* Last: everything above wrote to the bus from this core, and after this only core 1
      * may. */
