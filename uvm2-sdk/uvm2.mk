@@ -498,7 +498,10 @@ $(RP2350_BUILD):
 # A game with a pitrex target of its own sets UVM2_NO_PITREX = 1 before including this file.
 ifndef UVM2_NO_PITREX
 UVM2_NOT_PITREX = -mthumb -mcpu=% -mfloat-abi=% -mfpu=% -DVPY_DUAL_CORE -DUVM2_ROMZIP_IN_PSRAM=1 \
-                  -DUVM2_PSRAM_START% -DUVM2_CMDS_IN_PSRAM% -DUVM2_ROMZIP_MAX=% -Wdouble-promotion
+                  -DUVM2_PSRAM_START% -DUVM2_CMDS_IN_PSRAM% -DUVM2_ROMZIP_MAX=% -Wdouble-promotion \
+                  -DUVM2_CMD_CAPACITY=%
+# (-DUVM2_CMD_CAPACITY: pitrex.mk sets the list's room itself, PITREX_CMD_CAPACITY. Left in,
+# this one came LAST on the line and won, so the Pi kept the UVMC2's SRAM-sized list.)
 # UVM2_UM2_ONLY STAYS: those are the flags of "the SDK is linked into this image", which is
 # what a PiTrex image is too. Dropping them built Kuroishi as its debug-cartridge flavour — the
 # one that expects a BIOS underneath — and its title menu had no SETTINGS (2026-11-24).

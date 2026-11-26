@@ -153,8 +153,12 @@ PITREX_DEFS += -DUVM2_PITREX_NAME='"$(UVM2_NAME)"'
 ifneq ($(PITREX_GAME_DIR),)
 PITREX_DEFS += -DUVM2_PITREX_GAME_DIR='"$(PITREX_GAME_DIR)"'
 endif
-ifneq ($(UVM2_CMD_CAPACITY),)
-PITREX_DEFS += -DUVM2_CMD_CAPACITY=$(UVM2_CMD_CAPACITY)u
+# THE LIST'S ROOM, the game's own unless it says otherwise: UVM2_CMD_CAPACITY is usually set by
+# what the UVMC2's SRAM can spare, which a Pi does not need to live within (2 x 3 bytes a
+# command). PITREX_CMD_CAPACITY lets a game give this board a list its heaviest screen fits in.
+PITREX_CMD_CAPACITY ?= $(UVM2_CMD_CAPACITY)
+ifneq ($(PITREX_CMD_CAPACITY),)
+PITREX_DEFS += -DUVM2_CMD_CAPACITY=$(PITREX_CMD_CAPACITY)u
 endif
 
 # The baremetal tree's headers go LAST, after the game's own folders: a port includes
