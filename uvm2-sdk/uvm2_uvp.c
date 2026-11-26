@@ -242,12 +242,27 @@ static int record_path(const char *id, char *out, size_t max)
     return snprintf(out, max, RECORDS "/%s.toml", id) < (int)max;
 }
 
-/* every file listed in a record's [installed] table, removed */
+/* A ROMSET STAYS ON THE CARD (2026-11-26). Only a package made --with-roms brings one, and the
+ * romset in roms/ is the card's, not the game's: other games may read it, and it may have been
+ * there before the package came. Removing it with the package broke a card: a game's test
+ * package carried its romset, its next version did not, and installing that one (which first
+ * uninstalls the old) took the ROM away -- the game no longer started. So nothing under the
+ * card's roms/ is ever removed, on a reinstall or an uninstall; the record still lists it. */
+static int is_romset(const char *path)
+{
+    for (unsigned i = 0; i < sizeof MAP / sizeof MAP[0]; i++)
+        if (strcmp(MAP[i].from, "roms/") == 0)
+            return strncmp(path, MAP[i].to, strlen(MAP[i].to)) == 0;
+    return 0;
+}
+
+/* every file listed in a record's [installed] table, removed -- but romsets (is_romset) */
 static int files_cb(void *user, const char *table, int index, const char *key, const char *value)
 {
     (void)user; (void)index;
     if (strcmp(table, "installed") == 0 && strcmp(key, "files") == 0) {
         char dir[PATH_MAX_UVP];
+        if (is_romset(value)) return 1;
         uvm2_sd_remove(value);
         /* the folders it leaves empty, up to (not including) the card's top folders */
         snprintf(dir, sizeof dir, "%s", value);

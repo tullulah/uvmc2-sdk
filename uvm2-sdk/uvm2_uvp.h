@@ -38,7 +38,7 @@ typedef void (*uvm2_uvp_entry)(void *user, const char *menu, const char *title, 
  * failed is named in `failed`. */
 int  uvm2_uvp_install_pending(uvm2_uvp_progress progress, char *failed, uint32_t failed_max);
 void uvm2_uvp_list(uvm2_uvp_entry entry, void *user);
-/* 1 if the package was installed and is now removed */
+/* 1 if the package was installed and is now removed (its files, but never the card's roms/) */
 int  uvm2_uvp_uninstall(const char *id);
 
 #endif

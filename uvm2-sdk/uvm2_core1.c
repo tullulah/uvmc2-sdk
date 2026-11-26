@@ -239,6 +239,14 @@ volatile uint32_t uvm2_btn_dbg_state, uvm2_btn_dbg_oe, uvm2_btn_dbg_r7 = 0x100u,
  * (-DUVM2_RESET_BUTTON) while the T1 test misfired. UVM2_NO_RESET_BUTTON turns it off. Off, it
  * costs nothing: no bus read, no warm-start mark, no copy of .data. */
 #define UVM2_RESET_DOUBLE_US 1000000u   /* a second press within this: the menu */
+/* -DUVM2_RESET_MENU: ONE press is the menu, for a program that starting again is no use to
+ * (the installer, 2026-11-26: one press restarted it onto the same list, and it looked as if
+ * reset did nothing). */
+#ifdef UVM2_RESET_MENU
+#define UVM2_RESET_RESTARTS 0
+#else
+#define UVM2_RESET_RESTARTS 1
+#endif
 #define UVM2_RESET_BOUNCE_US  150000u   /* and not before this: one press bouncing */
 volatile uint32_t uvm2_reset_seen, uvm2_reset_polls;   /* presses noticed, and reads made */
 /* No longer kept (a press has no length to measure, above); defined for what reads them. */
@@ -362,7 +370,7 @@ __attribute__((optimize("Os"))) static void reset_poll(void)
             /* a second pulse this soon is the same press bouncing, not a second press */
             if (pending && now - first_at < UVM2_RESET_BOUNCE_US) return;
             /* the second press within the wait, or a game that cannot start again: the menu */
-            if ((pending && now - first_at < UVM2_RESET_DOUBLE_US) || !s_snap_ok)
+            if ((pending && now - first_at < UVM2_RESET_DOUBLE_US) || !s_snap_ok || !UVM2_RESET_RESTARTS)
                 rom_reboot(BOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
             pending = 1;
             uvm2_restart_pending = 1;
