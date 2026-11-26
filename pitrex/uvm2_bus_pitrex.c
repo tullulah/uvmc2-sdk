@@ -35,9 +35,8 @@ uvm2_pitrex_bus_t uvm2_pitrex_bus;
 /* The VIA sits at $D000 on the Vectrex's bus; a list command carries only the register. */
 #define VIA_BASE            0xD000u
 
-/* The Pi's peripherals on a BCM2710 (Zero 2 W, Pi 3). The free-running system timer counts
- * microseconds in CLO. */
-#define BCM_PERI_BASE       0x3F000000u
+/* The free-running system timer counts microseconds in CLO. */
+#define BCM_PERI_BASE       UVM2_PITREX_PERI_BASE
 #define BCM_ST_CLO          (*(volatile uint32_t *)(BCM_PERI_BASE + 0x3004u))
 
 /* IFR bit 5: timer 2 has run out. */

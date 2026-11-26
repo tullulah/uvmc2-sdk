@@ -14,6 +14,15 @@ extern "C" {
 #endif
 
 /* Offsets tried when looking for the board's latch point (uvm2_bus_pitrex.c). */
+/* The Pi's peripheral base, by board: RASPPI comes from pitrex.mk (1 = BCM2835 on the first
+ * Zero, 3 = BCM2710 on the Zero 2 W). The first Zero's MMU maps nothing at 0x3F000000, so a
+ * Zero 2 address there is a data abort on the first timer read. */
+#if RASPPI == 1
+#define UVM2_PITREX_PERI_BASE 0x20000000u
+#else
+#define UVM2_PITREX_PERI_BASE 0x3F000000u
+#endif
+
 #define UVM2_PITREX_LATCH_STEPS 32u
 
 /* How far start-up got. The report is written BEFORE the bus is touched and again after,

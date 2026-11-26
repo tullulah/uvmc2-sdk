@@ -433,6 +433,13 @@ void uvm2_pitrex_menu_poll(void)
         uvm2_pitrex_report();
         FAULT_KEPT->magic = 0;            /* an earlier fault has been in five reports by now */
     }
+#ifndef UVM2_DUAL_CORE
+    /* ONE CORE (the first Zero): there is no core 1 and so no reset_poll (uvm2_core1.c) to
+     * watch the button; the same check runs here. The list is replayed in series on this
+     * core, so the last one has finished and the bus is free. Found on a real Zero 1,
+     * 2026-11-26: the reset button did nothing. */
+    if (!(uvm2_via_read(UVM2_VIA_IER) & UVM2_PITREX_RESET_MARK)) uvm2_pitrex_reset_seen = 1u;
+#endif
     if (uvm2_pitrex_reset_seen) reset_to_menu();
     /* core 1 faulted and parked itself: say so and leave */
     if (uvm2_pitrex_fault[FAULT_KIND] && uvm2_pitrex_fault[FAULT_CORE] != 0u) uvm2_pitrex_fault_core0();

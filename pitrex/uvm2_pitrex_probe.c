@@ -26,7 +26,7 @@
 
 #define VIA_BASE        0xD000u
 
-#define BCM_PERI_BASE   0x3F000000u
+#define BCM_PERI_BASE   UVM2_PITREX_PERI_BASE
 #define GPSET0          (*(volatile uint32_t *)(BCM_PERI_BASE + 0x20001Cu))
 #define GPCLR0          (*(volatile uint32_t *)(BCM_PERI_BASE + 0x200028u))
 #define GPLEV0          (*(volatile uint32_t *)(BCM_PERI_BASE + 0x200034u))
