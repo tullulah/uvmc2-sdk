@@ -92,3 +92,14 @@ and build a game: the starter kit's `examples/hello_uvmc2` (fast) and
 
 Everything in this repository is in English (US), including comments and commit
 messages.
+
+## License
+
+MIT, © 2026 Daniel Ferrer: see [LICENSE](LICENSE).
+
+Some parts are not ours and keep their own licenses: FatFs (`third_party/fatfs/`,
+ChaN, BSD-style), two pico-sdk files (Raspberry Pi, BSD-3-Clause) and the PiTrex
+vector font in `vpy-c/vpy.c`. The pico-sdk and the Rust crates are fetched at
+build time and linked into every `.um2`. The full list, with credits for the
+designs this SDK learned from, is in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
